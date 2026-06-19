@@ -12,11 +12,32 @@ from __future__ import annotations
 
 import sys
 import threading
+import wave
+from datetime import datetime
+from pathlib import Path
 
 import numpy as np
 
 from autobot.config import Settings
 from autobot.core.types import AudioClip
+
+
+def save_wav(directory: str | Path, audio: AudioClip, sample_rate: int) -> Path:
+    """Write a mono ``float32`` clip to a timestamped 16-bit WAV; return its path.
+
+    Used for debugging STT — listen to exactly what was captured and compare it
+    to the transcript.
+    """
+    out_dir = Path(directory).expanduser()
+    out_dir.mkdir(parents=True, exist_ok=True)
+    path = out_dir / f"clip-{datetime.now():%Y%m%d-%H%M%S-%f}.wav"
+    pcm = (np.clip(audio, -1.0, 1.0) * 32767.0).astype(np.int16)
+    with wave.open(str(path), "wb") as wav:
+        wav.setnchannels(1)
+        wav.setsampwidth(2)
+        wav.setframerate(sample_rate)
+        wav.writeframes(pcm.tobytes())
+    return path
 
 
 class PushToTalkRecorder:

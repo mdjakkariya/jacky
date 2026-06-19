@@ -35,13 +35,15 @@ class FasterWhisperSTT:
         )
         print(
             f"[stt] Loading faster-whisper '{settings.stt_model}' "
-            f"({settings.stt_device}/{settings.stt_compute_type})…"
+            f"({settings.stt_device}/{settings.stt_compute_type})… "
+            "(first run downloads the model — may take a minute)"
         )
         self._model = WhisperModel(
             settings.stt_model,
             device=settings.stt_device,
             compute_type=settings.stt_compute_type,
         )
+        print("[stt] ready.")
 
     def transcribe(self, audio: AudioClip) -> Transcription:
         """Transcribe one mono ``float32`` clip; see the interface for the contract."""
@@ -52,8 +54,8 @@ class FasterWhisperSTT:
         segments, _info = self._model.transcribe(
             audio,
             language="en",  # English-only: never autodetect
-            beam_size=1,  # commands are short; greedy is fast and fine
-            vad_filter=False,  # real VAD arrives in Phase 2
+            beam_size=self._settings.stt_beam_size,  # higher = more accurate
+            vad_filter=False,  # we already VAD-gate upstream
         )
 
         texts: list[str] = []

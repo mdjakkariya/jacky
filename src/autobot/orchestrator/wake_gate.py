@@ -39,6 +39,7 @@ class WakeResult:
 
     address: Address
     command: str = ""  # the command text (empty for GREETED / IGNORED)
+    detail: str = ""  # debug context, e.g. follow-up window timing
 
 
 def extract_command(text: str, phrase: str, max_lead_words: int = 4) -> str | None:
@@ -101,27 +102,40 @@ class SttWakeGate:
         self._clock = clock
         self._last_turn_at: float | None = None
 
+    def _elapsed(self) -> float | None:
+        """Seconds since the last completed turn, or ``None`` if there was none."""
+        if self._last_turn_at is None:
+            return None
+        return self._clock() - self._last_turn_at
+
     def _in_follow_up(self) -> bool:
-        if self._window <= 0 or self._last_turn_at is None:
-            return False
-        return (self._clock() - self._last_turn_at) <= self._window
+        elapsed = self._elapsed()
+        return self._window > 0 and elapsed is not None and elapsed <= self._window
 
     def process(self, text: str) -> WakeResult:
         """Accept inside the follow-up window; otherwise require the wake phrase."""
         command = extract_command(text, self._phrase)
+        elapsed = self._elapsed()
+        # Debug context so the transcript/log show why a turn was (not) accepted.
+        detail = (
+            f"follow_up={'yes' if self._in_follow_up() else 'no'} "
+            f"elapsed={elapsed:.0f}s window={self._window:.0f}s"
+            if elapsed is not None
+            else f"follow_up=no (first turn) window={self._window:.0f}s"
+        )
         if self._in_follow_up():
             # No wake word needed; accept the whole utterance (or the stripped
             # command if the user said the wake word again).
             if command:
-                return WakeResult(Address.COMMAND, command)
+                return WakeResult(Address.COMMAND, command, detail)
             if command == "":  # wake word said with nothing after it
-                return WakeResult(Address.GREETED)
-            return WakeResult(Address.COMMAND, text.strip())
+                return WakeResult(Address.GREETED, detail=detail)
+            return WakeResult(Address.COMMAND, text.strip(), detail)
         if command is None:
-            return WakeResult(Address.IGNORED)
+            return WakeResult(Address.IGNORED, detail=detail)
         if command == "":
-            return WakeResult(Address.GREETED)
-        return WakeResult(Address.COMMAND, command)
+            return WakeResult(Address.GREETED, detail=detail)
+        return WakeResult(Address.COMMAND, command, detail)
 
     def mark_turn_complete(self) -> None:
         """Open/refresh the follow-up window from now."""

@@ -56,6 +56,21 @@ def test_endpointer_silence_run_resets_on_speech() -> None:
     assert ep.finished
 
 
+def test_save_wav_writes_readable_clip(tmp_path: object) -> None:
+    import wave
+    from pathlib import Path
+
+    from autobot.io.audio import save_wav
+
+    audio = np.array([0.0, 0.5, -0.5, 1.0, -1.0], dtype=np.float32)
+    path = save_wav(Path(str(tmp_path)), audio, sample_rate=16_000)
+    assert path.exists() and path.suffix == ".wav"
+    with wave.open(str(path), "rb") as wav:
+        assert wav.getframerate() == 16_000
+        assert wav.getnchannels() == 1
+        assert wav.getnframes() == 5
+
+
 def test_prebuffer_keeps_only_recent_frames() -> None:
     buf = FramePrebuffer(max_frames=2)
     a, b, c = (np.full(4, i, dtype=np.float32) for i in (1, 2, 3))

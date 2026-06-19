@@ -26,6 +26,9 @@ coverage.xml
 *.gguf
 models/
 
+# Secrets / local config (never commit; use .env.example as the template)
+.env
+
 # Logs / session transcripts
 *.log
 logs/

@@ -48,11 +48,11 @@ Tested target: MacBook Air M2, 16 GB, macOS 15.
 
    > No PortAudio install needed — the `sounddevice` wheel bundles it. (Only if a source build is ever forced do you need `brew install portaudio`.)
 
-2. **Start Ollama and pull the model** (`qwen2.5:3b` is the default — fast on an M2 Air, no "thinking"-mode latency, reliable tool-calling):
+2. **Start Ollama and pull the model** (`qwen3:8b` is the default — the most reliable small tool-caller; thinking-mode is disabled for speed):
 
    ```bash
-   ollama serve              # leave running in its own terminal tab
-   ollama pull qwen2.5:3b    # ~2 GB, one time
+   ollama serve            # leave running in its own terminal tab
+   ollama pull qwen3:8b    # ~5 GB, one time
    ```
 
 3. **Create the dev environment** — installs dev tools **and** the hands-free + voice extras (silero-VAD, openWakeWord, Piper) plus git hooks:
@@ -116,13 +116,17 @@ Common tuning: `AUTOBOT_VAD_THRESHOLD`, `AUTOBOT_END_SILENCE_MS` (raise if you'r
 
 ### Speed vs. accuracy (no code changes)
 
-Default is `qwen2.5:3b` (fast, reliable tools). Trade in either direction:
+Default is `qwen3:8b` (most reliable tool-calling). Trade toward speed if you like:
 
 ```bash
-AUTOBOT_LLM_MODEL=qwen2.5:1.5b make run   # faster, less reliable tool-calling
-AUTOBOT_LLM_MODEL=qwen3:8b   make run     # most reliable tools, slower replies
-AUTOBOT_STT_MODEL=small.en   make run     # more accurate transcription, a bit slower
+AUTOBOT_LLM_MODEL=qwen2.5:3b make run     # faster replies, less reliable tool-calling
+AUTOBOT_LLM_MODEL=qwen2.5:1.5b make run   # fastest, least reliable
+AUTOBOT_STT_MODEL=base.en    make run     # faster transcription, less accurate
+AUTOBOT_STT_MODEL=medium.en  make run     # most accurate transcription, slower
+AUTOBOT_STT_BEAM=1           make run     # greedy decode (faster, less accurate)
 ```
+
+STT defaults to `small.en` with beam size 5 — accurate on connected speech. Set `AUTOBOT_SAVE_AUDIO=1` to dump each captured clip as a WAV in `sessions/` (with the transcript noted) so you can hear what was captured vs. what it heard.
 
 Reply length is capped by `AUTOBOT_LLM_MAX_TOKENS` (default 256) to keep spoken answers short and fast. Watch `replied latency_ms=` and `transcribed … latency_ms=` in the log to compare. Remember to `ollama pull <model>` first. All tunables live in `src/autobot/config.py`.
 
@@ -132,16 +136,24 @@ The assistant remembers recent turns so follow-ups have context ("can you search
 
 ### Web search (optional — the only off-device feature)
 
-Everything above is on-device. Web search is the **one exception** and is **off by default**: it sends your search *query* to DuckDuckGo, then the local LLM summarizes the results. Enable it explicitly:
+Everything above is on-device. Web search is the **one exception** and is **off by default**: it sends your search *query* to a search provider, then the local LLM summarizes the results. Enable it explicitly:
 
 ```bash
-# install ddgs while keeping the other extras (a lone `--extra web` drops them):
+# install ddgs (the fallback) while keeping the other extras:
 uv sync --extra dev --extra all --extra web
-AUTOBOT_ALLOW_WEB=1 uv run autobot   # registers the web_search tool
+cp .env.example .env        # then put your SearchSpace key in .env (gitignored)
+uv run autobot              # .env is loaded automatically
 # "jack what's the weather in Bengaluru"
 ```
 
-When enabled, startup prints `[web] web search ENABLED — queries leave the device.` and every search is recorded in the audit log. Leave `AUTOBOT_ALLOW_WEB` unset to stay fully on-device (the tool isn't even registered).
+Config lives in a gitignored **`.env`** (loaded at startup; real env vars still override it) — set `AUTOBOT_WEB_API_KEY` and `AUTOBOT_ALLOW_WEB=1` there once instead of exporting each shell. See `.env.example`. The key is never read from or written to source.
+
+**Backends, configurable with automatic fallback** (`AUTOBOT_WEB_PROVIDER`):
+
+- `auto` (default) — use the keyed HTTP API when `AUTOBOT_WEB_API_KEY` is set (clean, current results); otherwise, or if an API call fails/returns nothing, **fall back to ddgs scraping** (no key).
+- `searchspace` forces the API; `ddgs` forces scraping.
+
+Point at any SearchSpace-compatible endpoint via `AUTOBOT_WEB_API_URL` (default `https://q.searchspace.io/v1/search`). The **API key is read only from the environment — never stored in the repo.** Startup prints `[web] web search ENABLED via API` (or `via ddgs scraping`); each search logs `web via=api/ddgs`. Leave `AUTOBOT_ALLOW_WEB` unset to stay fully on-device.
 
 ---
 

@@ -136,8 +136,10 @@ def build(settings: Settings | None = None) -> Orchestrator:
         from autobot.tools.web import register_web_tools
 
         register_web_tools(registry, settings)
-        log.info("web search ENABLED (queries leave the device)")
-        print("[web] web search ENABLED — queries leave the device.")
+        using_api = settings.web_provider != "ddgs" and bool(settings.web_api_key)
+        provider = "API" if using_api else "ddgs scraping"
+        log.info("web search ENABLED provider=%s (queries leave the device)", provider)
+        print(f"[web] web search ENABLED via {provider} — queries leave the device.")
 
     # Permission gate: audit everything, confirm destructive actions only.
     audit = AuditLog(settings.audit_db)

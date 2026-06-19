@@ -143,6 +143,12 @@ class Orchestrator:
 
         self._sm.transition(State.TRANSCRIBING)
         transcription = self._stt.transcribe(audio)
+        if self._settings.save_audio and audio.size:
+            from autobot.io.audio import save_wav
+
+            clip = save_wav(self._settings.session_dir, audio, self._settings.sample_rate)
+            _log.info("saved audio file=%s text=%r", clip, transcription.text)
+            self._transcript.note(f"audio clip → {clip.name}  (heard: {transcription.text!r})")
         if transcription.is_empty:
             _log.debug("ignored reason=no_speech")
             self._sm.transition(State.IDLE)
@@ -151,8 +157,10 @@ class Orchestrator:
         result = self._wake_gate.process(transcription.text)
         if result.address is Address.IGNORED:
             # Heard speech, but it wasn't addressed to us — stay quiet.
-            _log.info("ignored reason=not_addressed text=%r", transcription.text)
-            self._transcript.note(f"ignored (not addressed): {transcription.text!r}")
+            _log.info("ignored reason=not_addressed text=%r %s", transcription.text, result.detail)
+            self._transcript.note(
+                f"ignored (not addressed): {transcription.text!r}  [{result.detail}]"
+            )
             self._sm.transition(State.IDLE)
             return
 
