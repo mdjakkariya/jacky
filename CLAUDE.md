@@ -10,9 +10,10 @@ Everything runs on-device; no audio, text, or memory ever leaves the machine.
 
 - Full build plan: `docs/plans/autobot_build_roadmap.md` (6 risk-ordered phases).
 - Architecture diagram: `docs/architecture/`.
-- **Current status: Phase 2 complete** (hands-free wake word + VAD listening,
-  swappable with push-to-talk). On top of Phase 1 (orchestrator + permission gate)
-  and the Phase 0 spine. Phase 3 (voice output + TUI) is next.
+- **Current status: Phase 3a complete** (voice output via Piper TTS, behind a
+  swappable `TextToSpeech` interface). On top of Phase 2 (wake word + VAD), Phase 1
+  (orchestrator + permission gate), Phase 0 spine. Next: Phase 3b — headless
+  daemon + Textual terminal UI.
 
 ## Non-negotiable constraints
 

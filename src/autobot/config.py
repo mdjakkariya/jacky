@@ -47,6 +47,10 @@ _DEFAULT_WAKE_PHRASE = "jack"
 # openWakeWord pretrained model name (used only when wake_detector="openwakeword").
 _DEFAULT_WAKE_MODEL = "hey_jarvis"
 
+# Phase 3: voice output (TTS). Piper speaks replies on-device. Point tts_voice at
+# a downloaded Piper voice (.onnx); if missing or disabled, we fall back to silent.
+_DEFAULT_TTS_VOICE = "~/.autobot/voices/en_US-lessac-medium.onnx"
+
 # Logging: a rotating debug log you can share when reporting an issue. The file
 # captures DEBUG; the console only shows WARNING+ so normal runs stay clean.
 _DEFAULT_LOG_DIR = "~/.autobot/logs"
@@ -84,6 +88,13 @@ def _env_int(key: str, default: int) -> int:
         return default
 
 
+def _env_bool(key: str, default: bool) -> bool:
+    raw = os.environ.get(key)
+    if raw is None:
+        return default
+    return raw.strip().lower() in {"1", "true", "yes", "on"}
+
+
 @dataclass(frozen=True, slots=True)
 class Settings:
     """All runtime-tunable configuration for the assistant."""
@@ -116,6 +127,9 @@ class Settings:
     # After a turn, keep listening for a follow-up without the wake word for this
     # long; if no speech arrives, re-arm the wake word. 0 disables follow-up mode.
     follow_up_window_s: float = 8.0
+    # Phase 3: voice output.
+    tts_enabled: bool = True
+    tts_voice: str = _DEFAULT_TTS_VOICE
     # Logging.
     log_dir: str = _DEFAULT_LOG_DIR
     log_level: str = _DEFAULT_LOG_LEVEL
@@ -149,6 +163,8 @@ class Settings:
             max_utterance_s=_env_float("AUTOBOT_MAX_UTTERANCE_S", 15.0),
             wake_preroll_ms=_env_int("AUTOBOT_WAKE_PREROLL_MS", 400),
             follow_up_window_s=_env_float("AUTOBOT_FOLLOWUP_WINDOW_S", 8.0),
+            tts_enabled=_env_bool("AUTOBOT_TTS", True),
+            tts_voice=_env_str("AUTOBOT_TTS_VOICE", _DEFAULT_TTS_VOICE),
             log_dir=_env_str("AUTOBOT_LOG_DIR", _DEFAULT_LOG_DIR),
             log_level=_env_str("AUTOBOT_LOG_LEVEL", _DEFAULT_LOG_LEVEL),
             log_console_level=_env_str("AUTOBOT_LOG_CONSOLE_LEVEL", _DEFAULT_LOG_CONSOLE_LEVEL),

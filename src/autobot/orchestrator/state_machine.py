@@ -14,7 +14,7 @@ import time
 from collections.abc import Callable
 
 from autobot.config import Settings
-from autobot.core.interfaces import AudioSource, LanguageModel, SpeechToText
+from autobot.core.interfaces import AudioSource, LanguageModel, SpeechToText, TextToSpeech
 from autobot.core.types import State, ToolCall, ToolResult
 from autobot.logging_setup import get_logger
 from autobot.orchestrator.wake_gate import Address, WakeGate
@@ -92,6 +92,7 @@ class Orchestrator:
         llm: LanguageModel,
         gate: PermissionGate,
         wake_gate: WakeGate,
+        tts: TextToSpeech,
         on_state: StateListener | None = _print_transition,
     ) -> None:
         self._settings = settings
@@ -100,6 +101,7 @@ class Orchestrator:
         self._llm = llm
         self._gate = gate
         self._wake_gate = wake_gate
+        self._tts = tts
         self._sm = StateMachine(on_change=on_state)
 
     @property
@@ -137,6 +139,7 @@ class Orchestrator:
             self._sm.transition(State.PLANNING)
             self._sm.transition(State.RESPONDING)
             print("[autobot] Yes?\n")
+            self._tts.speak("Yes?")
             self._wake_gate.mark_turn_complete()
             self._sm.transition(State.IDLE)
             return
@@ -153,6 +156,7 @@ class Orchestrator:
         self._sm.transition(State.RESPONDING)
         _log.info("replied chars=%d latency_ms=%d", len(reply), elapsed_ms)
         print(f"[autobot] {reply}\n")
+        self._tts.speak(reply)
         self._wake_gate.mark_turn_complete()
         self._sm.transition(State.IDLE)
 

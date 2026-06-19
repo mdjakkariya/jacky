@@ -76,3 +76,16 @@ class LanguageModel(Protocol):
             The assistant's final reply text.
         """
         ...
+
+
+@runtime_checkable
+class TextToSpeech(Protocol):
+    """Speaks a reply aloud (English, on-device)."""
+
+    def speak(self, text: str) -> None:
+        """Synthesize ``text`` and play it, blocking until playback finishes.
+
+        Implementations should no-op on empty text. A disabled or unavailable
+        engine is represented by a null implementation, so callers never branch.
+        """
+        ...

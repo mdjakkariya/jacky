@@ -10,6 +10,7 @@ from autobot.core.interfaces import (
     AudioSource,
     LanguageModel,
     SpeechToText,
+    TextToSpeech,
 )
 from autobot.core.types import (
     AudioClip,
@@ -32,6 +33,7 @@ __all__ = [
     "Risk",
     "SpeechToText",
     "State",
+    "TextToSpeech",
     "ToolCall",
     "ToolExecutor",
     "ToolResult",

@@ -68,8 +68,17 @@ class _RecordingGate:
         return ToolResult(name=call.name, content="ok", ok=True)
 
 
-def _orchestrator(text: str, gate: object) -> Orchestrator:
+class _RecordingTTS:
+    def __init__(self) -> None:
+        self.spoken: list[str] = []
+
+    def speak(self, text: str) -> None:
+        self.spoken.append(text)
+
+
+def _orchestrator(text: str, gate: object, tts: object | None = None) -> Orchestrator:
     from autobot.orchestrator.wake_gate import PassThroughGate
+    from autobot.tts.null_tts import NullTTS
 
     transitions: list[State] = []
     orch = Orchestrator(
@@ -79,6 +88,7 @@ def _orchestrator(text: str, gate: object) -> Orchestrator:
         llm=_ToolingLLM(),
         gate=gate,  # type: ignore[arg-type]
         wake_gate=PassThroughGate(),
+        tts=tts or NullTTS(),  # type: ignore[arg-type]
         on_state=lambda _old, new: transitions.append(new),
     )
     orch._transitions = transitions  # type: ignore[attr-defined]
@@ -100,6 +110,13 @@ def test_turn_with_tool_walks_through_executing_and_back_to_idle() -> None:
     ]
     assert gate.calls and gate.calls[0].name == "create_file"
     assert orch.state is State.IDLE
+
+
+def test_reply_is_spoken_via_tts() -> None:
+    tts = _RecordingTTS()
+    orch = _orchestrator("create a file", _RecordingGate(), tts)
+    orch.run_once()
+    assert tts.spoken == ["done: ok"]
 
 
 def test_empty_transcription_returns_to_idle_without_planning() -> None:

@@ -12,7 +12,7 @@ audit log and sandboxed filesystem tools) in front of the language model.
 from __future__ import annotations
 
 from autobot.config import Settings
-from autobot.core.interfaces import AudioSource
+from autobot.core.interfaces import AudioSource, TextToSpeech
 from autobot.io.audio import PushToTalkRecorder
 from autobot.llm.ollama_llm import OllamaLanguageModel
 from autobot.logging_setup import get_logger, setup_logging
@@ -63,6 +63,32 @@ def _build_wake_gate(settings: Settings) -> WakeGate:
     return PassThroughGate()
 
 
+def _build_tts(settings: Settings) -> TextToSpeech:
+    """Build the voice output: Piper if enabled and available, else silent.
+
+    Falls back to a no-op so a missing 'tts' extra or voice model degrades to a
+    text-only assistant rather than crashing.
+    """
+    from autobot.tts.null_tts import NullTTS
+
+    log = get_logger("tts")
+    if not settings.tts_enabled:
+        print("[tts] voice output OFF (AUTOBOT_TTS=0) — text only.")
+        return NullTTS()
+    try:
+        from autobot.tts.piper_tts import PiperTTS
+
+        tts = PiperTTS(settings)
+        log.info("voice output ready voice=%s", settings.tts_voice)
+        print(f"[tts] voice output READY (voice: {settings.tts_voice})")
+        return tts
+    except (ImportError, FileNotFoundError) as exc:
+        log.warning("voice output disabled: %s", exc)
+        print(f"[tts] voice output OFF — {exc}")
+        print("      Fix: `uv sync --extra tts` and download a voice (see README).")
+        return NullTTS()
+
+
 def build(settings: Settings | None = None) -> Orchestrator:
     """Compose a fully wired :class:`Orchestrator`.
 
@@ -102,6 +128,7 @@ def build(settings: Settings | None = None) -> Orchestrator:
         llm=OllamaLanguageModel(settings, registry),
         gate=gate,
         wake_gate=_build_wake_gate(settings),
+        tts=_build_tts(settings),
     )
 
 

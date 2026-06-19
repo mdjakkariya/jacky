@@ -55,23 +55,27 @@ Tested target: MacBook Air M2, 16 GB, macOS 15.
    ollama pull qwen3:8b    # ~5 GB, one time
    ```
 
-3. **Create the dev environment** (installs deps + git hooks):
+3. **Create the dev environment** — installs dev tools **and** the hands-free + voice extras (silero-VAD, openWakeWord, Piper) plus git hooks:
 
    ```bash
    cd /path/to/autobot
-   make setup
+   make setup        # = uv sync --extra dev --extra all
    ```
 
-4. **For hands-free mode** (default), install the optional wake/VAD models and download the wake-word weights:
+   > Don't run `uv sync --extra tts` (or `--extra wake`) on their own — `uv sync` replaces the installed set, so a single extra *drops* the others. Use `--extra all` (or `make setup`) to get everything. Push-to-talk needs no extras (`AUTOBOT_INPUT=ptt`).
+
+4. **Download a Piper voice** for voice output (on by default):
 
    ```bash
-   uv sync --extra wake          # openWakeWord + silero-vad (heavy: pulls onnxruntime + torch)
-   uv run python -c "import openwakeword.utils as u; u.download_models()"
+   mkdir -p ~/.autobot/voices && cd ~/.autobot/voices
+   uv run python -m piper.download_voices en_US-lessac-medium   # .onnx + .onnx.json
    ```
 
-   Prefer to skip this for now? Run push-to-talk instead with `AUTOBOT_INPUT=ptt` (no extra needed).
+   Point elsewhere with `AUTOBOT_TTS_VOICE=/path/to/voice.onnx`, or turn voice off with `AUTOBOT_TTS=0`. If the voice/extra is missing, Autobot runs text-only (it won't crash) and prints `[tts] voice output OFF …` at startup.
 
-5. **Microphone permission:** the first run prompts macOS to let your terminal use the mic — allow it (System Settings → Privacy & Security → Microphone). The first run also downloads the `base.en` whisper weights (~150 MB).
+   *(Only if you switch to the `openwakeword` detector: `uv run python -c "import openwakeword.utils as u; u.download_models()"`. The default `stt` detector doesn't need it.)*
+
+6. **Microphone permission:** the first run prompts macOS to let your terminal use the mic — allow it (System Settings → Privacy & Security → Microphone). The first run also downloads the `base.en` whisper weights (~150 MB).
 
 ---
 

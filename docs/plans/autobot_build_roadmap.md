@@ -62,9 +62,9 @@ A privacy-first, zero-cost, on-device personal assistant. Reference to follow du
 
 ## Phase 3 — Voice output + terminal UI
 
-- [ ] TTS: Piper (CPU/fast tier), Kokoro (GPU quality tier) — behind the TTS interface
-- [ ] Terminal client (Textual) connecting to the daemon API; add the animation here
-- [ ] **Done when:** the assistant speaks its replies and the terminal shows live state.
+- [x] TTS: Piper (CPU/fast tier), Kokoro (GPU quality tier) — behind the TTS interface — **Phase 3a done (2026-06-19):** `TextToSpeech` protocol + `tts/piper_tts.py` (Piper) + `NullTTS` fallback; orchestrator speaks replies; `AUTOBOT_TTS` / `AUTOBOT_TTS_VOICE`; optional `tts` extra.
+- [ ] Terminal client (Textual) connecting to the daemon API; add the animation here — **Phase 3b (next):** make the engine a headless daemon (FastAPI + localhost WebSocket) and build the Textual thin client.
+- [ ] **Done when:** the assistant speaks its replies and the terminal shows live state. (Speaks ✅; terminal UI pending.)
 
 ---
 

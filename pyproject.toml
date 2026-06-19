@@ -24,6 +24,14 @@ wake = [
     "openwakeword>=0.6.0",
     "silero-vad>=5.1",
 ]
+# Voice output (Phase 3). Piper synthesizes speech on-device (CPU).
+tts = [
+    "piper-tts>=1.2",
+]
+# Everything needed to actually run hands-free with voice: `uv sync --extra all`.
+all = [
+    "autobot[wake,tts]",
+]
 dev = [
     "ruff>=0.6",
     "mypy>=1.11",
@@ -104,6 +112,7 @@ module = [
     "openwakeword.*",
     "silero_vad.*",
     "torch.*",
+    "piper.*",
 ]
 ignore_missing_imports = true
 
