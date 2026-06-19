@@ -48,11 +48,11 @@ Tested target: MacBook Air M2, 16 GB, macOS 15.
 
    > No PortAudio install needed — the `sounddevice` wheel bundles it. (Only if a source build is ever forced do you need `brew install portaudio`.)
 
-2. **Start Ollama and pull the model** (`qwen3:8b` is the default — best small tool-caller for 16 GB):
+2. **Start Ollama and pull the model** (`qwen2.5:3b` is the default — fast on an M2 Air, no "thinking"-mode latency, reliable tool-calling):
 
    ```bash
-   ollama serve            # leave running in its own terminal tab
-   ollama pull qwen3:8b    # ~5 GB, one time
+   ollama serve              # leave running in its own terminal tab
+   ollama pull qwen2.5:3b    # ~2 GB, one time
    ```
 
 3. **Create the dev environment** — installs dev tools **and** the hands-free + voice extras (silero-VAD, openWakeWord, Piper) plus git hooks:
@@ -89,6 +89,8 @@ make run            # or: uv run autobot   /   uv run python -m autobot
 
 **Conversational follow-ups:** after a reply, Autobot keeps listening for a follow-up **without** the wake word for a short window (default 8s). Speak again and it just answers; stay quiet and it lapses back to waiting for "hey jarvis" — like a natural back-and-forth. Tune or disable the window with `AUTOBOT_FOLLOWUP_WINDOW_S` (e.g. `12` for longer, `0` to always require the wake word).
 
+**Spoken acknowledgements:** before running a tool (especially a slow one like web search), Autobot says a quick "On it…" / "Let me look that up." so you're not left in silence. Disable with `AUTOBOT_ACK=0`.
+
 **Push-to-talk:** `AUTOBOT_INPUT=ptt make run` — press Enter to start/stop recording instead.
 
 Either way, try:
@@ -108,14 +110,30 @@ There are two wake detectors, selected with `AUTOBOT_WAKE_DETECTOR`:
 
 Common tuning: `AUTOBOT_VAD_THRESHOLD`, `AUTOBOT_END_SILENCE_MS` (raise if you're cut off mid-sentence), `AUTOBOT_FOLLOWUP_WINDOW_S`.
 
-### Try a different model (no code changes)
+### Speed vs. accuracy (no code changes)
+
+Default is `qwen2.5:3b` (fast, reliable tools). Trade in either direction:
 
 ```bash
-AUTOBOT_LLM_MODEL=qwen3:4b make run    # snappier; tighter leash needed
-AUTOBOT_LLM_MODEL=gemma4:2b make run   # very constrained hardware
+AUTOBOT_LLM_MODEL=qwen2.5:1.5b make run   # faster, less reliable tool-calling
+AUTOBOT_LLM_MODEL=qwen3:8b   make run     # most reliable tools, slower replies
+AUTOBOT_STT_MODEL=small.en   make run     # more accurate transcription, a bit slower
 ```
 
-Remember to `ollama pull <model>` first. All tunables live in `src/autobot/config.py` (env vars: `AUTOBOT_LLM_MODEL`, `AUTOBOT_STT_MODEL`, `AUTOBOT_LLM_TEMPERATURE`, `OLLAMA_HOST`, …).
+Reply length is capped by `AUTOBOT_LLM_MAX_TOKENS` (default 256) to keep spoken answers short and fast. Watch `replied latency_ms=` and `transcribed … latency_ms=` in the log to compare. Remember to `ollama pull <model>` first. All tunables live in `src/autobot/config.py`.
+
+### Web search (optional — the only off-device feature)
+
+Everything above is on-device. Web search is the **one exception** and is **off by default**: it sends your search *query* to DuckDuckGo, then the local LLM summarizes the results. Enable it explicitly:
+
+```bash
+# install ddgs while keeping the other extras (a lone `--extra web` drops them):
+uv sync --extra dev --extra all --extra web
+AUTOBOT_ALLOW_WEB=1 uv run autobot   # registers the web_search tool
+# "jack what's the weather in Bengaluru"
+```
+
+When enabled, startup prints `[web] web search ENABLED — queries leave the device.` and every search is recorded in the audit log. Leave `AUTOBOT_ALLOW_WEB` unset to stay fully on-device (the tool isn't even registered).
 
 ---
 

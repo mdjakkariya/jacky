@@ -116,6 +116,13 @@ def build(settings: Settings | None = None) -> Orchestrator:
     register_builtins(registry)
     sandbox = Sandbox(settings.sandbox_dir)
     register_filesystem_tools(registry, sandbox)
+    if settings.allow_web:
+        # The one tool that reaches off-device; only registered when opted in.
+        from autobot.tools.web import register_web_tools
+
+        register_web_tools(registry, settings)
+        log.info("web search ENABLED (queries leave the device)")
+        print("[web] web search ENABLED — queries leave the device.")
 
     # Permission gate: audit everything, confirm destructive actions only.
     audit = AuditLog(settings.audit_db)

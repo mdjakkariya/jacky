@@ -21,9 +21,14 @@ from autobot.tools.registry import ToolRegistry
 _log = get_logger("llm")
 
 SYSTEM_PROMPT = (
-    "You are Autobot, a local voice assistant. Always respond in English. "
-    "Use the provided tools when they can answer the user's request. "
-    "Keep replies short and spoken-friendly."
+    "You are Autobot, a local voice assistant. Your replies are spoken aloud, so "
+    "talk like a person in conversation. Rules:\n"
+    "- Reply in one to three short, natural sentences.\n"
+    "- Never use lists, numbering, bullet points, markdown, or headings.\n"
+    "- Never read out URLs, web addresses, or source names — just say the answer.\n"
+    "- When tools or web results give you facts, weave them into a friendly "
+    "spoken summary rather than reciting them.\n"
+    "- Always respond in English, and use the provided tools when they help."
 )
 
 
@@ -104,18 +109,27 @@ class OllamaLanguageModel:
         self._client = Client(host=settings.ollama_host)
 
     def _chat(self, messages: list[dict[str, Any]]) -> Any:
-        """Call Ollama, disabling 'thinking' output where the client supports it."""
+        """Call Ollama with bounded output; disable 'thinking' for qwen3 models."""
+        model = self._settings.llm_model
         kwargs: dict[str, Any] = {
-            "model": self._settings.llm_model,
+            "model": model,
             "messages": messages,
             "tools": self._registry.schemas(),
-            "options": {"temperature": self._settings.llm_temperature},
+            "options": {
+                "temperature": self._settings.llm_temperature,
+                # Bound reply length so spoken answers stay short and fast.
+                "num_predict": self._settings.llm_max_tokens,
+            },
         }
-        try:
-            return self._client.chat(think=False, **kwargs)
-        except TypeError:
-            # Older ollama-python without the ``think`` keyword.
-            return self._client.chat(**kwargs)
+        # Only qwen3 has a reasoning mode worth disabling; other models reject the
+        # ``think`` kwarg or don't need it.
+        if "qwen3" in model:
+            try:
+                return self._client.chat(think=False, **kwargs)
+            except TypeError:
+                # Older ollama-python without the ``think`` keyword.
+                return self._client.chat(**kwargs)
+        return self._client.chat(**kwargs)
 
     def run_turn(self, user_text: str, execute: ToolExecutor) -> str:
         """Handle one user turn end-to-end; see the interface for the contract."""

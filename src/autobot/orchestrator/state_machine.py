@@ -10,6 +10,7 @@ injected executor (the permission gate), so the gate sits exactly between
 
 from __future__ import annotations
 
+import random
 import time
 from collections.abc import Callable
 
@@ -81,6 +82,17 @@ def _print_transition(_old: State, new: State) -> None:
     print(f"[state] {new.value}")
 
 
+# Short spoken acknowledgements so a slow tool call doesn't leave dead air.
+_GENERIC_ACKS = ("Okay, let me check.", "One moment.", "On it.", "Sure, give me a second.")
+_WEB_ACKS = ("Let me look that up.", "Searching now.", "Let me find that for you.")
+
+
+def _ack_phrase(tool_name: str) -> str:
+    """Pick a natural-sounding acknowledgement for the tool about to run."""
+    pool = _WEB_ACKS if tool_name == "web_search" else _GENERIC_ACKS
+    return random.choice(pool)
+
+
 class Orchestrator:
     """Drives one interaction turn through the components and the permission gate."""
 
@@ -103,6 +115,7 @@ class Orchestrator:
         self._wake_gate = wake_gate
         self._tts = tts
         self._sm = StateMachine(on_change=on_state)
+        self._acknowledged = False  # spoke a filler this turn?
 
     @property
     def state(self) -> State:
@@ -112,6 +125,10 @@ class Orchestrator:
     def _execute(self, call: ToolCall) -> ToolResult:
         """Executor handed to the LLM: mark EXECUTING and run through the gate."""
         self._sm.transition(State.EXECUTING)
+        # Acknowledge once per turn so a slow tool call isn't silent.
+        if self._settings.speak_acknowledgements and not self._acknowledged:
+            self._acknowledged = True
+            self._tts.speak(_ack_phrase(call.name))
         return self._gate.execute(call)
 
     def run_once(self) -> None:
@@ -149,6 +166,7 @@ class Orchestrator:
         print(f"[you] {command}   (confidence {transcription.confidence:.2f})")
 
         self._sm.transition(State.PLANNING)
+        self._acknowledged = False  # reset per turn; _execute may speak a filler
         started = time.perf_counter()
         reply = self._llm.run_turn(command, self._execute)
         elapsed_ms = int((time.perf_counter() - started) * 1000)
@@ -185,6 +203,11 @@ class Orchestrator:
             except Exception as exc:  # keep the loop alive on unexpected failures
                 _log.exception("turn failed error=%s", exc)
                 print(f"[error] {exc}  (see log for details)")
+                # Let the user know without dumping a traceback at them.
+                try:
+                    self._tts.speak("Sorry, something went wrong.")
+                except Exception:  # never let error-handling raise
+                    _log.exception("tts failed while reporting an error")
                 # Recover back to a clean idle state for the next turn.
                 if self._sm.can_transition(State.ERROR):
                     self._sm.transition(State.ERROR)

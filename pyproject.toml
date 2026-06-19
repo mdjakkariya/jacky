@@ -29,8 +29,13 @@ tts = [
     "piper-tts>=1.2",
 ]
 # Everything needed to actually run hands-free with voice: `uv sync --extra all`.
+# Deliberately excludes 'web' — that one leaves the device and stays opt-in.
 all = [
     "autobot[wake,tts]",
+]
+# Web search (opt-in; the only off-device feature). `uv sync --extra web`.
+web = [
+    "ddgs>=6.0",
 ]
 dev = [
     "ruff>=0.6",
@@ -113,6 +118,7 @@ module = [
     "silero_vad.*",
     "torch.*",
     "piper.*",
+    "ddgs.*",
 ]
 ignore_missing_imports = true
 

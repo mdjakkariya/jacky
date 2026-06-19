@@ -116,7 +116,19 @@ def test_reply_is_spoken_via_tts() -> None:
     tts = _RecordingTTS()
     orch = _orchestrator("create a file", _RecordingGate(), tts)
     orch.run_once()
-    assert tts.spoken == ["done: ok"]
+    # The final reply is spoken (an acknowledgement may precede it).
+    assert tts.spoken[-1] == "done: ok"
+
+
+def test_acknowledgement_spoken_before_tool_runs() -> None:
+    from autobot.orchestrator.state_machine import _GENERIC_ACKS, _WEB_ACKS
+
+    tts = _RecordingTTS()
+    orch = _orchestrator("create a file", _RecordingGate(), tts)
+    orch.run_once()
+    # First thing spoken is a filler, before the final reply.
+    assert tts.spoken[0] in (*_GENERIC_ACKS, *_WEB_ACKS)
+    assert len(tts.spoken) == 2
 
 
 def test_empty_transcription_returns_to_idle_without_planning() -> None:

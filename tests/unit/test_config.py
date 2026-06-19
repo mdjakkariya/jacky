@@ -10,7 +10,8 @@ from autobot.config import Settings
 def test_defaults_are_english_only_and_sensible() -> None:
     settings = Settings()
     assert settings.stt_model.endswith(".en")  # English-only build
-    assert settings.llm_model == "qwen3:8b"
+    assert settings.llm_model == "qwen2.5:3b"
+    assert settings.llm_max_tokens > 0
     assert settings.sample_rate == 16_000
     assert settings.channels == 1
 

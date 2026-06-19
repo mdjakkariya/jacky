@@ -14,10 +14,13 @@ import os
 from dataclasses import dataclass
 
 # --- Defaults -------------------------------------------------------------
-# qwen3:8b is the most reliable small tool-caller for 16 GB Apple Silicon.
-# Swap to "qwen3:4b" (snappier) or "gemma4:2b" (very constrained) via env.
-_DEFAULT_LLM_MODEL = "qwen3:8b"
+# qwen2.5:3b is fast on an M2 Air and has no "thinking" mode (qwen3 emits hidden
+# reasoning tokens that add seconds), while still calling tools reliably. Bump to
+# "qwen3:8b" for the most reliable tool-calling, or try "qwen2.5:1.5b" for speed.
+_DEFAULT_LLM_MODEL = "qwen2.5:3b"
 _DEFAULT_OLLAMA_HOST = "http://127.0.0.1:11434"
+# Cap reply length so spoken answers stay short and fast (tokens).
+_DEFAULT_LLM_MAX_TOKENS = 256
 # base.en is the English-only starting point on M2; "small.en" for more accuracy.
 _DEFAULT_STT_MODEL = "base.en"
 # CTranslate2 has no Metal backend, so STT runs on CPU; int8 keeps it light.
@@ -102,6 +105,7 @@ class Settings:
     llm_model: str = _DEFAULT_LLM_MODEL
     ollama_host: str = _DEFAULT_OLLAMA_HOST
     llm_temperature: float = 0.0
+    llm_max_tokens: int = _DEFAULT_LLM_MAX_TOKENS
     stt_model: str = _DEFAULT_STT_MODEL
     stt_device: str = _DEFAULT_STT_DEVICE
     stt_compute_type: str = _DEFAULT_STT_COMPUTE_TYPE
@@ -130,6 +134,16 @@ class Settings:
     # Phase 3: voice output.
     tts_enabled: bool = True
     tts_voice: str = _DEFAULT_TTS_VOICE
+    # Speak a short "on it…" acknowledgement before running a (possibly slow)
+    # tool, so the user isn't left in silence waiting.
+    speak_acknowledgements: bool = True
+    # Web search — the ONE feature that leaves the device. Off by default; the
+    # tool is only registered when enabled, and every call is audited.
+    allow_web: bool = False
+    web_results: int = 5
+    # Comma-delimited ddgs backends tried in order. Scraper-friendly engines
+    # first; Google scraping is often blocked, so it's last.
+    web_backend: str = "duckduckgo,bing,brave,google"
     # Logging.
     log_dir: str = _DEFAULT_LOG_DIR
     log_level: str = _DEFAULT_LOG_LEVEL
@@ -148,6 +162,7 @@ class Settings:
             llm_model=_env_str("AUTOBOT_LLM_MODEL", _DEFAULT_LLM_MODEL),
             ollama_host=_env_str("OLLAMA_HOST", _DEFAULT_OLLAMA_HOST),
             llm_temperature=_env_float("AUTOBOT_LLM_TEMPERATURE", 0.0),
+            llm_max_tokens=_env_int("AUTOBOT_LLM_MAX_TOKENS", _DEFAULT_LLM_MAX_TOKENS),
             stt_model=_env_str("AUTOBOT_STT_MODEL", _DEFAULT_STT_MODEL),
             stt_device=_env_str("AUTOBOT_STT_DEVICE", _DEFAULT_STT_DEVICE),
             stt_compute_type=_env_str("AUTOBOT_STT_COMPUTE_TYPE", _DEFAULT_STT_COMPUTE_TYPE),
@@ -165,6 +180,10 @@ class Settings:
             follow_up_window_s=_env_float("AUTOBOT_FOLLOWUP_WINDOW_S", 8.0),
             tts_enabled=_env_bool("AUTOBOT_TTS", True),
             tts_voice=_env_str("AUTOBOT_TTS_VOICE", _DEFAULT_TTS_VOICE),
+            speak_acknowledgements=_env_bool("AUTOBOT_ACK", True),
+            allow_web=_env_bool("AUTOBOT_ALLOW_WEB", False),
+            web_results=_env_int("AUTOBOT_WEB_RESULTS", 5),
+            web_backend=_env_str("AUTOBOT_WEB_BACKEND", "duckduckgo,bing,brave,google"),
             log_dir=_env_str("AUTOBOT_LOG_DIR", _DEFAULT_LOG_DIR),
             log_level=_env_str("AUTOBOT_LOG_LEVEL", _DEFAULT_LOG_LEVEL),
             log_console_level=_env_str("AUTOBOT_LOG_CONSOLE_LEVEL", _DEFAULT_LOG_CONSOLE_LEVEL),
