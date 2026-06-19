@@ -4,31 +4,34 @@ A privacy-first, zero-cost, **on-device** voice assistant. Everything runs local
 
 **Constraint:** English only, both directions (STT and TTS).
 
-**Status:** Phase 0 complete — a push-to-talk spine that proves local tool-calling works.
+**Status:** Phase 1 complete — orchestrator state machine + sandboxed, audited, permission-gated filesystem tools (on the Phase 0 push-to-talk spine).
 
 ---
 
 ## Architecture
 
-A pipeline of swappable stages, each defined as a `Protocol` in `src/autobot/core/interfaces.py`:
+A pipeline of swappable stages, each defined as a `Protocol` in `src/autobot/core/interfaces.py`, driven by an orchestrator state machine. The language model **plans** tool calls; the **permission gate** executes them:
 
 ```
-AudioSource ──▶ SpeechToText ──▶ LanguageModel ──▶ (tools via ToolRegistry)
- (mic)           (base.en)        (Ollama)           (get_time, …)
+Orchestrator (state machine: idle→listening→transcribing→planning→executing→responding)
+  AudioSource ─▶ SpeechToText ─▶ LanguageModel ─plan─▶ PermissionGate ─▶ ToolRegistry
+   (mic)          (base.en)       (Ollama)             (risk? confirm?      (get_time,
+                                                        audit, sandbox)      create/move/delete)
 ```
 
-Concrete implementations live in `io/`, `stt/`, `llm/`, `tools/` and are wired together in one place — `src/autobot/app.py::build()`. Swapping a model or back-end is a one-line change there; nothing else depends on the concrete classes.
+The model never runs tools directly — it calls an executor the orchestrator wires to the gate. Concrete implementations live in `io/`, `stt/`, `llm/`, `tools/`, `orchestrator/` and are wired together in one place — `src/autobot/app.py::build()`. Swapping a model, back-end, or policy is a one-line change there.
 
 ```
 src/autobot/
-  core/        interfaces (Protocols) + value types + Risk enum
-  config.py    typed Settings; the only place env vars are read
-  io/          microphone capture (Phase 2: wake word + VAD)
-  stt/         speech-to-text (English-only)
-  llm/         Ollama orchestrator + pure parsing helpers
-  tools/       registry (+ future permission gate) and built-in tools
-  app.py       composition root + run loop
-tests/unit/    fast tests, no model runtime or mic required
+  core/         interfaces (Protocols) + value types + Risk/State/Decision enums
+  config.py     typed Settings; the only place env vars are read
+  io/           microphone capture (Phase 2: wake word + VAD)
+  stt/          speech-to-text (English-only)
+  llm/          Ollama tool-calling client + pure parsing helpers
+  tools/        registry, permission gate, sandbox, audit log, built-in + fs tools
+  orchestrator/ state machine + turn loop (the backbone)
+  app.py        composition root + run loop
+tests/unit/     fast tests, no model runtime or mic required
 ```
 
 ---
@@ -69,7 +72,13 @@ Tested target: MacBook Air M2, 16 GB, macOS 15.
 make run            # or: uv run autobot   /   uv run python -m autobot
 ```
 
-Press Enter to start recording, say *"what time is it"*, press Enter to stop. You should see the transcription, a `[tool] get_time(...)` line, and a spoken-style reply.
+Press Enter to start recording, speak a command, press Enter to stop. You'll see the live `[state]` transitions, the transcription, and the reply. Try:
+
+- *"what time is it"* — read-only tool, runs straight through.
+- *"create a file called notes.txt that says hello"* — a WRITE action; runs and is audited.
+- *"delete notes.txt"* — a DESTRUCTIVE action; prompts `⚠ … Proceed? [y/N]` and only runs on `y`.
+
+Acting tools are confined to the workspace dir (`~/.autobot/workspace` by default) and every attempt is recorded in the audit log (`~/.autobot/audit.db`). Override with `AUTOBOT_SANDBOX_DIR` / `AUTOBOT_AUDIT_DB`.
 
 ### Try a different model (no code changes)
 

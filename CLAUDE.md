@@ -10,7 +10,8 @@ Everything runs on-device; no audio, text, or memory ever leaves the machine.
 
 - Full build plan: `docs/plans/autobot_build_roadmap.md` (6 risk-ordered phases).
 - Architecture diagram: `docs/architecture/`.
-- **Current status: Phase 0 complete** (push-to-talk → STT → LLM tool call → reply).
+- **Current status: Phase 1 complete** (orchestrator state machine + sandboxed,
+  audited, permission-gated filesystem tools). Phase 0 spine still underneath.
 
 ## Non-negotiable constraints
 
@@ -28,12 +29,18 @@ Everything runs on-device; no audio, text, or memory ever leaves the machine.
 ## Architecture in one paragraph
 
 The pipeline is a sequence of swappable stages defined as `Protocol`s in
-`src/autobot/core/interfaces.py`: `AudioSource → SpeechToText → LanguageModel`
-(which calls tools via the `ToolRegistry`). Concrete implementations live in
-sibling subpackages (`io/`, `stt/`, `llm/`, `tools/`). They are wired together in
-the composition root, `src/autobot/app.py::build()` — **the only place** that
-names concrete classes. Everything else depends on the protocols, so swapping a
-model or back-end is a one-line change in `build()` and nowhere else.
+`src/autobot/core/interfaces.py`: `AudioSource → SpeechToText → LanguageModel`.
+The `Orchestrator` (`orchestrator/state_machine.py`) drives one turn through an
+explicit `State` machine and hands the `LanguageModel` an **executor** — a
+callback wired to the `PermissionGate`. So the model plans tool calls but never
+runs them itself; execution flows model → executor → gate → `ToolRegistry`. The
+gate classifies risk, confirms destructive actions, and writes every decision to
+the SQLite audit log; the `Sandbox` path-jails all filesystem tools. Concrete
+implementations live in sibling subpackages (`io/`, `stt/`, `llm/`, `tools/`,
+`orchestrator/`), wired together in the composition root,
+`src/autobot/app.py::build()` — **the only place** that names concrete classes.
+Everything else depends on the protocols, so swapping a model, back-end, or
+policy is a one-line change in `build()` and nowhere else.
 
 ## Layout
 
@@ -43,8 +50,9 @@ src/autobot/
   config.py    Settings dataclass; the ONLY place env vars are read
   io/          audio capture (Phase 2: wake word + VAD), TTS later
   stt/         speech-to-text engines (English-only)
-  llm/         Ollama orchestrator + pure parsing helpers
-  tools/       registry (+ future permission gate) and built-in tools
+  llm/         Ollama tool-calling client + pure parsing helpers
+  tools/       registry, permission gate, sandbox, audit log, built-in + fs tools
+  orchestrator/ state machine + turn loop (the backbone)
   app.py       composition root + the run loop
   __main__.py  enables `python -m autobot`
 tests/unit/    fast tests that need no model runtime or microphone

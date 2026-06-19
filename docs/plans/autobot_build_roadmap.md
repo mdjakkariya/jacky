@@ -31,14 +31,16 @@ A privacy-first, zero-cost, on-device personal assistant. Reference to follow du
 
 ---
 
-## Phase 1 — Real orchestrator + one guarded tool
+## Phase 1 — Real orchestrator + one guarded tool ✅ DONE (2026-06-19)
 
 **Goal:** Exercise the most dangerous part of the system early — a tool that genuinely *acts*.
 
-- [ ] Build the orchestrator as a proper **state machine** (idle → listening → transcribing → planning → executing → responding, plus an "ask user to clarify" branch). This is the backbone everything else plugs into.
-- [ ] Add one genuinely-acting tool (e.g. create/move a file)
-- [ ] Put it behind the **permission gate**: classify risk → confirm destructive actions → sandbox → write to an audit log (SQLite)
-- [ ] **Done when:** a destructive action prompts for confirmation, executes only on yes, and leaves an audit-log entry.
+- [x] Build the orchestrator as a proper **state machine** (idle → listening → transcribing → planning → executing → responding, plus an "ask user to clarify" branch). This is the backbone everything else plugs into. — `orchestrator/state_machine.py` (`StateMachine` + `Orchestrator`)
+- [x] Add one genuinely-acting tool (e.g. create/move a file) — `tools/filesystem.py`: `create_file`/`move_file` (WRITE), `delete_file` (DESTRUCTIVE)
+- [x] Put it behind the **permission gate**: classify risk → confirm destructive actions → sandbox → write to an audit log (SQLite) — `tools/permission.py` + `tools/sandbox.py` (path-jail) + `tools/audit.py`
+- [x] **Done when:** a destructive action prompts for confirmation, executes only on yes, and leaves an audit-log entry. ✅ Verified 2026-06-19 (40 unit tests + integration smoke: WRITE runs unprompted, DESTRUCTIVE blocked unless confirmed, sandbox escape refused, all four audited).
+
+> Confirmation policy: destructive-only (READ_ONLY + WRITE run directly but are still audited). Sandbox: path-jail to `~/.autobot/workspace` (`AUTOBOT_SANDBOX_DIR`). Audit DB: `~/.autobot/audit.db` (`AUTOBOT_AUDIT_DB`). The gate sits between *planning* and *executing* — the LLM never touches side effects directly; it calls an injected executor wired to the gate.
 
 ---
 

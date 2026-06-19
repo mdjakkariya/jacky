@@ -8,6 +8,7 @@ back-end never ripples into the rest of the system.
 from __future__ import annotations
 
 import enum
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -67,3 +68,57 @@ class ToolResult:
     name: str
     content: str
     ok: bool = True
+
+
+# A function that takes a planned tool call and returns its result. The
+# orchestrator wires this to the permission gate, so the language model can drive
+# tool execution without ever touching the gate (or side effects) directly.
+ToolExecutor = Callable[["ToolCall"], "ToolResult"]
+
+
+class Decision(enum.Enum):
+    """The permission gate's ruling on a tool invocation, recorded in the audit log."""
+
+    ALLOWED = "allowed"
+    """The call was permitted and executed (see ``ok`` for the execution result)."""
+
+    DENIED = "denied"
+    """The call was blocked (unknown tool, or the user declined confirmation)."""
+
+
+class State(enum.Enum):
+    """States of the orchestrator's interaction loop.
+
+    The backbone the whole assistant plugs into. UIs observe transitions to show
+    what the assistant is doing; later phases add streaming and barge-in without
+    changing this vocabulary.
+    """
+
+    IDLE = "idle"
+    LISTENING = "listening"
+    TRANSCRIBING = "transcribing"
+    PLANNING = "planning"
+    EXECUTING = "executing"
+    RESPONDING = "responding"
+    CLARIFYING = "clarifying"
+    ERROR = "error"
+
+
+@dataclass(frozen=True, slots=True)
+class AuditEntry:
+    """One immutable record of a gate decision, written to the audit log."""
+
+    timestamp: str
+    """ISO-8601 UTC timestamp of the decision."""
+
+    tool: str
+    arguments: dict[str, Any]
+    risk: str
+    """The tool's :class:`Risk` level by name (``"unknown"`` if unregistered)."""
+
+    decision: Decision
+    ok: bool | None
+    """Execution success when allowed; ``None`` when denied."""
+
+    detail: str
+    """Result content or the reason a call was denied."""

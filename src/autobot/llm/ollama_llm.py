@@ -14,7 +14,7 @@ import json
 from typing import Any
 
 from autobot.config import Settings
-from autobot.core.types import ToolCall
+from autobot.core.types import ToolCall, ToolExecutor
 from autobot.tools.registry import ToolRegistry
 
 SYSTEM_PROMPT = (
@@ -114,7 +114,7 @@ class OllamaLanguageModel:
             # Older ollama-python without the ``think`` keyword.
             return self._client.chat(**kwargs)
 
-    def run_turn(self, user_text: str) -> str:
+    def run_turn(self, user_text: str, execute: ToolExecutor) -> str:
         """Handle one user turn end-to-end; see the interface for the contract."""
         messages: list[dict[str, Any]] = [
             {"role": "system", "content": SYSTEM_PROMPT},
@@ -130,8 +130,9 @@ class OllamaLanguageModel:
 
         messages.append(_to_message_dict(message))
         for call in calls:
-            result = self._registry.dispatch(call.name, call.arguments)
-            print(f"[tool] {call.name}({call.arguments}) -> {result.content}")
+            # Execution goes through the injected executor (the permission gate),
+            # never the registry directly — this is the gate's seam.
+            result = execute(call)
             messages.append({"role": "tool", "tool_name": call.name, "content": result.content})
 
         final = self._chat(messages)

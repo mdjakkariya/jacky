@@ -8,7 +8,32 @@ genuinely-acting tool is added.
 
 from __future__ import annotations
 
+from autobot.tools.audit import AuditLog
 from autobot.tools.builtin import register_builtins
+from autobot.tools.filesystem import FileTools, register_filesystem_tools
+from autobot.tools.permission import (
+    AlwaysAllow,
+    AlwaysDeny,
+    Confirmer,
+    PermissionGate,
+    TerminalConfirmer,
+)
 from autobot.tools.registry import ToolRegistry, ToolSpec, default_registry
+from autobot.tools.sandbox import Sandbox, SandboxError
 
-__all__ = ["ToolRegistry", "ToolSpec", "default_registry", "register_builtins"]
+__all__ = [
+    "AlwaysAllow",
+    "AlwaysDeny",
+    "AuditLog",
+    "Confirmer",
+    "FileTools",
+    "PermissionGate",
+    "Sandbox",
+    "SandboxError",
+    "TerminalConfirmer",
+    "ToolRegistry",
+    "ToolSpec",
+    "default_registry",
+    "register_builtins",
+    "register_filesystem_tools",
+]

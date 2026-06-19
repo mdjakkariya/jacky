@@ -24,6 +24,11 @@ _DEFAULT_STT_MODEL = "base.en"
 _DEFAULT_STT_DEVICE = "cpu"
 _DEFAULT_STT_COMPUTE_TYPE = "int8"
 
+# Phase 1: where acting tools may operate, and where the audit trail is kept.
+# Both stay inside a single private directory under the user's home.
+_DEFAULT_SANDBOX_DIR = "~/.autobot/workspace"
+_DEFAULT_AUDIT_DB = "~/.autobot/audit.db"
+
 SAMPLE_RATE = 16_000
 """Sample rate (Hz) the whole pipeline assumes. Whisper expects 16 kHz mono."""
 
@@ -55,6 +60,8 @@ class Settings:
     stt_model: str = _DEFAULT_STT_MODEL
     stt_device: str = _DEFAULT_STT_DEVICE
     stt_compute_type: str = _DEFAULT_STT_COMPUTE_TYPE
+    sandbox_dir: str = _DEFAULT_SANDBOX_DIR
+    audit_db: str = _DEFAULT_AUDIT_DB
     sample_rate: int = SAMPLE_RATE
     channels: int = CHANNELS
 
@@ -72,4 +79,6 @@ class Settings:
             stt_model=_env_str("AUTOBOT_STT_MODEL", _DEFAULT_STT_MODEL),
             stt_device=_env_str("AUTOBOT_STT_DEVICE", _DEFAULT_STT_DEVICE),
             stt_compute_type=_env_str("AUTOBOT_STT_COMPUTE_TYPE", _DEFAULT_STT_COMPUTE_TYPE),
+            sandbox_dir=_env_str("AUTOBOT_SANDBOX_DIR", _DEFAULT_SANDBOX_DIR),
+            audit_db=_env_str("AUTOBOT_AUDIT_DB", _DEFAULT_AUDIT_DB),
         )

@@ -17,7 +17,7 @@ from typing import TYPE_CHECKING, Protocol, runtime_checkable
 
 if TYPE_CHECKING:
     # Imported only for type checking so this module stays runtime-light.
-    from autobot.core.types import AudioClip, Transcription
+    from autobot.core.types import AudioClip, ToolExecutor, Transcription
 
 
 @runtime_checkable
@@ -58,15 +58,19 @@ class SpeechToText(Protocol):
 class LanguageModel(Protocol):
     """Plans and answers a user turn, invoking tools as needed."""
 
-    def run_turn(self, user_text: str) -> str:
+    def run_turn(self, user_text: str, execute: ToolExecutor) -> str:
         """Handle one user utterance end-to-end.
 
-        Implementations advertise the registered tools to the model, execute any
-        tool calls it returns, feed the results back, and return the model's
-        final natural-language reply.
+        Implementations advertise the registered tools to the model, run any tool
+        calls it returns **through the provided executor** (never directly), feed
+        the results back, and return the model's final natural-language reply.
+        Routing execution through ``execute`` is what lets the permission gate sit
+        between planning and side effects.
 
         Args:
             user_text: The transcribed user request, in English.
+            execute: Callback that runs one tool call and returns its result —
+                wired by the orchestrator to the permission gate.
 
         Returns:
             The assistant's final reply text.

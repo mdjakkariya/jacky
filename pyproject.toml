@@ -63,9 +63,10 @@ select = [
     "D",   # pydocstyle
 ]
 ignore = [
-    "D100", # module docstring not required everywhere (we add them anyway)
-    "D104", # package __init__ docstring optional
-    "D107", # __init__ docstring optional (documented at class level)
+    "D100",  # module docstring not required everywhere (we add them anyway)
+    "D104",  # package __init__ docstring optional
+    "D107",  # __init__ docstring optional (documented at class level)
+    "UP017", # keep datetime.timezone.utc (runs on 3.10 tooling too; identical on 3.11)
 ]
 
 [tool.ruff.lint.pydocstyle]

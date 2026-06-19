@@ -1,0 +1,76 @@
+"""Tests for the permission gate: confirmation policy + auditing.
+
+These cover the Phase 1 acceptance criteria: a destructive action executes only
+on confirmation, and every attempt leaves an audit entry.
+"""
+
+from __future__ import annotations
+
+from autobot.core.types import Decision, Risk, ToolCall
+from autobot.tools.audit import AuditLog
+from autobot.tools.permission import AlwaysAllow, AlwaysDeny, PermissionGate
+from autobot.tools.registry import ToolRegistry, ToolSpec
+
+
+class _SpyTool:
+    """A tool that records whether it actually ran."""
+
+    def __init__(self, risk: Risk) -> None:
+        self.ran = False
+        self.risk = risk
+
+    def __call__(self, **_kwargs: object) -> str:
+        self.ran = True
+        return "did the thing"
+
+
+def _gate_with(tool: _SpyTool, name: str, confirmer: object) -> tuple[PermissionGate, AuditLog]:
+    registry = ToolRegistry()
+    registry.register(
+        ToolSpec(name=name, description="", parameters={}, handler=tool, risk=tool.risk)
+    )
+    audit = AuditLog(":memory:")
+    gate = PermissionGate(registry, audit, confirmer)  # type: ignore[arg-type]
+    return gate, audit
+
+
+def test_write_runs_without_confirmation_and_is_audited() -> None:
+    tool = _SpyTool(Risk.WRITE)
+    # AlwaysDeny would block a confirmation; WRITE must not even ask.
+    gate, audit = _gate_with(tool, "create_file", AlwaysDeny())
+    result = gate.execute(ToolCall(name="create_file", arguments={"path": "a"}))
+    assert tool.ran is True
+    assert result.ok is True
+    entry = audit.recent()[0]
+    assert entry.decision is Decision.ALLOWED
+    assert entry.risk == "WRITE"
+
+
+def test_destructive_denied_does_not_run_and_is_audited() -> None:
+    tool = _SpyTool(Risk.DESTRUCTIVE)
+    gate, audit = _gate_with(tool, "delete_file", AlwaysDeny())
+    result = gate.execute(ToolCall(name="delete_file", arguments={"path": "a"}))
+    assert tool.ran is False
+    assert result.ok is False
+    assert "not confirmed" in result.content
+    entry = audit.recent()[0]
+    assert entry.decision is Decision.DENIED
+    assert entry.ok is None
+
+
+def test_destructive_confirmed_runs_and_is_audited() -> None:
+    tool = _SpyTool(Risk.DESTRUCTIVE)
+    gate, audit = _gate_with(tool, "delete_file", AlwaysAllow())
+    result = gate.execute(ToolCall(name="delete_file", arguments={"path": "a"}))
+    assert tool.ran is True
+    assert result.ok is True
+    assert audit.recent()[0].decision is Decision.ALLOWED
+
+
+def test_unknown_tool_is_denied_and_audited() -> None:
+    audit = AuditLog(":memory:")
+    gate = PermissionGate(ToolRegistry(), audit, AlwaysAllow())
+    result = gate.execute(ToolCall(name="ghost", arguments={}))
+    assert result.ok is False
+    assert "unknown tool" in result.content
+    assert audit.recent()[0].decision is Decision.DENIED

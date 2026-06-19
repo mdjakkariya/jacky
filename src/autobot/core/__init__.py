@@ -11,14 +11,29 @@ from autobot.core.interfaces import (
     LanguageModel,
     SpeechToText,
 )
-from autobot.core.types import Risk, ToolCall, ToolResult, Transcription
+from autobot.core.types import (
+    AudioClip,
+    AuditEntry,
+    Decision,
+    Risk,
+    State,
+    ToolCall,
+    ToolExecutor,
+    ToolResult,
+    Transcription,
+)
 
 __all__ = [
+    "AudioClip",
     "AudioSource",
+    "AuditEntry",
+    "Decision",
     "LanguageModel",
     "Risk",
     "SpeechToText",
+    "State",
     "ToolCall",
+    "ToolExecutor",
     "ToolResult",
     "Transcription",
 ]
