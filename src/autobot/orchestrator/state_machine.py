@@ -19,6 +19,7 @@ from autobot.core.interfaces import AudioSource, LanguageModel, SpeechToText, Te
 from autobot.core.types import State, ToolCall, ToolResult
 from autobot.logging_setup import get_logger
 from autobot.orchestrator.wake_gate import Address, WakeGate
+from autobot.session_log import NullTranscript, Transcript
 from autobot.tools.permission import PermissionGate
 
 _log = get_logger("orchestrator")
@@ -105,6 +106,7 @@ class Orchestrator:
         gate: PermissionGate,
         wake_gate: WakeGate,
         tts: TextToSpeech,
+        transcript: Transcript | None = None,
         on_state: StateListener | None = _print_transition,
     ) -> None:
         self._settings = settings
@@ -114,6 +116,7 @@ class Orchestrator:
         self._gate = gate
         self._wake_gate = wake_gate
         self._tts = tts
+        self._transcript = transcript or NullTranscript()
         self._sm = StateMachine(on_change=on_state)
         self._acknowledged = False  # spoke a filler this turn?
 
@@ -129,7 +132,9 @@ class Orchestrator:
         if self._settings.speak_acknowledgements and not self._acknowledged:
             self._acknowledged = True
             self._tts.speak(_ack_phrase(call.name))
-        return self._gate.execute(call)
+        result = self._gate.execute(call)
+        self._transcript.tool(call.name, call.arguments, result.ok, result.content)
+        return result
 
     def run_once(self) -> None:
         """Run a single turn: listen, transcribe, gate the wake word, plan, respond."""
@@ -147,16 +152,19 @@ class Orchestrator:
         if result.address is Address.IGNORED:
             # Heard speech, but it wasn't addressed to us — stay quiet.
             _log.info("ignored reason=not_addressed text=%r", transcription.text)
+            self._transcript.note(f"ignored (not addressed): {transcription.text!r}")
             self._sm.transition(State.IDLE)
             return
 
         if result.address is Address.GREETED:
             # Wake word with no command — acknowledge and open the follow-up window.
             _log.info("greeted text=%r", transcription.text)
+            self._transcript.user(transcription.text, transcription.confidence)
             self._sm.transition(State.PLANNING)
             self._sm.transition(State.RESPONDING)
             print("[autobot] Yes?\n")
-            self._tts.speak("Yes?")
+            self._transcript.assistant("Yes sensei?")
+            self._tts.speak("Yes sensei?")
             self._wake_gate.mark_turn_complete()
             self._sm.transition(State.IDLE)
             return
@@ -164,6 +172,7 @@ class Orchestrator:
         command = result.command
         _log.info("heard text=%r confidence=%.2f", command, transcription.confidence)
         print(f"[you] {command}   (confidence {transcription.confidence:.2f})")
+        self._transcript.user(command, transcription.confidence)
 
         self._sm.transition(State.PLANNING)
         self._acknowledged = False  # reset per turn; _execute may speak a filler
@@ -174,6 +183,7 @@ class Orchestrator:
         self._sm.transition(State.RESPONDING)
         _log.info("replied chars=%d latency_ms=%d", len(reply), elapsed_ms)
         print(f"[autobot] {reply}\n")
+        self._transcript.assistant(reply)
         self._tts.speak(reply)
         self._wake_gate.mark_turn_complete()
         self._sm.transition(State.IDLE)
@@ -199,9 +209,11 @@ class Orchestrator:
                 self.run_once()
             except KeyboardInterrupt:
                 print("\nBye.")
+                self._transcript.close()
                 return
             except Exception as exc:  # keep the loop alive on unexpected failures
                 _log.exception("turn failed error=%s", exc)
+                self._transcript.note(f"ERROR: {exc}")
                 print(f"[error] {exc}  (see log for details)")
                 # Let the user know without dumping a traceback at them.
                 try:

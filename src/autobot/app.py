@@ -18,6 +18,7 @@ from autobot.llm.ollama_llm import OllamaLanguageModel
 from autobot.logging_setup import get_logger, setup_logging
 from autobot.orchestrator.state_machine import Orchestrator
 from autobot.orchestrator.wake_gate import PassThroughGate, SttWakeGate, WakeGate
+from autobot.session_log import FileTranscript, NullTranscript, Transcript
 from autobot.stt.faster_whisper_stt import FasterWhisperSTT
 from autobot.tools.audit import AuditLog
 from autobot.tools.builtin import register_builtins
@@ -61,6 +62,20 @@ def _build_wake_gate(settings: Settings) -> WakeGate:
     if settings.input_mode != "ptt" and settings.wake_detector == "stt":
         return SttWakeGate(settings.wake_phrase, settings.follow_up_window_s)
     return PassThroughGate()
+
+
+def _build_transcript(settings: Settings) -> Transcript:
+    """Open a per-session transcript file (or a no-op if disabled)."""
+    if not settings.session_log:
+        return NullTranscript()
+    header = (
+        f"model: {settings.llm_model} · stt: {settings.stt_model} · "
+        f"input: {settings.input_mode}/{settings.wake_detector}"
+    )
+    transcript = FileTranscript(settings.session_dir, header)
+    get_logger("app").info("session transcript file=%s", transcript.path)
+    print(f"[session] transcript: {transcript.path}")
+    return transcript
 
 
 def _build_tts(settings: Settings) -> TextToSpeech:
@@ -128,14 +143,18 @@ def build(settings: Settings | None = None) -> Orchestrator:
     audit = AuditLog(settings.audit_db)
     gate = PermissionGate(registry, audit, TerminalConfirmer())
 
+    # Per-session transcript (readable conversation + debug notes).
+    transcript = _build_transcript(settings)
+
     return Orchestrator(
         settings=settings,
         audio=_build_audio_source(settings),
         stt=FasterWhisperSTT(settings),
-        llm=OllamaLanguageModel(settings, registry),
+        llm=OllamaLanguageModel(settings, registry, transcript),
         gate=gate,
         wake_gate=_build_wake_gate(settings),
         tts=_build_tts(settings),
+        transcript=transcript,
     )
 
 

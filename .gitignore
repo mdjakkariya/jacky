@@ -26,9 +26,10 @@ coverage.xml
 *.gguf
 models/
 
-# Logs
+# Logs / session transcripts
 *.log
 logs/
+sessions/
 
 # OS / editor
 .DS_Store

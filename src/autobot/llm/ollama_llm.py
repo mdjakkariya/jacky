@@ -16,18 +16,34 @@ from typing import Any
 from autobot.config import Settings
 from autobot.core.types import ToolCall, ToolExecutor
 from autobot.logging_setup import get_logger
+from autobot.session_log import NullTranscript, Transcript
 from autobot.tools.registry import ToolRegistry
 
 _log = get_logger("llm")
 
+_DEFAULT_CONTEXT_TOKENS = 4096  # fallback when the model's window can't be detected
+_HARD_MAX_MESSAGES = 100  # safety backstop so history can't grow unbounded
+_CHARS_PER_TOKEN = 4  # rough English token estimate for pre-flight compaction
+
+_SUMMARIZE_INSTRUCTION = (
+    "Summarize the conversation so far in a few sentences. Preserve the user's "
+    "goals, key facts they shared, decisions made, and any tool/web results. Be "
+    "concise; this summary replaces the older turns as memory."
+)
+
 SYSTEM_PROMPT = (
     "You are Autobot, a local voice assistant. Your replies are spoken aloud, so "
-    "talk like a person in conversation. Rules:\n"
-    "- Reply in one to three short, natural sentences.\n"
-    "- Never use lists, numbering, bullet points, markdown, or headings.\n"
-    "- Never read out URLs, web addresses, or source names — just say the answer.\n"
-    "- When tools or web results give you facts, weave them into a friendly "
-    "spoken summary rather than reciting them.\n"
+    "talk like a person and keep it SHORT. Rules:\n"
+    "- Answer only what was asked, in one sentence — two at most.\n"
+    "- Do NOT list your capabilities or suggest options unless the user explicitly "
+    "asks what you can do.\n"
+    "- Do NOT end with offers like 'what would you like to do next?' or a question, "
+    "unless you genuinely need one missing detail to act.\n"
+    "- If the request is unclear, say so briefly in one line; don't guess or pad.\n"
+    "- Never use lists, numbering, markdown, or headings. Never read out URLs or "
+    "source names — just say the answer.\n"
+    "- When a tool or web result gives you facts, state the answer in a natural "
+    "sentence; don't recite the sources.\n"
     "- Always respond in English, and use the provided tools when they help."
 )
 
@@ -82,6 +98,46 @@ def normalize_tool_calls(message: Any) -> list[ToolCall]:
     return calls
 
 
+def trim_history(history: list[dict[str, Any]], max_messages: int) -> list[dict[str, Any]]:
+    """Keep only the most recent ``max_messages`` entries (0 disables history)."""
+    if max_messages <= 0:
+        return []
+    return history[-max_messages:]
+
+
+def pick_context_length(model_info: dict[str, Any] | None, default: int) -> int:
+    """Find the model's context window from Ollama's model_info, else ``default``.
+
+    The key is architecture-specific (e.g. ``qwen2.context_length``), so we scan
+    for any ``*context_length`` entry.
+    """
+    if model_info:
+        for key, value in model_info.items():
+            if key.endswith("context_length") and isinstance(value, int) and value > 0:
+                return value
+    return default
+
+
+def needs_compaction(prompt_tokens: int, context_tokens: int, threshold: float) -> bool:
+    """Whether the prompt uses enough of the window to warrant summarizing."""
+    return context_tokens > 0 and prompt_tokens >= int(threshold * context_tokens)
+
+
+def estimate_tokens(messages: list[dict[str, Any]], chars_per_token: int = _CHARS_PER_TOKEN) -> int:
+    """Rough token estimate from message lengths (~4 chars/token for English).
+
+    Used to decide compaction *before* a request, so a single large incoming
+    message can't push the actual prompt past the context limit.
+    """
+    chars = sum(len(str(m.get("content", ""))) for m in messages)
+    return chars // max(1, chars_per_token)
+
+
+def render_messages(messages: list[dict[str, Any]]) -> str:
+    """Flatten messages to plain text for summarization input."""
+    return "\n".join(f"{m.get('role', '?')}: {m.get('content', '')}" for m in messages)
+
+
 def _to_message_dict(message: Any) -> dict[str, Any]:
     """Best-effort convert a (possibly pydantic) message back to a dict."""
     for attr in ("model_dump", "dict"):
@@ -101,58 +157,168 @@ def _to_message_dict(message: Any) -> dict[str, Any]:
 class OllamaLanguageModel:
     """Runs user turns against a local Ollama model with tool calling."""
 
-    def __init__(self, settings: Settings, registry: ToolRegistry) -> None:
+    def __init__(
+        self,
+        settings: Settings,
+        registry: ToolRegistry,
+        transcript: Transcript | None = None,
+    ) -> None:
         from ollama import Client
 
         self._settings = settings
         self._registry = registry
+        self._transcript = transcript or NullTranscript()
         self._client = Client(host=settings.ollama_host)
+        # Conversational memory: recent {user, assistant} turns kept verbatim, plus
+        # a running summary of older turns once the context fills up.
+        self._history: list[dict[str, Any]] = []
+        self._summary = ""
+        self._last_prompt_tokens = 0
+        self._context_tokens = self._resolve_context()
+        _log.info("context window=%d tokens model=%s", self._context_tokens, settings.llm_model)
 
-    def _chat(self, messages: list[dict[str, Any]]) -> Any:
-        """Call Ollama with bounded output; disable 'thinking' for qwen3 models."""
+    def _resolve_context(self) -> int:
+        """Detect the model's context window (or use the configured override)."""
+        if self._settings.context_tokens > 0:
+            return self._settings.context_tokens
+        try:
+            info = self._client.show(self._settings.llm_model)
+            model_info = _get(info, "modelinfo") or _get(info, "model_info") or {}
+            return pick_context_length(model_info, _DEFAULT_CONTEXT_TOKENS)
+        except Exception:
+            _log.warning("could not detect context length; using %d", _DEFAULT_CONTEXT_TOKENS)
+            return _DEFAULT_CONTEXT_TOKENS
+
+    def _chat(self, messages: list[dict[str, Any]], *, with_tools: bool = True) -> Any:
+        """Call Ollama with the full window + bounded output; track prompt tokens."""
         model = self._settings.llm_model
         kwargs: dict[str, Any] = {
             "model": model,
             "messages": messages,
-            "tools": self._registry.schemas(),
             "options": {
                 "temperature": self._settings.llm_temperature,
-                # Bound reply length so spoken answers stay short and fast.
                 "num_predict": self._settings.llm_max_tokens,
+                # Use the real window, not Ollama's small default.
+                "num_ctx": self._context_tokens,
             },
         }
-        # Only qwen3 has a reasoning mode worth disabling; other models reject the
-        # ``think`` kwarg or don't need it.
+        if with_tools:
+            kwargs["tools"] = self._registry.schemas()
+        # Only qwen3 has a reasoning mode worth disabling; other models reject the kwarg.
         if "qwen3" in model:
             try:
-                return self._client.chat(think=False, **kwargs)
+                response = self._client.chat(think=False, **kwargs)
             except TypeError:
-                # Older ollama-python without the ``think`` keyword.
-                return self._client.chat(**kwargs)
-        return self._client.chat(**kwargs)
+                response = self._client.chat(**kwargs)
+        else:
+            response = self._client.chat(**kwargs)
+        self._last_prompt_tokens = int(_get(response, "prompt_eval_count") or 0)
+        return response
+
+    def _assemble(self, user_msg: dict[str, Any]) -> list[dict[str, Any]]:
+        """System prompt + running summary (if any) + recent turns + the new message."""
+        messages: list[dict[str, Any]] = [{"role": "system", "content": SYSTEM_PROMPT}]
+        if self._summary:
+            messages.append(
+                {"role": "system", "content": f"Summary of earlier conversation: {self._summary}"}
+            )
+        messages += self._history
+        messages.append(user_msg)
+        return messages
 
     def run_turn(self, user_text: str, execute: ToolExecutor) -> str:
         """Handle one user turn end-to-end; see the interface for the contract."""
-        messages: list[dict[str, Any]] = [
-            {"role": "system", "content": SYSTEM_PROMPT},
-            {"role": "user", "content": user_text},
-        ]
+        user_msg = {"role": "user", "content": user_text}
 
+        # Proactive: if *this* prompt (including a possibly-large new message) would
+        # cross the budget, compact BEFORE sending so we never overflow mid-turn.
+        estimated = estimate_tokens(self._assemble(user_msg))
+        self._compact_if_needed(estimated, source="preflight")
+
+        messages = self._assemble(user_msg)
         response = self._chat(messages)
         message = _get(response, "message")
         calls = normalize_tool_calls(message)
 
         if not calls:
             _log.debug("planned no tool calls model=%s", self._settings.llm_model)
-            return message_content(message)
+            reply = message_content(message)
+        else:
+            _log.info(
+                "planned tools=%s model=%s", [c.name for c in calls], self._settings.llm_model
+            )
+            messages.append(_to_message_dict(message))
+            for call in calls:
+                # Execution goes through the injected executor (the permission gate),
+                # never the registry directly — this is the gate's seam.
+                result = execute(call)
+                messages.append({"role": "tool", "tool_name": call.name, "content": result.content})
+            final = self._chat(messages)
+            reply = message_content(_get(final, "message"))
 
-        _log.info("planned tools=%s model=%s", [c.name for c in calls], self._settings.llm_model)
-        messages.append(_to_message_dict(message))
-        for call in calls:
-            # Execution goes through the injected executor (the permission gate),
-            # never the registry directly — this is the gate's seam.
-            result = execute(call)
-            messages.append({"role": "tool", "tool_name": call.name, "content": result.content})
+        # Persist the clean turn; reactive safety net using the real token count.
+        self._history.append(user_msg)
+        self._history.append({"role": "assistant", "content": reply})
+        self._history = trim_history(self._history, _HARD_MAX_MESSAGES)  # hard backstop
+        self._compact_if_needed(self._last_prompt_tokens, source="post-turn")
+        self._report_usage()
+        return reply
 
-        final = self._chat(messages)
-        return message_content(_get(final, "message"))
+    def _report_usage(self) -> None:
+        """Log/echo this turn's token usage for debugging."""
+        ctx = self._context_tokens
+        pct = round(100 * self._last_prompt_tokens / ctx) if ctx else 0
+        _log.info("turn prompt_tokens=%d ctx=%d pct=%d", self._last_prompt_tokens, ctx, pct)
+        self._transcript.note(f"{self._last_prompt_tokens}/{ctx} tokens ({pct}% of context)")
+        if self._settings.show_debug:
+            print(f"[ctx] {self._last_prompt_tokens}/{ctx} tokens ({pct}%)")
+        if ctx and self._last_prompt_tokens > ctx:
+            _log.warning("context limit exceeded prompt=%d ctx=%d", self._last_prompt_tokens, ctx)
+
+    def _compact_if_needed(self, prompt_tokens: int, *, source: str) -> None:
+        """Summarize older turns if ``prompt_tokens`` crosses the compaction threshold.
+
+        Called both pre-flight (estimated tokens) and post-turn (measured tokens),
+        so a sudden large message can't slip a turn past the context limit.
+        """
+        ctx = self._context_tokens
+        if not needs_compaction(prompt_tokens, ctx, self._settings.compact_at):
+            return
+        keep = self._settings.keep_recent_messages
+        older = self._history[:-keep] if keep > 0 else self._history
+        if not older:
+            return
+        self._summary = self._summarize(self._summary, older)
+        self._history = self._history[-keep:] if keep > 0 else []
+        pct = round(100 * prompt_tokens / ctx) if ctx else 0
+        _log.info(
+            "compacted source=%s prompt_tokens=%d ctx=%d pct=%d summarized=%d kept=%d",
+            source,
+            prompt_tokens,
+            ctx,
+            pct,
+            len(older),
+            len(self._history),
+        )
+        self._transcript.note(
+            f"compaction ({source}) at {pct}% — summarized {len(older)} older "
+            f"messages, kept {len(self._history)}"
+        )
+        if self._settings.show_debug:
+            print(f"[ctx] compaction ({source}) at ~{pct}% — summarized older turns")
+
+    def _summarize(self, previous: str, messages: list[dict[str, Any]]) -> str:
+        """Fold older messages (and any previous summary) into a concise summary."""
+        body = (f"Previous summary: {previous}\n\n" if previous else "") + render_messages(messages)
+        try:
+            response = self._chat(
+                [
+                    {"role": "system", "content": _SUMMARIZE_INSTRUCTION},
+                    {"role": "user", "content": body},
+                ],
+                with_tools=False,
+            )
+            return message_content(_get(response, "message")) or previous
+        except Exception:
+            _log.exception("summarization failed; keeping previous summary")
+            return previous

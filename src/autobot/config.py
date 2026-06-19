@@ -19,8 +19,9 @@ from dataclasses import dataclass
 # "qwen3:8b" for the most reliable tool-calling, or try "qwen2.5:1.5b" for speed.
 _DEFAULT_LLM_MODEL = "qwen2.5:3b"
 _DEFAULT_OLLAMA_HOST = "http://127.0.0.1:11434"
-# Cap reply length so spoken answers stay short and fast (tokens).
-_DEFAULT_LLM_MAX_TOKENS = 256
+# Cap reply length so spoken answers stay short and fast (tokens). Voice replies
+# should be a sentence or two — a tight cap also curbs the model's rambling.
+_DEFAULT_LLM_MAX_TOKENS = 120
 # base.en is the English-only starting point on M2; "small.en" for more accuracy.
 _DEFAULT_STT_MODEL = "base.en"
 # CTranslate2 has no Metal backend, so STT runs on CPU; int8 keeps it light.
@@ -52,7 +53,12 @@ _DEFAULT_WAKE_MODEL = "hey_jarvis"
 
 # Phase 3: voice output (TTS). Piper speaks replies on-device. Point tts_voice at
 # a downloaded Piper voice (.onnx); if missing or disabled, we fall back to silent.
-_DEFAULT_TTS_VOICE = "~/.autobot/voices/en_US-lessac-medium.onnx"
+# Default is a male voice (Ryan) to match "Jack"; swap via AUTOBOT_TTS_VOICE.
+_DEFAULT_TTS_VOICE = "~/.autobot/voices/en_US-ryan-high.onnx"
+
+# Per-session transcript (readable conversation + debug notes) for debugging.
+# Kept in the project folder by default so it's easy to open/share.
+_DEFAULT_SESSION_DIR = "sessions"
 
 # Logging: a rotating debug log you can share when reporting an issue. The file
 # captures DEBUG; the console only shows WARNING+ so normal runs stay clean.
@@ -106,6 +112,15 @@ class Settings:
     ollama_host: str = _DEFAULT_OLLAMA_HOST
     llm_temperature: float = 0.0
     llm_max_tokens: int = _DEFAULT_LLM_MAX_TOKENS
+    # Conversational memory with dynamic context management:
+    #   context_tokens=0 -> auto-detect the model's window via Ollama (else this cap).
+    #   When the prompt reaches compact_at of the window, older turns are summarized
+    #   and only keep_recent_messages are kept verbatim. Scales with the model.
+    context_tokens: int = 0
+    # Compact at 85% (not 100%) and check BEFORE each turn, so a sudden large
+    # message can't push a single prompt past the window. Margin absorbs estimate error.
+    compact_at: float = 0.85
+    keep_recent_messages: int = 6
     stt_model: str = _DEFAULT_STT_MODEL
     stt_device: str = _DEFAULT_STT_DEVICE
     stt_compute_type: str = _DEFAULT_STT_COMPUTE_TYPE
@@ -129,8 +144,9 @@ class Settings:
     # clipped by wake-word detection latency. 0 disables it.
     wake_preroll_ms: int = 400
     # After a turn, keep listening for a follow-up without the wake word for this
-    # long; if no speech arrives, re-arm the wake word. 0 disables follow-up mode.
-    follow_up_window_s: float = 8.0
+    # long (measured from when the reply finishes speaking); each turn resets it.
+    # 20s suits natural turn-taking — you listen, think, then ask. 0 disables it.
+    follow_up_window_s: float = 20.0
     # Phase 3: voice output.
     tts_enabled: bool = True
     tts_voice: str = _DEFAULT_TTS_VOICE
@@ -144,6 +160,10 @@ class Settings:
     # Comma-delimited ddgs backends tried in order. Scraper-friendly engines
     # first; Google scraping is often blocked, so it's last.
     web_backend: str = "duckduckgo,bing,brave,google"
+    # Debugging aids.
+    session_log: bool = True
+    session_dir: str = _DEFAULT_SESSION_DIR
+    show_debug: bool = True  # print per-turn token/compaction lines to the terminal
     # Logging.
     log_dir: str = _DEFAULT_LOG_DIR
     log_level: str = _DEFAULT_LOG_LEVEL
@@ -163,6 +183,9 @@ class Settings:
             ollama_host=_env_str("OLLAMA_HOST", _DEFAULT_OLLAMA_HOST),
             llm_temperature=_env_float("AUTOBOT_LLM_TEMPERATURE", 0.0),
             llm_max_tokens=_env_int("AUTOBOT_LLM_MAX_TOKENS", _DEFAULT_LLM_MAX_TOKENS),
+            context_tokens=_env_int("AUTOBOT_CONTEXT_TOKENS", 0),
+            compact_at=_env_float("AUTOBOT_COMPACT_AT", 0.9),
+            keep_recent_messages=_env_int("AUTOBOT_KEEP_RECENT", 6),
             stt_model=_env_str("AUTOBOT_STT_MODEL", _DEFAULT_STT_MODEL),
             stt_device=_env_str("AUTOBOT_STT_DEVICE", _DEFAULT_STT_DEVICE),
             stt_compute_type=_env_str("AUTOBOT_STT_COMPUTE_TYPE", _DEFAULT_STT_COMPUTE_TYPE),
@@ -184,6 +207,9 @@ class Settings:
             allow_web=_env_bool("AUTOBOT_ALLOW_WEB", False),
             web_results=_env_int("AUTOBOT_WEB_RESULTS", 5),
             web_backend=_env_str("AUTOBOT_WEB_BACKEND", "duckduckgo,bing,brave,google"),
+            session_log=_env_bool("AUTOBOT_SESSION_LOG", True),
+            session_dir=_env_str("AUTOBOT_SESSION_DIR", _DEFAULT_SESSION_DIR),
+            show_debug=_env_bool("AUTOBOT_DEBUG", True),
             log_dir=_env_str("AUTOBOT_LOG_DIR", _DEFAULT_LOG_DIR),
             log_level=_env_str("AUTOBOT_LOG_LEVEL", _DEFAULT_LOG_LEVEL),
             log_console_level=_env_str("AUTOBOT_LOG_CONSOLE_LEVEL", _DEFAULT_LOG_CONSOLE_LEVEL),

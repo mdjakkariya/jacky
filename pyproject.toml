@@ -94,6 +94,8 @@ convention = "google"
 [tool.ruff.lint.per-file-ignores]
 # Tests favour readability over docstring ceremony.
 "tests/**" = ["D101", "D102", "D103", "D105"]
+# Protocol contract + no-op stubs; the real impl (FileTranscript) is documented.
+"src/autobot/session_log.py" = ["D102"]
 
 [tool.ruff.format]
 docstring-code-format = true

@@ -64,14 +64,18 @@ Tested target: MacBook Air M2, 16 GB, macOS 15.
 
    > Don't run `uv sync --extra tts` (or `--extra wake`) on their own — `uv sync` replaces the installed set, so a single extra *drops* the others. Use `--extra all` (or `make setup`) to get everything. Push-to-talk needs no extras (`AUTOBOT_INPUT=ptt`).
 
-4. **Download a Piper voice** for voice output (on by default):
+4. **Download a Piper voice** for voice output (on by default). The default is a **male** voice (Ryan):
 
    ```bash
    mkdir -p ~/.autobot/voices && cd ~/.autobot/voices
-   uv run python -m piper.download_voices en_US-lessac-medium   # .onnx + .onnx.json
+   uv run python -m piper.download_voices en_US-ryan-high       # male (default)
+   # other options:
+   #   en_US-ryan-medium     (male, lighter/faster)
+   #   en_GB-alan-medium     (British male)
+   #   en_US-lessac-medium   (female)
    ```
 
-   Point elsewhere with `AUTOBOT_TTS_VOICE=/path/to/voice.onnx`, or turn voice off with `AUTOBOT_TTS=0`. If the voice/extra is missing, Autobot runs text-only (it won't crash) and prints `[tts] voice output OFF …` at startup.
+   Pick any with `AUTOBOT_TTS_VOICE=~/.autobot/voices/<name>.onnx`, or turn voice off with `AUTOBOT_TTS=0`. Browse voices at the [Piper samples page](https://rhasspy.github.io/piper-samples/). If the voice/extra is missing, Autobot runs text-only and prints `[tts] voice output OFF …` at startup.
 
    *(Only if you switch to the `openwakeword` detector: `uv run python -c "import openwakeword.utils as u; u.download_models()"`. The default `stt` detector doesn't need it.)*
 
@@ -87,7 +91,7 @@ make run            # or: uv run autobot   /   uv run python -m autobot
 
 **Hands-free (default):** start with **"jack"** — e.g. *"jack, what's the time"* — said naturally, fast or with a pause; it all works. Autobot transcribes each phrase and, if it starts with the wake word, strips it and runs the rest as your command (the `stt` detector). "jack" is used because it's a common word the STT model transcribes reliably; continuous and fast speech work because matching is on the text, not an acoustic threshold. VAD cuts the clip when you stop. You'll see live `[state]` transitions, the transcription, and the reply.
 
-**Conversational follow-ups:** after a reply, Autobot keeps listening for a follow-up **without** the wake word for a short window (default 8s). Speak again and it just answers; stay quiet and it lapses back to waiting for "hey jarvis" — like a natural back-and-forth. Tune or disable the window with `AUTOBOT_FOLLOWUP_WINDOW_S` (e.g. `12` for longer, `0` to always require the wake word).
+**Conversational follow-ups:** after a reply, Autobot keeps listening for a follow-up **without** the wake word for a window (default **20s**, measured from when it finishes speaking; each turn resets it). Speak again and it just answers; stay quiet and it lapses back to needing the wake word — a natural back-and-forth. Tune with `AUTOBOT_FOLLOWUP_WINDOW_S` (`0` to always require the wake word; lower it if it picks up nearby chatter).
 
 **Spoken acknowledgements:** before running a tool (especially a slow one like web search), Autobot says a quick "On it…" / "Let me look that up." so you're not left in silence. Disable with `AUTOBOT_ACK=0`.
 
@@ -122,6 +126,10 @@ AUTOBOT_STT_MODEL=small.en   make run     # more accurate transcription, a bit s
 
 Reply length is capped by `AUTOBOT_LLM_MAX_TOKENS` (default 256) to keep spoken answers short and fast. Watch `replied latency_ms=` and `transcribed … latency_ms=` in the log to compare. Remember to `ollama pull <model>` first. All tunables live in `src/autobot/config.py`.
 
+### Conversation memory
+
+The assistant remembers recent turns so follow-ups have context ("can you search?" → "you sure?" → "Mumbai weather" → it searches Mumbai). It manages the context window dynamically: it detects the model's real window (via Ollama), uses it fully (`num_ctx`), and **summarizes older turns** into a running summary once usage crosses ~85%, keeping the most recent turns verbatim. The check runs **before each turn on an estimate of the upcoming prompt** (and again on the measured tokens after), so a sudden large message can't push a single turn past the limit. Tune with `AUTOBOT_CONTEXT_TOKENS` (0 = auto-detect), `AUTOBOT_COMPACT_AT` (default 0.85), `AUTOBOT_KEEP_RECENT` (default 6). Per-turn usage shows as `[ctx] N/M tokens (P%)`. Memory is in-session (resets on restart).
+
 ### Web search (optional — the only off-device feature)
 
 Everything above is on-device. Web search is the **one exception** and is **off by default**: it sends your search *query* to DuckDuckGo, then the local LLM summarizes the results. Enable it explicitly:
@@ -152,7 +160,15 @@ Quality gates: **ruff** (lint + format), **mypy strict** (full type checking), *
 
 ## Logs & debugging
 
-Autobot writes one rotating debug log you can share when something misbehaves:
+**Session transcript** — each run writes a readable Markdown record of the whole session (what you said, what Autobot replied, tools used, token usage, compaction, errors) to the **project folder** so it's easy to open and share:
+
+```
+sessions/session-YYYYMMDD-HHMMSS.md
+```
+
+The terminal also shows a `[ctx] NNN/CTX tokens (P%)` line per turn and a note when compaction triggers (disable with `AUTOBOT_DEBUG=0`; disable the file with `AUTOBOT_SESSION_LOG=0`). Run from the repo so `sessions/` lands there.
+
+**Rotating debug log** — the full, terse, all-components log you can share when something misbehaves:
 
 ```
 ~/.autobot/logs/autobot.log
