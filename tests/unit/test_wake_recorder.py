@@ -2,6 +2,11 @@
 
 No microphone or ML runtime is involved: a scripted frame source plus fake
 wake/VAD scorers let us assert the capture logic deterministically.
+
+Convention for the fakes below:
+* a frame value of ``0.95`` is the *wake word* (only it scores as a wake);
+* ``0.8`` is ordinary *speech* (VAD = speech, but NOT a wake);
+* ``0.0`` is *silence*.
 """
 
 from __future__ import annotations
@@ -13,6 +18,10 @@ import numpy as np
 from autobot.config import Settings
 from autobot.core.types import AudioClip, Int16Frame
 from autobot.io.listening import FRAME_SAMPLES, WakeWordVadRecorder
+
+_WAKE = 0.95
+_SPEECH = 0.8
+_SILENCE = 0.0
 
 
 def _frame(value: float) -> AudioClip:
@@ -32,21 +41,18 @@ class _ScriptedSource:
         pass
 
 
-class _WakeOnValue:
-    """Fires the wake word when a frame's first sample is non-zero."""
-
-    def __init__(self, trigger: float) -> None:
-        self._trigger = trigger
+class _WakeOnLoudFrame:
+    """Fires the wake word only for the distinct wake marker (~0.95 -> int16 high)."""
 
     def score(self, frame_int16: Int16Frame) -> float:
-        return 1.0 if frame_int16[0] != 0 else 0.0
+        return 1.0 if frame_int16[0] >= 30000 else 0.0
 
     def reset(self) -> None:
         pass
 
 
 class _VadFromSign:
-    """Treats a positive-valued frame as speech, zero as silence."""
+    """Treats any positive-valued frame as speech, zero as silence."""
 
     def speech_prob(self, frame: AudioClip) -> float:
         return 1.0 if float(frame[0]) > 0.0 else 0.0
@@ -55,74 +61,109 @@ class _VadFromSign:
         pass
 
 
-def _settings() -> Settings:
+def _settings(**overrides: object) -> Settings:
     # end_silence_ms=64 -> 2 frames of silence (32 ms each) ends the utterance.
-    return Settings(input_mode="wake", wake_threshold=0.5, vad_threshold=0.5, end_silence_ms=64)
+    base: dict[str, object] = {
+        "input_mode": "wake",
+        "wake_threshold": 0.5,
+        "vad_threshold": 0.5,
+        "end_silence_ms": 64,
+    }
+    base.update(overrides)
+    return Settings(**base)  # type: ignore[arg-type]
+
+
+def _recorder(frames: list[AudioClip], **settings: object) -> WakeWordVadRecorder:
+    return WakeWordVadRecorder(
+        _settings(**settings), _ScriptedSource(frames), _WakeOnLoudFrame(), _VadFromSign()
+    )
 
 
 def test_waits_for_wake_then_captures_until_silence() -> None:
     frames = [
-        _frame(0.0),  # pre-wake silence (goes to pre-roll)
-        _frame(0.9),  # WAKE fires on this frame
-        _frame(0.8),  # speech
-        _frame(0.8),  # speech
-        _frame(0.0),  # silence 1
-        _frame(0.0),  # silence 2 -> endpoint
-        _frame(0.7),  # should never be read
+        _frame(_SILENCE),  # pre-wake silence (ignored, before wake)
+        _frame(_WAKE),  # WAKE fires here
+        _frame(_SPEECH),  # speech (start)
+        _frame(_SPEECH),  # speech (started)
+        _frame(_SILENCE),  # silence 1
+        _frame(_SILENCE),  # silence 2 -> endpoint
+        _frame(_SPEECH),  # never read
     ]
-    rec = WakeWordVadRecorder(
-        _settings(), _ScriptedSource(frames), _WakeOnValue(0.9), _VadFromSign()
-    )
-    clip = rec.record_clip()
-    # Pre-roll (1 frame) + 4 command frames (the wake frame itself isn't captured;
-    # frames 2,3 speech then 4,5 silence -> endpoint) = 5 frames.
-    assert clip.size == 5 * FRAME_SAMPLES
+    clip = _recorder(frames).record_clip()
+    # After wake: speech x2 (pre-roll+start) then silence x2 -> 4 frames.
+    assert clip.size == 4 * FRAME_SAMPLES
 
 
-def test_includes_preroll_so_first_syllable_not_clipped() -> None:
-    # 2 pre-roll (silence) frames, wake, then real speech then trailing silence.
+def test_preroll_keeps_silence_before_speech_so_first_syllable_not_clipped() -> None:
     frames = [
-        _frame(0.0),
-        _frame(0.0),
-        _frame(0.9),
-        _frame(0.8),
-        _frame(0.8),
-        _frame(0.0),
-        _frame(0.0),
+        _frame(_WAKE),  # wake
+        _frame(_SILENCE),  # pre-roll silence (kept)
+        _frame(_SILENCE),  # pre-roll silence (kept)
+        _frame(_SPEECH),  # speech
+        _frame(_SPEECH),  # speech (started)
+        _frame(_SILENCE),  # silence 1
+        _frame(_SILENCE),  # silence 2 -> endpoint
     ]
-    rec = WakeWordVadRecorder(
-        _settings(), _ScriptedSource(frames), _WakeOnValue(0.9), _VadFromSign()
-    )
-    clip = rec.record_clip()
-    # Pre-roll (2) + 4 command frames (speech x2, silence x2 -> endpoint) = 6.
+    clip = _recorder(frames).record_clip()
     assert clip.size == 6 * FRAME_SAMPLES
-    # The two pre-roll frames (silence) are prepended ahead of the speech.
+    # The two pre-roll silence frames are prepended ahead of the speech.
     assert np.all(clip[: 2 * FRAME_SAMPLES] == 0)
 
 
 def test_returns_empty_if_stream_ends_before_wake() -> None:
-    frames = [_frame(0.0), _frame(0.0)]
-    rec = WakeWordVadRecorder(
-        _settings(), _ScriptedSource(frames), _WakeOnValue(0.9), _VadFromSign()
-    )
-    assert rec.record_clip().size == 0
+    assert _recorder([_frame(_SILENCE), _frame(_SILENCE)]).record_clip().size == 0
 
 
 def test_no_speech_after_wake_returns_empty() -> None:
-    # Wake fires, but only silence follows -> STT must be gated (empty clip),
-    # not 15s of silence handed to Whisper.
-    frames = [_frame(0.9), _frame(0.0), _frame(0.0), _frame(0.0)]
-    rec = WakeWordVadRecorder(
-        _settings(), _ScriptedSource(frames), _WakeOnValue(0.9), _VadFromSign()
-    )
-    assert rec.record_clip().size == 0
+    # Wake fires, only silence follows -> gated empty, not silence to Whisper.
+    clip = _recorder([_frame(_WAKE), _frame(_SILENCE), _frame(_SILENCE), _frame(_SILENCE)])
+    assert clip.record_clip().size == 0
 
 
 def test_caps_at_max_utterance_length() -> None:
-    # Wake immediately, then unbroken speech: must stop at max_utterance_s.
-    settings = Settings(input_mode="wake", end_silence_ms=64, max_utterance_s=0.16)  # ~5 frames
-    frames = [_frame(0.9)] + [_frame(0.8) for _ in range(50)]
-    rec = WakeWordVadRecorder(settings, _ScriptedSource(frames), _WakeOnValue(0.9), _VadFromSign())
-    clip = rec.record_clip()
+    frames = [_frame(_WAKE)] + [_frame(_SPEECH) for _ in range(50)]
+    clip = _recorder(frames, max_utterance_s=0.16).record_clip()  # ~5 frames
     max_frames = round(0.16 * 1000 / (FRAME_SAMPLES / 16_000 * 1000))
     assert clip.size == max_frames * FRAME_SAMPLES
+
+
+def test_follow_up_skips_wake_after_a_turn() -> None:
+    # Turn 1 needs the wake word; turn 2 is captured WITHOUT it (follow-up window).
+    frames = [
+        _frame(_WAKE),
+        _frame(_SPEECH),
+        _frame(_SPEECH),
+        _frame(_SILENCE),
+        _frame(_SILENCE),
+        # turn 2: no wake marker, just speech
+        _frame(_SPEECH),
+        _frame(_SPEECH),
+        _frame(_SILENCE),
+        _frame(_SILENCE),
+    ]
+    rec = _recorder(frames, follow_up_window_s=1.0)
+    assert rec.record_clip().size == 4 * FRAME_SAMPLES  # turn 1 (via wake)
+    assert rec.record_clip().size == 4 * FRAME_SAMPLES  # turn 2 (no wake!)
+
+
+def test_follow_up_times_out_then_requires_wake_again() -> None:
+    frames = [
+        _frame(_WAKE),
+        _frame(_SPEECH),
+        _frame(_SPEECH),
+        _frame(_SILENCE),
+        _frame(_SILENCE),
+        # follow-up window: only silence -> times out, re-arms wake
+        _frame(_SILENCE),
+        _frame(_SILENCE),
+        # next real turn must use the wake word again
+        _frame(_WAKE),
+        _frame(_SPEECH),
+        _frame(_SPEECH),
+        _frame(_SILENCE),
+        _frame(_SILENCE),
+    ]
+    # follow_up_window_s=0.064 -> 2 frames before the window lapses.
+    rec = _recorder(frames, follow_up_window_s=0.064)
+    assert rec.record_clip().size == 4 * FRAME_SAMPLES  # turn 1
+    assert rec.record_clip().size == 4 * FRAME_SAMPLES  # follow-up times out, wake works

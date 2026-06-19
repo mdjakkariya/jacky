@@ -91,6 +91,9 @@ class Settings:
     vad_threshold: float = 0.5
     end_silence_ms: int = 800
     max_utterance_s: float = 15.0
+    # After a turn, keep listening for a follow-up without the wake word for this
+    # long; if no speech arrives, re-arm the wake word. 0 disables follow-up mode.
+    follow_up_window_s: float = 8.0
     # Logging.
     log_dir: str = _DEFAULT_LOG_DIR
     log_level: str = _DEFAULT_LOG_LEVEL
@@ -120,6 +123,7 @@ class Settings:
             vad_threshold=_env_float("AUTOBOT_VAD_THRESHOLD", 0.5),
             end_silence_ms=_env_int("AUTOBOT_END_SILENCE_MS", 800),
             max_utterance_s=_env_float("AUTOBOT_MAX_UTTERANCE_S", 15.0),
+            follow_up_window_s=_env_float("AUTOBOT_FOLLOWUP_WINDOW_S", 8.0),
             log_dir=_env_str("AUTOBOT_LOG_DIR", _DEFAULT_LOG_DIR),
             log_level=_env_str("AUTOBOT_LOG_LEVEL", _DEFAULT_LOG_LEVEL),
             log_console_level=_env_str("AUTOBOT_LOG_CONSOLE_LEVEL", _DEFAULT_LOG_CONSOLE_LEVEL),

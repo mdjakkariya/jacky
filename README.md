@@ -83,6 +83,8 @@ make run            # or: uv run autobot   /   uv run python -m autobot
 
 **Hands-free (default):** say the wake word **"hey jarvis"**, then speak your command — no keypress. VAD detects when you stop and cuts the clip. You'll see live `[state]` transitions, the transcription, and the reply.
 
+**Conversational follow-ups:** after a reply, Autobot keeps listening for a follow-up **without** the wake word for a short window (default 8s). Speak again and it just answers; stay quiet and it lapses back to waiting for "hey jarvis" — like a natural back-and-forth. Tune or disable the window with `AUTOBOT_FOLLOWUP_WINDOW_S` (e.g. `12` for longer, `0` to always require the wake word).
+
 **Push-to-talk:** `AUTOBOT_INPUT=ptt make run` — press Enter to start/stop recording instead.
 
 Either way, try:

@@ -4,12 +4,16 @@ The flow per :meth:`WakeWordVadRecorder.record_clip`:
 
 1. flush any audio buffered while the previous turn was being processed, and
    reset the (stateful) wake/VAD models, so we always listen *live*;
-2. stream mic frames, keeping a short pre-roll ring buffer, and score each with
-   the wake-word model; once it crosses the threshold, start capturing;
-3. run VAD on each captured frame and stop at the end-of-speech endpoint (or a
-   hard maximum). If no speech actually follows the wake word, give up after a
-   short timeout and return nothing — STT is gated strictly on detected speech,
-   which also neutralizes Whisper's silence-hallucination.
+2. **conversational follow-up:** right after a turn, listen for the next command
+   *without* the wake word for ``follow_up_window_s``; if the user speaks, capture
+   it and stay open. If the window passes in silence, re-arm the wake word — like
+   a natural back-and-forth that lapses once you've stopped talking;
+3. otherwise stream mic frames and score each with the wake-word model; once it
+   crosses the threshold, start capturing;
+4. run VAD on each captured frame and stop at the end-of-speech endpoint (or a
+   hard maximum). If no speech actually follows, give up after a timeout and
+   return nothing — STT is gated strictly on detected speech, which also
+   neutralizes Whisper's silence-hallucination.
 
 The clip contract — mono ``float32`` at 16 kHz — is identical to push-to-talk, so
 the orchestrator, STT, and gate are unchanged. The wake/VAD models and the mic
@@ -119,6 +123,9 @@ class WakeWordVadRecorder:
         self._end_silence_frames = max(1, round(settings.end_silence_ms / _FRAME_MS))
         self._max_frames = max(1, round(settings.max_utterance_s * 1000 / _FRAME_MS))
         self._max_wait_frames = max(1, round(_MAX_WAIT_FOR_SPEECH_S * 1000 / _FRAME_MS))
+        self._follow_up_frames = max(0, round(settings.follow_up_window_s * 1000 / _FRAME_MS))
+        # After a turn we stay "open" for a follow-up without the wake word.
+        self._follow_up_active = False
 
     def _next_frame(self) -> AudioClip | None:
         """Pull the next frame from the (persistent) source, or ``None`` if ended."""
@@ -126,17 +133,71 @@ class WakeWordVadRecorder:
             self._frames = iter(self._source.frames())
         return next(self._frames, None)
 
+    def _capture(self, wait_frames: int) -> AudioClip | None:
+        """Capture one utterance, waiting up to ``wait_frames`` for speech to start.
+
+        Keeps a rolling pre-roll while waiting, so the first syllable isn't
+        clipped. Returns the clip, or ``None`` if no speech started within the
+        window (so STT is never fed silence — Whisper hallucinates on it).
+        """
+        endpointer = TrailingSilenceEndpointer(
+            speech_threshold=self._settings.vad_threshold,
+            start_frames=_START_FRAMES,
+            end_silence_frames=self._end_silence_frames,
+        )
+        prebuffer = FramePrebuffer(_PREROLL_FRAMES)
+        collected: list[AudioClip] | None = None
+        waited = 0
+
+        while True:
+            frame = self._next_frame()
+            if frame is None:
+                break
+            endpointer.update(self._vad.speech_prob(frame))
+            if collected is None:
+                # Still waiting for speech to begin: keep a rolling pre-roll.
+                prebuffer.push(frame)
+                if endpointer.started:
+                    collected = prebuffer.drain()  # include the pre-roll lead-in
+                else:
+                    waited += 1
+                    if waited >= wait_frames:
+                        return None
+            else:
+                collected.append(frame)
+                if endpointer.finished or len(collected) >= self._max_frames:
+                    break
+
+        if collected is None or not endpointer.started:
+            return None
+        return np.concatenate(collected).astype(np.float32)
+
     def record_clip(self) -> AudioClip:
-        """Wait for the wake word, capture the command, and return it; see module docs."""
+        """Capture one turn: a follow-up if still in conversation, else wake-word first.
+
+        See the module docstring for the full flow.
+        """
         # Start each turn live: drop audio buffered while we were responding, and
         # clear the stateful models so they don't carry over the previous turn.
         self._source.flush()
         self._wake.reset()
         self._vad.reset()
 
-        prebuffer = FramePrebuffer(_PREROLL_FRAMES)
+        # Conversational follow-up: listen for the next command without the wake
+        # word for a while. If the user speaks, capture it and stay open.
+        if self._follow_up_active and self._follow_up_frames > 0:
+            print("[mic] Listening for a follow-up… (or stay quiet to end)")
+            clip = self._capture(self._follow_up_frames)
+            if clip is not None:
+                seconds = clip.size / self._settings.sample_rate
+                _log.info("follow_up captured seconds=%.1f", seconds)
+                print(f"[mic] Captured {seconds:.1f}s of audio.")
+                return clip
+            self._follow_up_active = False
+            _log.info("follow_up window ended — re-arming wake word")
+            print("[mic] Follow-up window ended.")
 
-        # Phase 1: idle until the wake word fires.
+        # Idle until the wake word fires.
         print("[mic] Listening for the wake word…")
         while True:
             frame = self._next_frame()
@@ -144,40 +205,18 @@ class WakeWordVadRecorder:
                 return np.zeros(0, dtype=np.float32)
             if self._wake.score(float_to_int16(frame)) >= self._settings.wake_threshold:
                 break
-            prebuffer.push(frame)
 
-        # Phase 2: capture the command until VAD says speech ended.
         _log.info("wake detected model=%s", self._settings.wake_model)
         print("[mic] Wake word detected — listening for your command…")
-        endpointer = TrailingSilenceEndpointer(
-            speech_threshold=self._settings.vad_threshold,
-            start_frames=_START_FRAMES,
-            end_silence_frames=self._end_silence_frames,
-        )
-        collected: list[AudioClip] = prebuffer.drain()
-        waited = 0
-        while len(collected) < self._max_frames:
-            frame = self._next_frame()
-            if frame is None:
-                break
-            collected.append(frame)
-            endpointer.update(self._vad.speech_prob(frame))
-            if endpointer.finished:
-                break
-            if not endpointer.started:
-                waited += 1
-                if waited >= self._max_wait_frames:
-                    break  # no speech after the wake word — bail out
-
-        # Gate STT strictly on detected speech: if nothing was actually spoken,
-        # return empty so we don't feed silence to Whisper (which hallucinates).
-        if not endpointer.started:
-            _log.info("no_speech_after_wake frames=%d", waited)
+        clip = self._capture(self._max_wait_frames)
+        if clip is None:
+            _log.info("no_speech_after_wake")
             print("[mic] No speech after wake word — ignoring.")
             return np.zeros(0, dtype=np.float32)
 
-        audio: AudioClip = np.concatenate(collected).astype(np.float32)
-        seconds = len(audio) / self._settings.sample_rate
-        _log.info("captured seconds=%.1f frames=%d", seconds, len(collected))
+        # A successful turn opens the follow-up window for the next call.
+        self._follow_up_active = True
+        seconds = clip.size / self._settings.sample_rate
+        _log.info("captured seconds=%.1f", seconds)
         print(f"[mic] Captured {seconds:.1f}s of audio.")
-        return audio
+        return clip
