@@ -8,7 +8,8 @@ dist/
 # Virtual envs / uv
 .venv/
 .uv/
-uv.lock          # keep OUT until you decide to commit the lockfile; see CLAUDE.md
+# NOTE: uv.lock is intentionally NOT ignored — Autobot is an application, so we
+# commit the lockfile for reproducible installs across machines and CI.
 
 # Tooling caches
 .ruff_cache/
