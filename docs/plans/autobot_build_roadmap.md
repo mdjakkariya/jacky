@@ -44,17 +44,19 @@ A privacy-first, zero-cost, on-device personal assistant. Reference to follow du
 
 ---
 
-## Phase 2 — Always-on listening layer
+## Phase 2 — Always-on listening layer ✅ DONE (2026-06-19)
 
 **Goal:** Replace push-to-talk with hands-free wake. This is the real-time audio / threading risk — prove it in isolation now that the rest works.
 
-- [ ] Mic capture into a ring buffer (sounddevice / PortAudio)
-- [ ] Wake-word detection (openWakeWord, ONNX) — train your custom "Agent name" phrase
-- [ ] VAD (silero-vad) to detect end-of-speech and cut the clip
-- [ ] Wire: wake word fires → capture until VAD endpoint → hand clip to the Phase 0/1 pipeline
-- [ ] **Done when:** saying the wake word, then a command, runs the full loop with no keypress.
+- [x] Mic capture into a ring buffer (sounddevice / PortAudio) — `io/listening.py` `MicFrameSource` (persistent stream → queue, 512-sample frames) + `FramePrebuffer` pre-roll
+- [x] Wake-word detection (openWakeWord, ONNX) — `io/wake_vad.py` `OpenWakeWord`; defaults to the pretrained `hey_jarvis` model (custom "Autobot" phrase needs offline training — see README)
+- [x] VAD (silero-vad) to detect end-of-speech and cut the clip — `io/wake_vad.py` `SileroVad` + the pure `TrailingSilenceEndpointer`
+- [x] Wire: wake word fires → capture until VAD endpoint → hand clip to the Phase 0/1 pipeline — `io/listening.py` `WakeWordVadRecorder` (same `AudioSource` contract, so orchestrator/STT/gate unchanged)
+- [x] **Done when:** saying the wake word, then a command, runs the full loop with no keypress. ✅ Logic verified 2026-06-19 (49 unit tests incl. wake-gating, pre-roll, VAD endpointing, max-utterance cap, with fakes). Live mic/model run is user-side.
 
 > Gate STT strictly on VAD-detected speech. This also neutralizes Whisper's silence-hallucination problem.
+
+> Hands-free is the default (`AUTOBOT_INPUT=wake`); push-to-talk remains via `AUTOBOT_INPUT=ptt`. The wake/VAD models are an optional install (`uv sync --extra wake`) so the core stays light. Real-time logic (endpointing, pre-roll) is split from the mic/models and unit-tested; the model wrappers and mic are injected, so the loop is testable without hardware.
 
 ---
 

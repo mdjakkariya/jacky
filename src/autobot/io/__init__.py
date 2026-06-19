@@ -3,5 +3,11 @@
 from __future__ import annotations
 
 from autobot.io.audio import PushToTalkRecorder
+from autobot.io.listening import FrameSource, MicFrameSource, WakeWordVadRecorder
 
-__all__ = ["PushToTalkRecorder"]
+__all__ = [
+    "FrameSource",
+    "MicFrameSource",
+    "PushToTalkRecorder",
+    "WakeWordVadRecorder",
+]

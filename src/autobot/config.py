@@ -29,6 +29,12 @@ _DEFAULT_STT_COMPUTE_TYPE = "int8"
 _DEFAULT_SANDBOX_DIR = "~/.autobot/workspace"
 _DEFAULT_AUDIT_DB = "~/.autobot/audit.db"
 
+# Phase 2: always-on listening. "wake" = hands-free (wake word + VAD); "ptt" =
+# push-to-talk (Enter). "hey_jarvis" is a pretrained openWakeWord model; a custom
+# "Autobot" phrase requires offline training (see README).
+_DEFAULT_INPUT_MODE = "wake"
+_DEFAULT_WAKE_MODEL = "hey_jarvis"
+
 SAMPLE_RATE = 16_000
 """Sample rate (Hz) the whole pipeline assumes. Whisper expects 16 kHz mono."""
 
@@ -50,6 +56,16 @@ def _env_float(key: str, default: float) -> float:
         return default
 
 
+def _env_int(key: str, default: int) -> int:
+    raw = os.environ.get(key)
+    if raw is None:
+        return default
+    try:
+        return int(raw)
+    except ValueError:
+        return default
+
+
 @dataclass(frozen=True, slots=True)
 class Settings:
     """All runtime-tunable configuration for the assistant."""
@@ -62,6 +78,13 @@ class Settings:
     stt_compute_type: str = _DEFAULT_STT_COMPUTE_TYPE
     sandbox_dir: str = _DEFAULT_SANDBOX_DIR
     audit_db: str = _DEFAULT_AUDIT_DB
+    # Phase 2: hands-free listening.
+    input_mode: str = _DEFAULT_INPUT_MODE
+    wake_model: str = _DEFAULT_WAKE_MODEL
+    wake_threshold: float = 0.5
+    vad_threshold: float = 0.5
+    end_silence_ms: int = 800
+    max_utterance_s: float = 15.0
     sample_rate: int = SAMPLE_RATE
     channels: int = CHANNELS
 
@@ -81,4 +104,10 @@ class Settings:
             stt_compute_type=_env_str("AUTOBOT_STT_COMPUTE_TYPE", _DEFAULT_STT_COMPUTE_TYPE),
             sandbox_dir=_env_str("AUTOBOT_SANDBOX_DIR", _DEFAULT_SANDBOX_DIR),
             audit_db=_env_str("AUTOBOT_AUDIT_DB", _DEFAULT_AUDIT_DB),
+            input_mode=_env_str("AUTOBOT_INPUT", _DEFAULT_INPUT_MODE),
+            wake_model=_env_str("AUTOBOT_WAKE_MODEL", _DEFAULT_WAKE_MODEL),
+            wake_threshold=_env_float("AUTOBOT_WAKE_THRESHOLD", 0.5),
+            vad_threshold=_env_float("AUTOBOT_VAD_THRESHOLD", 0.5),
+            end_silence_ms=_env_int("AUTOBOT_END_SILENCE_MS", 800),
+            max_utterance_s=_env_float("AUTOBOT_MAX_UTTERANCE_S", 15.0),
         )

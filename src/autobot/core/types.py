@@ -18,6 +18,9 @@ import numpy.typing as npt
 AudioClip = npt.NDArray[np.float32]
 """A captured utterance: 1-D ``float32`` mono PCM at the pipeline sample rate."""
 
+Int16Frame = npt.NDArray[np.int16]
+"""A frame of 16-bit integer PCM samples (what the wake-word model consumes)."""
+
 
 class Risk(enum.IntEnum):
     """How dangerous a tool invocation is, used by the permission gate.

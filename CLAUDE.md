@@ -10,8 +10,9 @@ Everything runs on-device; no audio, text, or memory ever leaves the machine.
 
 - Full build plan: `docs/plans/autobot_build_roadmap.md` (6 risk-ordered phases).
 - Architecture diagram: `docs/architecture/`.
-- **Current status: Phase 1 complete** (orchestrator state machine + sandboxed,
-  audited, permission-gated filesystem tools). Phase 0 spine still underneath.
+- **Current status: Phase 2 complete** (hands-free wake word + VAD listening,
+  swappable with push-to-talk). On top of Phase 1 (orchestrator + permission gate)
+  and the Phase 0 spine. Phase 3 (voice output + TUI) is next.
 
 ## Non-negotiable constraints
 
@@ -48,7 +49,7 @@ policy is a one-line change in `build()` and nowhere else.
 src/autobot/
   core/        interfaces.py (Protocols) + types.py (value objects, Risk enum)
   config.py    Settings dataclass; the ONLY place env vars are read
-  io/          audio capture (Phase 2: wake word + VAD), TTS later
+  io/          audio capture: push-to-talk + wake-word/VAD (TTS later)
   stt/         speech-to-text engines (English-only)
   llm/         Ollama tool-calling client + pure parsing helpers
   tools/       registry, permission gate, sandbox, audit log, built-in + fs tools
@@ -92,6 +93,12 @@ make run        # launch the assistant (Ollama must be running)
 
 The model is configurable without code changes, e.g.
 `AUTOBOT_LLM_MODEL=qwen3:4b make run`. All env vars live in `config.py`.
+
+Input mode is `AUTOBOT_INPUT=wake` (default, hands-free) or `ptt` (push-to-talk).
+Hands-free needs the optional wake deps: `uv sync --extra wake` (openWakeWord +
+silero-vad; heavy, so kept out of the core install). Wake/VAD model wrappers and
+the mic are injected into `WakeWordVadRecorder`, and the endpointing/pre-roll
+logic is pure — so the real-time loop is unit-tested without hardware.
 
 ## Verification expectations
 

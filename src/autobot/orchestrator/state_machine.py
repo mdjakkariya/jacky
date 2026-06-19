@@ -128,9 +128,14 @@ class Orchestrator:
 
     def run(self) -> None:
         """Run the interaction loop until interrupted with Ctrl-C."""
+        if self._settings.input_mode == "ptt":
+            trigger = "push-to-talk (press Enter)"
+        else:
+            trigger = f'hands-free (say "{self._settings.wake_model.replace("_", " ")}")'
         print("=" * 60)
-        print(" Autobot — Phase 1 (orchestrator + guarded tools)")
+        print(" Autobot — orchestrator + guarded tools")
         print(f" STT: {self._settings.stt_model}   LLM: {self._settings.llm_model}")
+        print(f" Input: {trigger}")
         print(f" Workspace: {self._settings.sandbox_dir}")
         print(' Try: "create a file notes.txt", "delete notes.txt"')
         print(" Ctrl-C to quit")

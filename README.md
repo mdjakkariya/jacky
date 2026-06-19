@@ -4,7 +4,7 @@ A privacy-first, zero-cost, **on-device** voice assistant. Everything runs local
 
 **Constraint:** English only, both directions (STT and TTS).
 
-**Status:** Phase 1 complete — orchestrator state machine + sandboxed, audited, permission-gated filesystem tools (on the Phase 0 push-to-talk spine).
+**Status:** Phase 2 complete — hands-free wake word + VAD listening (swappable with push-to-talk), on top of the Phase 1 orchestrator + permission gate.
 
 ---
 
@@ -15,17 +15,17 @@ A pipeline of swappable stages, each defined as a `Protocol` in `src/autobot/cor
 ```
 Orchestrator (state machine: idle→listening→transcribing→planning→executing→responding)
   AudioSource ─▶ SpeechToText ─▶ LanguageModel ─plan─▶ PermissionGate ─▶ ToolRegistry
-   (mic)          (base.en)       (Ollama)             (risk? confirm?      (get_time,
-                                                        audit, sandbox)      create/move/delete)
+   wake word      (base.en)       (Ollama)             (risk? confirm?      (get_time,
+   + VAD / PTT                                          audit, sandbox)     create/move/delete)
 ```
 
-The model never runs tools directly — it calls an executor the orchestrator wires to the gate. Concrete implementations live in `io/`, `stt/`, `llm/`, `tools/`, `orchestrator/` and are wired together in one place — `src/autobot/app.py::build()`. Swapping a model, back-end, or policy is a one-line change there.
+The model never runs tools directly — it calls an executor the orchestrator wires to the gate. Input is hands-free (wake word + VAD) or push-to-talk; both satisfy the same `AudioSource` contract. Concrete implementations live in `io/`, `stt/`, `llm/`, `tools/`, `orchestrator/` and are wired together in one place — `src/autobot/app.py::build()`. Swapping a model, back-end, or policy is a one-line change there.
 
 ```
 src/autobot/
   core/         interfaces (Protocols) + value types + Risk/State/Decision enums
   config.py     typed Settings; the only place env vars are read
-  io/           microphone capture (Phase 2: wake word + VAD)
+  io/           audio capture: push-to-talk + wake-word/VAD (endpointing is pure & tested)
   stt/          speech-to-text (English-only)
   llm/          Ollama tool-calling client + pure parsing helpers
   tools/        registry, permission gate, sandbox, audit log, built-in + fs tools
@@ -62,7 +62,16 @@ Tested target: MacBook Air M2, 16 GB, macOS 15.
    make setup
    ```
 
-4. **Microphone permission:** the first run prompts macOS to let your terminal use the mic — allow it (System Settings → Privacy & Security → Microphone). The first run also downloads the `base.en` whisper weights (~150 MB).
+4. **For hands-free mode** (default), install the optional wake/VAD models and download the wake-word weights:
+
+   ```bash
+   uv sync --extra wake          # openWakeWord + silero-vad (heavy: pulls onnxruntime + torch)
+   uv run python -c "import openwakeword.utils as u; u.download_models()"
+   ```
+
+   Prefer to skip this for now? Run push-to-talk instead with `AUTOBOT_INPUT=ptt` (no extra needed).
+
+5. **Microphone permission:** the first run prompts macOS to let your terminal use the mic — allow it (System Settings → Privacy & Security → Microphone). The first run also downloads the `base.en` whisper weights (~150 MB).
 
 ---
 
@@ -72,13 +81,21 @@ Tested target: MacBook Air M2, 16 GB, macOS 15.
 make run            # or: uv run autobot   /   uv run python -m autobot
 ```
 
-Press Enter to start recording, speak a command, press Enter to stop. You'll see the live `[state]` transitions, the transcription, and the reply. Try:
+**Hands-free (default):** say the wake word **"hey jarvis"**, then speak your command — no keypress. VAD detects when you stop and cuts the clip. You'll see live `[state]` transitions, the transcription, and the reply.
+
+**Push-to-talk:** `AUTOBOT_INPUT=ptt make run` — press Enter to start/stop recording instead.
+
+Either way, try:
 
 - *"what time is it"* — read-only tool, runs straight through.
 - *"create a file called notes.txt that says hello"* — a WRITE action; runs and is audited.
 - *"delete notes.txt"* — a DESTRUCTIVE action; prompts `⚠ … Proceed? [y/N]` and only runs on `y`.
 
 Acting tools are confined to the workspace dir (`~/.autobot/workspace` by default) and every attempt is recorded in the audit log (`~/.autobot/audit.db`). Override with `AUTOBOT_SANDBOX_DIR` / `AUTOBOT_AUDIT_DB`.
+
+### Wake word
+
+The default phrase is the pretrained **"hey jarvis"** model. To use a different built-in (e.g. `alexa`, `hey_mycroft`): `AUTOBOT_WAKE_MODEL=alexa make run`. A custom **"Autobot"** phrase requires training your own openWakeWord model offline (see [openWakeWord training docs](https://github.com/dscripka/openWakeWord)) and pointing `AUTOBOT_WAKE_MODEL` at it. Tune sensitivity with `AUTOBOT_WAKE_THRESHOLD` / `AUTOBOT_VAD_THRESHOLD` / `AUTOBOT_END_SILENCE_MS`.
 
 ### Try a different model (no code changes)
 
@@ -108,4 +125,6 @@ Quality gates: **ruff** (lint + format), **mypy strict** (full type checking), *
 
 - **`ConnectionError` / model not found** → ensure `ollama serve` is running and you've `ollama pull`ed the model named in `AUTOBOT_LLM_MODEL`.
 - **No audio / `PortAudioError`** → confirm the terminal has mic permission. If it persists (rare), `brew install portaudio` then `uv sync --reinstall-package sounddevice`.
+- **`Hands-free mode needs the 'wake' extra`** → run `uv sync --extra wake`, or use `AUTOBOT_INPUT=ptt` for push-to-talk.
+- **Wake word never triggers** → lower `AUTOBOT_WAKE_THRESHOLD` (e.g. `0.3`); make sure you ran the `download_models()` step. **Triggers too easily** → raise it. If it cuts you off mid-sentence, raise `AUTOBOT_END_SILENCE_MS`.
 - **Model replies in another language** → it shouldn't; STT and the system prompt are pinned to English. Treat it as a model-quality signal when A/B-ing.

@@ -18,6 +18,12 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+# Hands-free listening (Phase 2). Heavy (onnxruntime + torch), so it's opt-in:
+# `uv sync --extra wake`. Push-to-talk needs none of this.
+wake = [
+    "openwakeword>=0.6.0",
+    "silero-vad>=5.1",
+]
 dev = [
     "ruff>=0.6",
     "mypy>=1.11",
@@ -91,7 +97,14 @@ files = ["src", "tests"]
 
 # Third-party runtimes ship no type stubs; don't fail on their missing imports.
 [[tool.mypy.overrides]]
-module = ["faster_whisper.*", "sounddevice.*", "ollama.*"]
+module = [
+    "faster_whisper.*",
+    "sounddevice.*",
+    "ollama.*",
+    "openwakeword.*",
+    "silero_vad.*",
+    "torch.*",
+]
 ignore_missing_imports = true
 
 # --- pytest ---------------------------------------------------------------
