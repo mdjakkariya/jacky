@@ -26,6 +26,10 @@ coverage.xml
 *.gguf
 models/
 
+# Logs
+*.log
+logs/
+
 # OS / editor
 .DS_Store
 .idea/

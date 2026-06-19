@@ -36,6 +36,13 @@ check: ## Everything CI runs: lint + format check + types + tests
 run: ## Launch the assistant (Ollama must be running)
 	uv run autobot
 
+LOG ?= $(HOME)/.autobot/logs/autobot.log
+logs: ## Tail the debug log (override path with LOG=…)
+	tail -n 200 -f "$(LOG)"
+
+logs-grep: ## Filter the log to one component, e.g. make logs-grep C=stt
+	grep "\[$(C)\]" "$(LOG)"
+
 hooks: ## Install pre-commit git hooks
 	uv run pre-commit install
 

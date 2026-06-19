@@ -100,6 +100,32 @@ silero-vad; heavy, so kept out of the core install). Wake/VAD model wrappers and
 the mic are injected into `WakeWordVadRecorder`, and the endpointing/pre-roll
 logic is pure — so the real-time loop is unit-tested without hardware.
 
+## Logging (add logs as you build)
+
+A single rotating debug log lives at `~/.autobot/logs/autobot.log` (DEBUG; console
+shows WARNING+ only, so normal runs stay clean). It's meant to be **shared as-is**
+when reporting a bug, so keep it **signal, not noise**.
+
+Rules:
+
+- Get a logger per component: `from autobot.logging_setup import get_logger` then
+  `_log = get_logger("stt")` (module level). The component name becomes the
+  `[stt]` tag on every line — the handle used to **filter**:
+  `make logs-grep C=stt` (or `grep '\[stt\]' ~/.autobot/logs/autobot.log`).
+  Existing tags: `app`, `orchestrator`, `gate`, `stt`, `llm`, `listening`, `wake`.
+- Log **events at the seams**, never inside hot loops (no per-frame/per-token logs).
+- Use `key=value` properties so lines are readable and greppable, e.g.
+  `_log.info("captured seconds=%.1f frames=%d", s, n)`. Pass args to the logger
+  (`%`-style), don't f-string them in.
+- Levels: `DEBUG` = detail (state transitions, tool args, per-call timing);
+  `INFO` = lifecycle/seam events (startup, transcript, tool decisions, replies);
+  `WARNING` = recoverable problems; `ERROR`/`_log.exception(...)` = failures
+  **with traceback** (the run loop already does this for uncaught turn errors).
+- Only the `autobot.*` logger is wired (`propagate=False`), so third-party
+  libraries never pollute the file. Don't add handlers elsewhere.
+- **When you add a feature, add its logs** (a component logger + seam events) as
+  part of the change — same as adding tests.
+
 ## Verification expectations
 
 Before considering any change done: `make check` must pass (ruff, ruff-format,

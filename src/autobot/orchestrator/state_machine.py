@@ -10,12 +10,16 @@ injected executor (the permission gate), so the gate sits exactly between
 
 from __future__ import annotations
 
+import time
 from collections.abc import Callable
 
 from autobot.config import Settings
 from autobot.core.interfaces import AudioSource, LanguageModel, SpeechToText
 from autobot.core.types import State, ToolCall, ToolResult
+from autobot.logging_setup import get_logger
 from autobot.tools.permission import PermissionGate
+
+_log = get_logger("orchestrator")
 
 # The transitions the loop is allowed to make. Anything else is a bug.
 _TRANSITIONS: dict[State, frozenset[State]] = {
@@ -66,6 +70,7 @@ class StateMachine:
         if not self.can_transition(to):
             raise InvalidTransitionError(f"{self._state.value} -> {to.value}")
         old, self._state = self._state, to
+        _log.debug("state %s -> %s", old.value, to.value)
         if self._on_change is not None:
             self._on_change(old, to)
 
@@ -113,16 +118,25 @@ class Orchestrator:
         transcription = self._stt.transcribe(audio)
         if transcription.is_empty:
             self._sm.transition(State.CLARIFYING)
+            _log.info("turn skipped reason=no_speech")
             print("[autobot] I didn't catch that — please try again.")
             self._sm.transition(State.IDLE)
             return
 
+        _log.info(
+            "heard text=%r confidence=%.2f",
+            transcription.text,
+            transcription.confidence,
+        )
         print(f"[you] {transcription.text}   (confidence {transcription.confidence:.2f})")
 
         self._sm.transition(State.PLANNING)
+        started = time.perf_counter()
         reply = self._llm.run_turn(transcription.text, self._execute)
+        elapsed_ms = int((time.perf_counter() - started) * 1000)
 
         self._sm.transition(State.RESPONDING)
+        _log.info("replied chars=%d latency_ms=%d", len(reply), elapsed_ms)
         print(f"[autobot] {reply}\n")
         self._sm.transition(State.IDLE)
 
@@ -147,7 +161,8 @@ class Orchestrator:
                 print("\nBye.")
                 return
             except Exception as exc:  # keep the loop alive on unexpected failures
-                print(f"[error] {exc}")
+                _log.exception("turn failed error=%s", exc)
+                print(f"[error] {exc}  (see log for details)")
                 # Recover back to a clean idle state for the next turn.
                 if self._sm.can_transition(State.ERROR):
                     self._sm.transition(State.ERROR)

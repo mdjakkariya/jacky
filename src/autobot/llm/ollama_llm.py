@@ -15,7 +15,10 @@ from typing import Any
 
 from autobot.config import Settings
 from autobot.core.types import ToolCall, ToolExecutor
+from autobot.logging_setup import get_logger
 from autobot.tools.registry import ToolRegistry
+
+_log = get_logger("llm")
 
 SYSTEM_PROMPT = (
     "You are Autobot, a local voice assistant. Always respond in English. "
@@ -126,8 +129,10 @@ class OllamaLanguageModel:
         calls = normalize_tool_calls(message)
 
         if not calls:
+            _log.debug("planned no tool calls model=%s", self._settings.llm_model)
             return message_content(message)
 
+        _log.info("planned tools=%s model=%s", [c.name for c in calls], self._settings.llm_model)
         messages.append(_to_message_dict(message))
         for call in calls:
             # Execution goes through the injected executor (the permission gate),

@@ -11,9 +11,13 @@ that satisfies the same protocol — nothing downstream changes.
 from __future__ import annotations
 
 import math
+import time
 
 from autobot.config import Settings
 from autobot.core.types import AudioClip, Transcription
+from autobot.logging_setup import get_logger
+
+_log = get_logger("stt")
 
 
 class FasterWhisperSTT:
@@ -23,6 +27,12 @@ class FasterWhisperSTT:
         from faster_whisper import WhisperModel
 
         self._settings = settings
+        _log.info(
+            "loading model=%s device=%s compute=%s",
+            settings.stt_model,
+            settings.stt_device,
+            settings.stt_compute_type,
+        )
         print(
             f"[stt] Loading faster-whisper '{settings.stt_model}' "
             f"({settings.stt_device}/{settings.stt_compute_type})…"
@@ -38,6 +48,7 @@ class FasterWhisperSTT:
         if audio.size == 0:
             return Transcription(text="", confidence=0.0)
 
+        started = time.perf_counter()
         segments, _info = self._model.transcribe(
             audio,
             language="en",  # English-only: never autodetect
@@ -54,4 +65,11 @@ class FasterWhisperSTT:
         text = " ".join(t for t in texts if t).strip()
         # Convert mean log-probability into a rough 0..1 confidence.
         confidence = math.exp(sum(logprobs) / len(logprobs)) if logprobs else 0.0
+        _log.debug(
+            "transcribed chars=%d confidence=%.2f audio_s=%.1f latency_ms=%d",
+            len(text),
+            confidence,
+            audio.size / self._settings.sample_rate,
+            int((time.perf_counter() - started) * 1000),
+        )
         return Transcription(text=text, confidence=confidence)

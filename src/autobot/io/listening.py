@@ -28,6 +28,9 @@ from autobot.config import Settings
 from autobot.core.types import AudioClip
 from autobot.io.endpointing import FramePrebuffer, TrailingSilenceEndpointer, float_to_int16
 from autobot.io.wake_vad import VoiceActivity, WakeDetector
+from autobot.logging_setup import get_logger
+
+_log = get_logger("listening")
 
 FRAME_SAMPLES = 512
 """Frame size fed to the models: 512 samples = 32 ms at 16 kHz (silero's window)."""
@@ -144,6 +147,7 @@ class WakeWordVadRecorder:
             prebuffer.push(frame)
 
         # Phase 2: capture the command until VAD says speech ended.
+        _log.info("wake detected model=%s", self._settings.wake_model)
         print("[mic] Wake word detected — listening for your command…")
         endpointer = TrailingSilenceEndpointer(
             speech_threshold=self._settings.vad_threshold,
@@ -168,9 +172,12 @@ class WakeWordVadRecorder:
         # Gate STT strictly on detected speech: if nothing was actually spoken,
         # return empty so we don't feed silence to Whisper (which hallucinates).
         if not endpointer.started:
+            _log.info("no_speech_after_wake frames=%d", waited)
             print("[mic] No speech after wake word — ignoring.")
             return np.zeros(0, dtype=np.float32)
 
         audio: AudioClip = np.concatenate(collected).astype(np.float32)
-        print(f"[mic] Captured {len(audio) / self._settings.sample_rate:.1f}s of audio.")
+        seconds = len(audio) / self._settings.sample_rate
+        _log.info("captured seconds=%.1f frames=%d", seconds, len(collected))
+        print(f"[mic] Captured {seconds:.1f}s of audio.")
         return audio

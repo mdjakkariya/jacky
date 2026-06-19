@@ -15,6 +15,7 @@ from autobot.config import Settings
 from autobot.core.interfaces import AudioSource
 from autobot.io.audio import PushToTalkRecorder
 from autobot.llm.ollama_llm import OllamaLanguageModel
+from autobot.logging_setup import get_logger, setup_logging
 from autobot.orchestrator.state_machine import Orchestrator
 from autobot.stt.faster_whisper_stt import FasterWhisperSTT
 from autobot.tools.audit import AuditLog
@@ -66,6 +67,16 @@ def build(settings: Settings | None = None) -> Orchestrator:
         the audit log, prepares the sandbox, and connects to Ollama.
     """
     settings = settings or Settings.from_env()
+    log_path = setup_logging(settings)
+    log = get_logger("app")
+    log.info(
+        "starting input=%s llm=%s stt=%s sandbox=%s",
+        settings.input_mode,
+        settings.llm_model,
+        settings.stt_model,
+        settings.sandbox_dir,
+    )
+    print(f"[log] writing debug log to {log_path}")
 
     # Tool catalog: read-only built-ins plus the sandboxed acting tools.
     registry = ToolRegistry()

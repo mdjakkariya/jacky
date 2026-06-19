@@ -19,8 +19,11 @@ from __future__ import annotations
 from typing import Protocol, runtime_checkable
 
 from autobot.core.types import Decision, Risk, ToolCall, ToolResult
+from autobot.logging_setup import get_logger
 from autobot.tools.audit import AuditLog
 from autobot.tools.registry import ToolRegistry
+
+_log = get_logger("gate")
 
 
 @runtime_checkable
@@ -75,6 +78,7 @@ class PermissionGate:
         spec = self._registry.get(call.name)
 
         if spec is None:
+            _log.warning("denied tool=%s reason=unknown_tool", call.name)
             self._audit.log(
                 tool=call.name,
                 arguments=call.arguments,
@@ -88,6 +92,7 @@ class PermissionGate:
         if spec.risk >= self._threshold:
             prompt = self._format_prompt(spec.name, spec.risk, call.arguments)
             if not self._confirmer.confirm(prompt):
+                _log.info("denied tool=%s risk=%s reason=user_declined", call.name, spec.risk.name)
                 self._audit.log(
                     tool=call.name,
                     arguments=call.arguments,
@@ -99,6 +104,13 @@ class PermissionGate:
                 return ToolResult(name=call.name, content="cancelled — not confirmed", ok=False)
 
         result = self._registry.dispatch(call.name, call.arguments)
+        _log.info(
+            "allowed tool=%s risk=%s ok=%s args=%s",
+            call.name,
+            spec.risk.name,
+            result.ok,
+            call.arguments,
+        )
         self._audit.log(
             tool=call.name,
             arguments=call.arguments,

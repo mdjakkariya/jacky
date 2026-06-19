@@ -18,6 +18,9 @@ from typing import Protocol, runtime_checkable
 import numpy as np
 
 from autobot.core.types import AudioClip, Int16Frame
+from autobot.logging_setup import get_logger
+
+_log = get_logger("wake")
 
 
 @runtime_checkable
@@ -54,6 +57,7 @@ class OpenWakeWord:
         # optional ``wake`` extra.
         from openwakeword.model import Model
 
+        _log.info("loading wake model=%s", model_name)
         self._model_name = model_name
         self._model = Model(wakeword_models=[model_name])
 
@@ -73,6 +77,7 @@ class SileroVad:
     def __init__(self) -> None:
         from silero_vad import load_silero_vad
 
+        _log.info("loading silero-vad")
         self._model = load_silero_vad()
         # ``torch`` is a transitive dependency of silero-vad; import it lazily too.
         import torch
