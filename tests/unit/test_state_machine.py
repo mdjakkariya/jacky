@@ -69,6 +69,8 @@ class _RecordingGate:
 
 
 def _orchestrator(text: str, gate: object) -> Orchestrator:
+    from autobot.orchestrator.wake_gate import PassThroughGate
+
     transitions: list[State] = []
     orch = Orchestrator(
         settings=Settings(),
@@ -76,6 +78,7 @@ def _orchestrator(text: str, gate: object) -> Orchestrator:
         stt=_FakeSTT(text),
         llm=_ToolingLLM(),
         gate=gate,  # type: ignore[arg-type]
+        wake_gate=PassThroughGate(),
         on_state=lambda _old, new: transitions.append(new),
     )
     orch._transitions = transitions  # type: ignore[attr-defined]
@@ -99,12 +102,11 @@ def test_turn_with_tool_walks_through_executing_and_back_to_idle() -> None:
     assert orch.state is State.IDLE
 
 
-def test_empty_transcription_takes_clarify_branch() -> None:
+def test_empty_transcription_returns_to_idle_without_planning() -> None:
     gate = _RecordingGate()
     orch = _orchestrator("", gate)
     orch.run_once()
     seen = orch._transitions  # type: ignore[attr-defined]
-    assert State.CLARIFYING in seen
-    assert State.PLANNING not in seen
+    assert seen == [State.LISTENING, State.TRANSCRIBING, State.IDLE]
     assert not gate.calls
     assert orch.state is State.IDLE

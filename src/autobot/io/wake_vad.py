@@ -49,26 +49,47 @@ class VoiceActivity(Protocol):
         ...
 
 
+_OWW_WINDOW = 1280
+"""openWakeWord's expected frame: 1280 samples = 80 ms at 16 kHz."""
+
+
 class OpenWakeWord:
-    """Wake-word detector backed by openWakeWord (ONNX)."""
+    """Wake-word detector backed by openWakeWord (ONNX).
+
+    The mic delivers 512-sample (32 ms) frames for silero VAD, but openWakeWord
+    expects 80 ms (1280-sample) windows — feeding it odd sizes degrades detection.
+    So we buffer incoming frames and run :meth:`predict` on full 80 ms windows.
+    """
 
     def __init__(self, model_name: str) -> None:
         # Lazy import: only needed in hands-free mode, only installed via the
         # optional ``wake`` extra.
         from openwakeword.model import Model
 
-        _log.info("loading wake model=%s", model_name)
+        _log.info("loading wake model=%s window=%d", model_name, _OWW_WINDOW)
         self._model_name = model_name
         self._model = Model(wakeword_models=[model_name])
+        self._buffer: Int16Frame = np.empty(0, dtype=np.int16)
 
     def score(self, frame_int16: Int16Frame) -> float:
-        """Run the model on one frame and return the configured phrase's score."""
-        scores = self._model.predict(frame_int16)
-        return float(scores.get(self._model_name, 0.0))
+        """Buffer ``frame_int16`` and score any complete 80 ms windows.
+
+        Returns the highest wake-word probability across the windows completed by
+        this frame (0.0 if none completed yet).
+        """
+        self._buffer = np.concatenate([self._buffer, frame_int16])
+        best = 0.0
+        while self._buffer.shape[0] >= _OWW_WINDOW:
+            window = self._buffer[:_OWW_WINDOW]
+            self._buffer = self._buffer[_OWW_WINDOW:]
+            scores = self._model.predict(window)
+            best = max(best, float(scores.get(self._model_name, 0.0)))
+        return best
 
     def reset(self) -> None:
-        """Clear openWakeWord's internal prediction buffer."""
+        """Clear openWakeWord's internal state and our window buffer."""
         self._model.reset()
+        self._buffer = np.empty(0, dtype=np.int16)
 
 
 class SileroVad:

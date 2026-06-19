@@ -1,0 +1,68 @@
+"""Tests for text-level wake gating (transcribe-then-match)."""
+
+from __future__ import annotations
+
+from autobot.orchestrator.wake_gate import (
+    Address,
+    PassThroughGate,
+    SttWakeGate,
+    extract_command,
+)
+
+
+def test_extract_command_strips_leading_wake_phrase() -> None:
+    assert extract_command("hey jarvis what's the time", "jarvis") == "what's the time"
+    assert extract_command("Jarvis, turn on the lights", "jarvis") == "turn on the lights"
+
+
+def test_extract_command_wake_word_only_returns_empty_string() -> None:
+    assert extract_command("hey jarvis", "jarvis") == ""
+    assert extract_command("jarvis", "jarvis") == ""
+
+
+def test_extract_command_no_wake_word_returns_none() -> None:
+    assert extract_command("turn on the lights", "jarvis") is None
+    # Too far into the sentence to be an address.
+    assert extract_command("so anyway i told jarvis to wait", "jarvis") is None
+
+
+def test_extract_command_matches_last_token_of_multiword_phrase() -> None:
+    assert extract_command("hey jarvis play music", "hey jarvis") == "play music"
+
+
+def test_passthrough_gate_treats_everything_as_command() -> None:
+    gate = PassThroughGate()
+    result = gate.process("  whatever i say  ")
+    assert result.address is Address.COMMAND
+    assert result.command == "whatever i say"
+
+
+def test_stt_gate_requires_wake_word_when_not_in_follow_up() -> None:
+    gate = SttWakeGate("jarvis", follow_up_window_s=8.0, clock=lambda: 0.0)
+    assert gate.process("turn on the lights").address is Address.IGNORED
+    res = gate.process("jarvis what's the time")
+    assert res.address is Address.COMMAND and res.command == "what's the time"
+    assert gate.process("hey jarvis").address is Address.GREETED
+
+
+def test_stt_gate_follow_up_window_accepts_without_wake_word() -> None:
+    now = {"t": 0.0}
+    gate = SttWakeGate("jarvis", follow_up_window_s=8.0, clock=lambda: now["t"])
+
+    first = gate.process("jarvis what time is it")
+    assert first.address is Address.COMMAND
+    gate.mark_turn_complete()  # opens the follow-up window
+
+    now["t"] = 3.0  # within the 8s window
+    follow = gate.process("and what's the date")
+    assert follow.address is Address.COMMAND and follow.command == "and what's the date"
+
+
+def test_stt_gate_follow_up_window_lapses() -> None:
+    now = {"t": 0.0}
+    gate = SttWakeGate("jarvis", follow_up_window_s=8.0, clock=lambda: now["t"])
+    gate.process("jarvis hello")
+    gate.mark_turn_complete()
+
+    now["t"] = 20.0  # well past the window
+    assert gate.process("turn on the lights").address is Address.IGNORED

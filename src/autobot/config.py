@@ -30,9 +30,21 @@ _DEFAULT_SANDBOX_DIR = "~/.autobot/workspace"
 _DEFAULT_AUDIT_DB = "~/.autobot/audit.db"
 
 # Phase 2: always-on listening. "wake" = hands-free (wake word + VAD); "ptt" =
-# push-to-talk (Enter). "hey_jarvis" is a pretrained openWakeWord model; a custom
-# "Autobot" phrase requires offline training (see README).
+# push-to-talk (Enter).
 _DEFAULT_INPUT_MODE = "wake"
+# How the wake word is detected in hands-free mode:
+#   "stt"         — transcribe each phrase and match the wake word in text.
+#                   Handles continuous AND fast speech, and is reliable for a
+#                   COMMON word the STT model knows well (e.g. "jack"). Default.
+#   "openwakeword"— dedicated acoustic model; needs a pretrained/custom model for
+#                   the phrase (e.g. "hey_jarvis"); no built-in "jack" model.
+_DEFAULT_WAKE_DETECTOR = "stt"
+# Spoken wake phrase matched in transcripts (STT detector). Pick a common,
+# distinct word the STT model transcribes reliably. "jack" works well; rare
+# names like "jarvis" get mis-transcribed by base.en. The last word is the
+# trigger token, so "hey jack" also matches.
+_DEFAULT_WAKE_PHRASE = "jack"
+# openWakeWord pretrained model name (used only when wake_detector="openwakeword").
 _DEFAULT_WAKE_MODEL = "hey_jarvis"
 
 # Logging: a rotating debug log you can share when reporting an issue. The file
@@ -86,11 +98,21 @@ class Settings:
     audit_db: str = _DEFAULT_AUDIT_DB
     # Phase 2: hands-free listening.
     input_mode: str = _DEFAULT_INPUT_MODE
+    wake_detector: str = _DEFAULT_WAKE_DETECTOR
+    wake_phrase: str = _DEFAULT_WAKE_PHRASE
     wake_model: str = _DEFAULT_WAKE_MODEL
-    wake_threshold: float = 0.5
+    # Lower than openWakeWord's usual 0.5: measured peaks were ~0.8 for an
+    # isolated "hey jarvis" but only ~0.35-0.40 when said continuously, so 0.30
+    # catches both with margin (non-wake speech scores well under 0.1). Raise it
+    # if you get false triggers; tune from the 'wake score=' debug log lines.
+    wake_threshold: float = 0.3
     vad_threshold: float = 0.5
     end_silence_ms: int = 800
     max_utterance_s: float = 15.0
+    # Audio kept from just *before* the wake word fires, prepended to the capture
+    # so a command spoken in the same breath ("hey jarvis, what's the time") isn't
+    # clipped by wake-word detection latency. 0 disables it.
+    wake_preroll_ms: int = 400
     # After a turn, keep listening for a follow-up without the wake word for this
     # long; if no speech arrives, re-arm the wake word. 0 disables follow-up mode.
     follow_up_window_s: float = 8.0
@@ -118,11 +140,14 @@ class Settings:
             sandbox_dir=_env_str("AUTOBOT_SANDBOX_DIR", _DEFAULT_SANDBOX_DIR),
             audit_db=_env_str("AUTOBOT_AUDIT_DB", _DEFAULT_AUDIT_DB),
             input_mode=_env_str("AUTOBOT_INPUT", _DEFAULT_INPUT_MODE),
+            wake_detector=_env_str("AUTOBOT_WAKE_DETECTOR", _DEFAULT_WAKE_DETECTOR),
+            wake_phrase=_env_str("AUTOBOT_WAKE_PHRASE", _DEFAULT_WAKE_PHRASE).lower(),
             wake_model=_env_str("AUTOBOT_WAKE_MODEL", _DEFAULT_WAKE_MODEL),
-            wake_threshold=_env_float("AUTOBOT_WAKE_THRESHOLD", 0.5),
+            wake_threshold=_env_float("AUTOBOT_WAKE_THRESHOLD", 0.3),
             vad_threshold=_env_float("AUTOBOT_VAD_THRESHOLD", 0.5),
             end_silence_ms=_env_int("AUTOBOT_END_SILENCE_MS", 800),
             max_utterance_s=_env_float("AUTOBOT_MAX_UTTERANCE_S", 15.0),
+            wake_preroll_ms=_env_int("AUTOBOT_WAKE_PREROLL_MS", 400),
             follow_up_window_s=_env_float("AUTOBOT_FOLLOWUP_WINDOW_S", 8.0),
             log_dir=_env_str("AUTOBOT_LOG_DIR", _DEFAULT_LOG_DIR),
             log_level=_env_str("AUTOBOT_LOG_LEVEL", _DEFAULT_LOG_LEVEL),

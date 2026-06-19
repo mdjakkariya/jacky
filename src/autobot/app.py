@@ -17,6 +17,7 @@ from autobot.io.audio import PushToTalkRecorder
 from autobot.llm.ollama_llm import OllamaLanguageModel
 from autobot.logging_setup import get_logger, setup_logging
 from autobot.orchestrator.state_machine import Orchestrator
+from autobot.orchestrator.wake_gate import PassThroughGate, SttWakeGate, WakeGate
 from autobot.stt.faster_whisper_stt import FasterWhisperSTT
 from autobot.tools.audit import AuditLog
 from autobot.tools.builtin import register_builtins
@@ -27,33 +28,39 @@ from autobot.tools.sandbox import Sandbox
 
 
 def _build_audio_source(settings: Settings) -> AudioSource:
-    """Pick the input mode: hands-free wake word + VAD, or push-to-talk.
+    """Pick the input recorder for the configured mode and wake detector.
 
-    The hands-free path needs the optional ``wake`` dependencies; if they are
-    missing we fail with a clear instruction rather than an opaque ImportError.
+    The hands-free path needs the optional ``wake`` dependencies (silero-vad, and
+    openWakeWord only for that detector); if missing we fail with a clear hint.
     """
     if settings.input_mode == "ptt":
         return PushToTalkRecorder(settings)
 
-    from autobot.io.listening import MicFrameSource, WakeWordVadRecorder
+    from autobot.io.listening import MicFrameSource, VadRecorder, WakeWordVadRecorder
     from autobot.io.wake_vad import OpenWakeWord, SileroVad
 
+    source = MicFrameSource(settings)
     try:
-        # The model constructors are what import the optional heavy runtimes.
-        wake = OpenWakeWord(settings.wake_model)
-        vad = SileroVad()
+        vad = SileroVad()  # imports the heavy runtime
+        if settings.wake_detector == "openwakeword":
+            return WakeWordVadRecorder(
+                settings=settings, source=source, wake=OpenWakeWord(settings.wake_model), vad=vad
+            )
+        # Default: transcribe-then-match — VAD captures each phrase, the wake word
+        # is matched on the transcript by the wake gate.
+        return VadRecorder(settings, source, vad)
     except ImportError as exc:  # pragma: no cover - depends on optional extras
         raise SystemExit(
             "Hands-free mode needs the 'wake' extra: run `uv sync --extra wake` "
             "(or set AUTOBOT_INPUT=ptt for push-to-talk)."
         ) from exc
 
-    return WakeWordVadRecorder(
-        settings=settings,
-        source=MicFrameSource(settings),
-        wake=wake,
-        vad=vad,
-    )
+
+def _build_wake_gate(settings: Settings) -> WakeGate:
+    """Text-level wake gate: STT match for the 'stt' detector, else pass-through."""
+    if settings.input_mode != "ptt" and settings.wake_detector == "stt":
+        return SttWakeGate(settings.wake_phrase, settings.follow_up_window_s)
+    return PassThroughGate()
 
 
 def build(settings: Settings | None = None) -> Orchestrator:
@@ -94,6 +101,7 @@ def build(settings: Settings | None = None) -> Orchestrator:
         stt=FasterWhisperSTT(settings),
         llm=OllamaLanguageModel(settings, registry),
         gate=gate,
+        wake_gate=_build_wake_gate(settings),
     )
 
 

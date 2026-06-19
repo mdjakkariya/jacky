@@ -7,5 +7,21 @@ from autobot.orchestrator.state_machine import (
     Orchestrator,
     StateMachine,
 )
+from autobot.orchestrator.wake_gate import (
+    Address,
+    PassThroughGate,
+    SttWakeGate,
+    WakeGate,
+    WakeResult,
+)
 
-__all__ = ["InvalidTransitionError", "Orchestrator", "StateMachine"]
+__all__ = [
+    "Address",
+    "InvalidTransitionError",
+    "Orchestrator",
+    "PassThroughGate",
+    "StateMachine",
+    "SttWakeGate",
+    "WakeGate",
+    "WakeResult",
+]

@@ -68,6 +68,7 @@ def _settings(**overrides: object) -> Settings:
         "wake_threshold": 0.5,
         "vad_threshold": 0.5,
         "end_silence_ms": 64,
+        "wake_preroll_ms": 0,  # off by default in tests; one test opts in
     }
     base.update(overrides)
     return Settings(**base)  # type: ignore[arg-type]
@@ -125,6 +126,24 @@ def test_caps_at_max_utterance_length() -> None:
     clip = _recorder(frames, max_utterance_s=0.16).record_clip()  # ~5 frames
     max_frames = round(0.16 * 1000 / (FRAME_SAMPLES / 16_000 * 1000))
     assert clip.size == max_frames * FRAME_SAMPLES
+
+
+def test_continuous_command_recovered_via_wake_preroll() -> None:
+    # Models "hey jarvis what…" said in one breath: the command onset (speech)
+    # arrives just before the wake word fires. Without pre-roll it would be lost.
+    frames = [
+        _frame(_SPEECH),  # command onset, before wake fires (in pre-roll)
+        _frame(_SPEECH),
+        _frame(_WAKE),  # wake fires here (late, mid-utterance)
+        _frame(_SPEECH),  # rest of the command
+        _frame(_SILENCE),
+        _frame(_SILENCE),  # endpoint
+    ]
+    # Without pre-roll the onset is dropped and only one post-wake speech frame
+    # remains — not enough to start -> empty.
+    assert _recorder(list(frames), wake_preroll_ms=0).record_clip().size == 0
+    # With pre-roll (~96 ms = 3 frames) the onset is recovered and captured.
+    assert _recorder(list(frames), wake_preroll_ms=96).record_clip().size > 0
 
 
 def test_follow_up_skips_wake_after_a_turn() -> None:

@@ -81,7 +81,7 @@ Tested target: MacBook Air M2, 16 GB, macOS 15.
 make run            # or: uv run autobot   /   uv run python -m autobot
 ```
 
-**Hands-free (default):** say the wake word **"hey jarvis"**, then speak your command — no keypress. VAD detects when you stop and cuts the clip. You'll see live `[state]` transitions, the transcription, and the reply.
+**Hands-free (default):** start with **"jack"** — e.g. *"jack, what's the time"* — said naturally, fast or with a pause; it all works. Autobot transcribes each phrase and, if it starts with the wake word, strips it and runs the rest as your command (the `stt` detector). "jack" is used because it's a common word the STT model transcribes reliably; continuous and fast speech work because matching is on the text, not an acoustic threshold. VAD cuts the clip when you stop. You'll see live `[state]` transitions, the transcription, and the reply.
 
 **Conversational follow-ups:** after a reply, Autobot keeps listening for a follow-up **without** the wake word for a short window (default 8s). Speak again and it just answers; stay quiet and it lapses back to waiting for "hey jarvis" — like a natural back-and-forth. Tune or disable the window with `AUTOBOT_FOLLOWUP_WINDOW_S` (e.g. `12` for longer, `0` to always require the wake word).
 
@@ -97,7 +97,12 @@ Acting tools are confined to the workspace dir (`~/.autobot/workspace` by defaul
 
 ### Wake word
 
-The default phrase is the pretrained **"hey jarvis"** model. To use a different built-in (e.g. `alexa`, `hey_mycroft`): `AUTOBOT_WAKE_MODEL=alexa make run`. A custom **"Autobot"** phrase requires training your own openWakeWord model offline (see [openWakeWord training docs](https://github.com/dscripka/openWakeWord)) and pointing `AUTOBOT_WAKE_MODEL` at it. Tune sensitivity with `AUTOBOT_WAKE_THRESHOLD` / `AUTOBOT_VAD_THRESHOLD` / `AUTOBOT_END_SILENCE_MS`.
+There are two wake detectors, selected with `AUTOBOT_WAKE_DETECTOR`:
+
+- **`stt`** (default) — transcribe-then-match: the wake word is matched on the transcript (`AUTOBOT_WAKE_PHRASE`, default `jack`). Handles continuous and fast speech naturally (matching is on text, not an acoustic threshold). **Choose a common word the STT model transcribes reliably** — "jack" works well; rare proper nouns like "jarvis" get mis-transcribed by `base.en`. The last word of the phrase is the trigger, so "hey jack" also matches. Tradeoff: every nearby phrase is transcribed to check it (more CPU, still fully on-device).
+- **`openwakeword`** — a dedicated acoustic wake-word model, independent of transcription. Needs a pretrained or custom-trained model for your phrase (`AUTOBOT_WAKE_MODEL`: `hey_jarvis`, `alexa`, `hey_mycroft`, …; custom phrases need offline [training](https://github.com/dscripka/openWakeWord)). Tune with `AUTOBOT_WAKE_THRESHOLD` (lower = more sensitive; a continuously-spoken wake word peaks lower than an isolated one) and `AUTOBOT_WAKE_PREROLL_MS`.
+
+Common tuning: `AUTOBOT_VAD_THRESHOLD`, `AUTOBOT_END_SILENCE_MS` (raise if you're cut off mid-sentence), `AUTOBOT_FOLLOWUP_WINDOW_S`.
 
 ### Try a different model (no code changes)
 

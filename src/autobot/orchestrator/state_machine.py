@@ -17,6 +17,7 @@ from autobot.config import Settings
 from autobot.core.interfaces import AudioSource, LanguageModel, SpeechToText
 from autobot.core.types import State, ToolCall, ToolResult
 from autobot.logging_setup import get_logger
+from autobot.orchestrator.wake_gate import Address, WakeGate
 from autobot.tools.permission import PermissionGate
 
 _log = get_logger("orchestrator")
@@ -25,7 +26,7 @@ _log = get_logger("orchestrator")
 _TRANSITIONS: dict[State, frozenset[State]] = {
     State.IDLE: frozenset({State.LISTENING, State.ERROR}),
     State.LISTENING: frozenset({State.TRANSCRIBING, State.ERROR}),
-    State.TRANSCRIBING: frozenset({State.PLANNING, State.CLARIFYING, State.ERROR}),
+    State.TRANSCRIBING: frozenset({State.PLANNING, State.CLARIFYING, State.IDLE, State.ERROR}),
     State.PLANNING: frozenset({State.EXECUTING, State.RESPONDING, State.CLARIFYING, State.ERROR}),
     State.EXECUTING: frozenset({State.EXECUTING, State.RESPONDING, State.ERROR}),
     State.RESPONDING: frozenset({State.IDLE, State.ERROR}),
@@ -90,6 +91,7 @@ class Orchestrator:
         stt: SpeechToText,
         llm: LanguageModel,
         gate: PermissionGate,
+        wake_gate: WakeGate,
         on_state: StateListener | None = _print_transition,
     ) -> None:
         self._settings = settings
@@ -97,6 +99,7 @@ class Orchestrator:
         self._stt = stt
         self._llm = llm
         self._gate = gate
+        self._wake_gate = wake_gate
         self._sm = StateMachine(on_change=on_state)
 
     @property
@@ -110,42 +113,57 @@ class Orchestrator:
         return self._gate.execute(call)
 
     def run_once(self) -> None:
-        """Run a single turn: listen, transcribe, plan, (execute), respond."""
+        """Run a single turn: listen, transcribe, gate the wake word, plan, respond."""
         self._sm.transition(State.LISTENING)
         audio = self._audio.record_clip()
 
         self._sm.transition(State.TRANSCRIBING)
         transcription = self._stt.transcribe(audio)
         if transcription.is_empty:
-            self._sm.transition(State.CLARIFYING)
-            _log.info("turn skipped reason=no_speech")
-            print("[autobot] I didn't catch that — please try again.")
+            _log.debug("ignored reason=no_speech")
             self._sm.transition(State.IDLE)
             return
 
-        _log.info(
-            "heard text=%r confidence=%.2f",
-            transcription.text,
-            transcription.confidence,
-        )
-        print(f"[you] {transcription.text}   (confidence {transcription.confidence:.2f})")
+        result = self._wake_gate.process(transcription.text)
+        if result.address is Address.IGNORED:
+            # Heard speech, but it wasn't addressed to us — stay quiet.
+            _log.info("ignored reason=not_addressed text=%r", transcription.text)
+            self._sm.transition(State.IDLE)
+            return
+
+        if result.address is Address.GREETED:
+            # Wake word with no command — acknowledge and open the follow-up window.
+            _log.info("greeted text=%r", transcription.text)
+            self._sm.transition(State.PLANNING)
+            self._sm.transition(State.RESPONDING)
+            print("[autobot] Yes?\n")
+            self._wake_gate.mark_turn_complete()
+            self._sm.transition(State.IDLE)
+            return
+
+        command = result.command
+        _log.info("heard text=%r confidence=%.2f", command, transcription.confidence)
+        print(f"[you] {command}   (confidence {transcription.confidence:.2f})")
 
         self._sm.transition(State.PLANNING)
         started = time.perf_counter()
-        reply = self._llm.run_turn(transcription.text, self._execute)
+        reply = self._llm.run_turn(command, self._execute)
         elapsed_ms = int((time.perf_counter() - started) * 1000)
 
         self._sm.transition(State.RESPONDING)
         _log.info("replied chars=%d latency_ms=%d", len(reply), elapsed_ms)
         print(f"[autobot] {reply}\n")
+        self._wake_gate.mark_turn_complete()
         self._sm.transition(State.IDLE)
 
     def run(self) -> None:
         """Run the interaction loop until interrupted with Ctrl-C."""
         if self._settings.input_mode == "ptt":
             trigger = "push-to-talk (press Enter)"
-        else:
+        elif self._settings.wake_detector == "openwakeword":
             trigger = f'hands-free (say "{self._settings.wake_model.replace("_", " ")}")'
+        else:
+            trigger = f'hands-free (say "{self._settings.wake_phrase}, …")'
         print("=" * 60)
         print(" Autobot — orchestrator + guarded tools")
         print(f" STT: {self._settings.stt_model}   LLM: {self._settings.llm_model}")
