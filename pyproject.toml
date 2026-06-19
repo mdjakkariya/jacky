@@ -1,0 +1,116 @@
+[project]
+name = "autobot"
+version = "0.1.0"
+description = "A local, privacy-first, English-only voice assistant."
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+authors = [{ name = "MD" }]
+keywords = ["voice-assistant", "local", "privacy", "stt", "llm", "ollama"]
+
+# Runtime dependencies. Heavy model runtimes are imported lazily in their
+# modules so that tooling and unit tests do not need them installed.
+dependencies = [
+    "numpy>=1.24",
+    "faster-whisper>=1.0.0", # English-only STT (CTranslate2 backend)
+    "sounddevice>=0.4.6",    # mic capture; bundles PortAudio in its wheel
+    "ollama>=0.4.0",         # local LLM client with tool calling
+]
+
+[project.optional-dependencies]
+dev = [
+    "ruff>=0.6",
+    "mypy>=1.11",
+    "pytest>=8.0",
+    "pytest-cov>=5.0",
+    "pre-commit>=3.7",
+]
+
+[project.scripts]
+autobot = "autobot.app:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/autobot"]
+
+# --- uv -------------------------------------------------------------------
+[tool.uv]
+# Keep the dev tools in the default sync so `uv sync` gives a ready dev env.
+default-groups = []
+
+# --- Ruff (lint + format) -------------------------------------------------
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = [
+    "E",   # pycodestyle errors
+    "W",   # pycodestyle warnings
+    "F",   # pyflakes
+    "I",   # isort (import order)
+    "N",   # pep8-naming
+    "UP",  # pyupgrade
+    "B",   # flake8-bugbear
+    "C4",  # flake8-comprehensions
+    "SIM", # flake8-simplify
+    "PTH", # prefer pathlib
+    "RUF", # ruff-specific
+    "D",   # pydocstyle
+]
+ignore = [
+    "D100", # module docstring not required everywhere (we add them anyway)
+    "D104", # package __init__ docstring optional
+    "D107", # __init__ docstring optional (documented at class level)
+]
+
+[tool.ruff.lint.pydocstyle]
+convention = "google"
+
+[tool.ruff.lint.per-file-ignores]
+# Tests favour readability over docstring ceremony.
+"tests/**" = ["D101", "D102", "D103", "D105"]
+
+[tool.ruff.format]
+docstring-code-format = true
+
+# --- mypy (static types) --------------------------------------------------
+[tool.mypy]
+python_version = "3.11"
+strict = true
+warn_unused_configs = true
+warn_redundant_casts = true
+warn_unused_ignores = true
+show_error_codes = true
+files = ["src", "tests"]
+
+# Third-party runtimes ship no type stubs; don't fail on their missing imports.
+[[tool.mypy.overrides]]
+module = ["faster_whisper.*", "sounddevice.*", "ollama.*"]
+ignore_missing_imports = true
+
+# --- pytest ---------------------------------------------------------------
+[tool.pytest.ini_options]
+minversion = "8.0"
+testpaths = ["tests"]
+addopts = "-ra -q --strict-markers --cov=autobot --cov-report=term-missing"
+pythonpath = ["src"]
+
+# --- coverage -------------------------------------------------------------
+[tool.coverage.run]
+branch = true
+source = ["autobot"]
+
+[tool.coverage.report]
+show_missing = true
+exclude_lines = [
+    "pragma: no cover",
+    "if TYPE_CHECKING:",
+    "raise NotImplementedError",
+    "if __name__ == .__main__.:",
+    "\\.\\.\\.", # Protocol method bodies
+]

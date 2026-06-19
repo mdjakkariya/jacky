@@ -1,0 +1,31 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+
+# Virtual envs / uv
+.venv/
+.uv/
+uv.lock          # keep OUT until you decide to commit the lockfile; see CLAUDE.md
+
+# Tooling caches
+.ruff_cache/
+.mypy_cache/
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+coverage.xml
+
+# Models / audio artifacts (never commit weights or recordings)
+*.wav
+*.bin
+*.gguf
+models/
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/

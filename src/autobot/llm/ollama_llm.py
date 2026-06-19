@@ -1,0 +1,138 @@
+"""Ollama-backed implementation of :class:`~autobot.core.interfaces.LanguageModel`.
+
+The turn does the *full* tool round-trip, which is the whole point of Phase 0:
+
+    user text -> model -> (tool_calls?) -> run tools -> feed results -> final reply
+
+The message-parsing helpers (:func:`normalize_tool_calls`, :func:`message_content`)
+are pure functions so they can be unit-tested without a live Ollama server.
+"""
+
+from __future__ import annotations
+
+import json
+from typing import Any
+
+from autobot.config import Settings
+from autobot.core.types import ToolCall
+from autobot.tools.registry import ToolRegistry
+
+SYSTEM_PROMPT = (
+    "You are Autobot, a local voice assistant. Always respond in English. "
+    "Use the provided tools when they can answer the user's request. "
+    "Keep replies short and spoken-friendly."
+)
+
+
+def _get(obj: Any, key: str) -> Any:
+    """Read ``key`` from a dict, or the attribute ``key`` from an object.
+
+    Ollama responses may be plain dicts or pydantic models depending on the
+    client version; this normalizes both.
+    """
+    if obj is None:
+        return None
+    if isinstance(obj, dict):
+        return obj.get(key)
+    return getattr(obj, key, None)
+
+
+def message_content(message: Any) -> str:
+    """Return the stripped text content of an Ollama chat message."""
+    return (_get(message, "content") or "").strip()
+
+
+def normalize_tool_calls(message: Any) -> list[ToolCall]:
+    """Extract tool calls from a chat message into typed :class:`ToolCall`s.
+
+    Handles dict- and object-shaped messages and arguments delivered either as a
+    dict or as a JSON string. Unparseable arguments degrade to ``{}`` rather than
+    raising.
+
+    Args:
+        message: The ``message`` field of an Ollama chat response.
+
+    Returns:
+        A list of :class:`~autobot.core.types.ToolCall`, possibly empty.
+    """
+    raw = _get(message, "tool_calls") or []
+    calls: list[ToolCall] = []
+    for tc in raw:
+        fn = _get(tc, "function") or {}
+        name = _get(fn, "name")
+        if not name:
+            continue
+        args = _get(fn, "arguments") or {}
+        if isinstance(args, str):
+            try:
+                args = json.loads(args)
+            except (ValueError, TypeError):
+                args = {}
+        if not isinstance(args, dict):
+            args = {}
+        calls.append(ToolCall(name=name, arguments=args))
+    return calls
+
+
+def _to_message_dict(message: Any) -> dict[str, Any]:
+    """Best-effort convert a (possibly pydantic) message back to a dict."""
+    for attr in ("model_dump", "dict"):
+        fn = getattr(message, attr, None)
+        if callable(fn):
+            try:
+                result = fn()
+                if isinstance(result, dict):
+                    return result
+            except Exception:  # fall through to the manual shape
+                pass
+    if isinstance(message, dict):
+        return message
+    return {"role": "assistant", "content": message_content(message)}
+
+
+class OllamaLanguageModel:
+    """Runs user turns against a local Ollama model with tool calling."""
+
+    def __init__(self, settings: Settings, registry: ToolRegistry) -> None:
+        from ollama import Client
+
+        self._settings = settings
+        self._registry = registry
+        self._client = Client(host=settings.ollama_host)
+
+    def _chat(self, messages: list[dict[str, Any]]) -> Any:
+        """Call Ollama, disabling 'thinking' output where the client supports it."""
+        kwargs: dict[str, Any] = {
+            "model": self._settings.llm_model,
+            "messages": messages,
+            "tools": self._registry.schemas(),
+            "options": {"temperature": self._settings.llm_temperature},
+        }
+        try:
+            return self._client.chat(think=False, **kwargs)
+        except TypeError:
+            # Older ollama-python without the ``think`` keyword.
+            return self._client.chat(**kwargs)
+
+    def run_turn(self, user_text: str) -> str:
+        """Handle one user turn end-to-end; see the interface for the contract."""
+        messages: list[dict[str, Any]] = [
+            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "user", "content": user_text},
+        ]
+
+        response = self._chat(messages)
+        message = _get(response, "message")
+        calls = normalize_tool_calls(message)
+
+        if not calls:
+            return message_content(message)
+
+        messages.append(_to_message_dict(message))
+        for call in calls:
+            result = self._registry.dispatch(call.name, call.arguments)
+            print(f"[tool] {call.name}({call.arguments}) -> {result.content}")
+            messages.append({"role": "tool", "tool_name": call.name, "content": result.content})
+
+        final = self._chat(messages)
+        return message_content(_get(final, "message"))
