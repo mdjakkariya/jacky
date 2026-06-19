@@ -121,6 +121,64 @@ Quality gates: **ruff** (lint + format), **mypy strict** (full type checking), *
 
 ---
 
+## Logs & debugging
+
+Autobot writes one rotating debug log you can share when something misbehaves:
+
+```
+~/.autobot/logs/autobot.log
+```
+
+Normal runs keep the terminal clean (only warnings/errors show there); the **full** detail goes to that file. Every line is tagged with the component it came from and logs properties as `key=value`, so it reads clearly:
+
+```
+2026-06-19 17:20 INFO    [orchestrator] heard text='what is the time' confidence=0.59
+2026-06-19 17:20 INFO    [gate] allowed tool=delete_file risk=DESTRUCTIVE ok=True
+2026-06-19 17:20 INFO    [listening] captured seconds=2.2 frames=69
+```
+
+Components: `app`, `orchestrator`, `gate`, `stt`, `llm`, `listening`, `wake`.
+
+### View / filter (copy-paste)
+
+```bash
+make logs                      # live tail of the whole log
+make logs-grep C=gate          # only the permission gate
+make logs-grep C=listening     # only wake-word / VAD capture
+make logs-grep C=stt           # only speech-to-text
+```
+
+Equivalent raw commands if you prefer:
+
+```bash
+tail -n 200 -f ~/.autobot/logs/autobot.log     # live tail
+grep '\[gate\]'  ~/.autobot/logs/autobot.log   # filter one component
+grep -E '\[(stt|llm)\]' ~/.autobot/logs/autobot.log   # a few components
+grep -iE 'error|warning' ~/.autobot/logs/autobot.log  # just problems
+```
+
+### Sharing with Claude for debugging
+
+When you hit an issue, reproduce it, then send the log (or a filtered slice):
+
+```bash
+# whole log
+cat ~/.autobot/logs/autobot.log
+
+# or just the relevant feature, e.g. the listening loop
+grep '\[listening\]' ~/.autobot/logs/autobot.log
+```
+
+Need more detail? The file already captures DEBUG. To also surface debug lines on the console, raise the console level:
+
+```bash
+AUTOBOT_LOG_CONSOLE_LEVEL=DEBUG make run
+```
+
+Paths and levels are configurable via `AUTOBOT_LOG_DIR`, `AUTOBOT_LOG_LEVEL`, `AUTOBOT_LOG_CONSOLE_LEVEL`.
+
+---
+
 ## Troubleshooting
 
 - **`ConnectionError` / model not found** → ensure `ollama serve` is running and you've `ollama pull`ed the model named in `AUTOBOT_LLM_MODEL`.
