@@ -2,12 +2,14 @@
 
 The flow per :meth:`WakeWordVadRecorder.record_clip`:
 
-1. stream mic frames continuously, keeping a short pre-roll ring buffer;
-2. score each frame with the wake-word model; once it crosses the threshold,
-   start capturing (including the pre-roll, so the command's first syllable
-   isn't lost);
+1. flush any audio buffered while the previous turn was being processed, and
+   reset the (stateful) wake/VAD models, so we always listen *live*;
+2. stream mic frames, keeping a short pre-roll ring buffer, and score each with
+   the wake-word model; once it crosses the threshold, start capturing;
 3. run VAD on each captured frame and stop at the end-of-speech endpoint (or a
-   hard maximum), then return the clip.
+   hard maximum). If no speech actually follows the wake word, give up after a
+   short timeout and return nothing — STT is gated strictly on detected speech,
+   which also neutralizes Whisper's silence-hallucination.
 
 The clip contract — mono ``float32`` at 16 kHz — is identical to push-to-talk, so
 the orchestrator, STT, and gate are unchanged. The wake/VAD models and the mic
@@ -16,6 +18,7 @@ are injected (see :class:`FrameSource`), so the loop is tested with fakes.
 
 from __future__ import annotations
 
+import queue
 from collections.abc import Iterator
 from typing import Protocol, runtime_checkable
 
@@ -32,6 +35,7 @@ FRAME_SAMPLES = 512
 _FRAME_MS = FRAME_SAMPLES / 16_000 * 1000  # 32.0
 _PREROLL_FRAMES = 10  # ~320 ms of audio kept before the wake word fires
 _START_FRAMES = 2  # frames of speech needed to consider the utterance started
+_MAX_WAIT_FOR_SPEECH_S = 4.0  # give up if no speech follows the wake word
 
 
 @runtime_checkable
@@ -42,33 +46,56 @@ class FrameSource(Protocol):
         """Yield 512-sample frames at 16 kHz, indefinitely."""
         ...
 
+    def flush(self) -> None:
+        """Discard any frames buffered since the last read (drop stale audio)."""
+        ...
+
 
 class MicFrameSource:
-    """A persistent microphone stream yielding 512-sample frames via a queue."""
+    """A persistent microphone stream yielding 512-sample frames via a queue.
+
+    The stream is opened once and runs continuously; :meth:`flush` drops audio
+    that accumulated while the assistant was busy, so each listen starts live.
+    """
 
     def __init__(self, settings: Settings) -> None:
         self._settings = settings
+        self._queue: queue.Queue[AudioClip] = queue.Queue()
+        self._started = False
 
-    def frames(self) -> Iterator[AudioClip]:
-        """Open the mic once and yield frames forever (one per audio block)."""
-        import queue
-
+    def _ensure_stream(self) -> None:
+        if self._started:
+            return
         import sounddevice as sd
 
-        q: queue.Queue[AudioClip] = queue.Queue()
-
         def callback(indata: AudioClip, _frames: int, _time: object, _status: object) -> None:
-            q.put(indata.reshape(-1).astype(np.float32).copy())
+            self._queue.put(indata.reshape(-1).astype(np.float32).copy())
 
-        with sd.InputStream(
+        stream = sd.InputStream(
             samplerate=self._settings.sample_rate,
             channels=self._settings.channels,
             dtype="float32",
             blocksize=FRAME_SAMPLES,
             callback=callback,
-        ):
-            while True:
-                yield q.get()
+        )
+        stream.start()
+        self._stream = stream  # keep a reference so it isn't garbage-collected
+        self._started = True
+
+    def flush(self) -> None:
+        """Drop everything currently queued (audio captured while we were busy)."""
+        self._ensure_stream()
+        while True:
+            try:
+                self._queue.get_nowait()
+            except queue.Empty:
+                break
+
+    def frames(self) -> Iterator[AudioClip]:
+        """Open the mic once and yield frames forever (one per audio block)."""
+        self._ensure_stream()
+        while True:
+            yield self._queue.get()
 
 
 class WakeWordVadRecorder:
@@ -88,6 +115,7 @@ class WakeWordVadRecorder:
         self._frames: Iterator[AudioClip] | None = None
         self._end_silence_frames = max(1, round(settings.end_silence_ms / _FRAME_MS))
         self._max_frames = max(1, round(settings.max_utterance_s * 1000 / _FRAME_MS))
+        self._max_wait_frames = max(1, round(_MAX_WAIT_FOR_SPEECH_S * 1000 / _FRAME_MS))
 
     def _next_frame(self) -> AudioClip | None:
         """Pull the next frame from the (persistent) source, or ``None`` if ended."""
@@ -97,6 +125,12 @@ class WakeWordVadRecorder:
 
     def record_clip(self) -> AudioClip:
         """Wait for the wake word, capture the command, and return it; see module docs."""
+        # Start each turn live: drop audio buffered while we were responding, and
+        # clear the stateful models so they don't carry over the previous turn.
+        self._source.flush()
+        self._wake.reset()
+        self._vad.reset()
+
         prebuffer = FramePrebuffer(_PREROLL_FRAMES)
 
         # Phase 1: idle until the wake word fires.
@@ -117,6 +151,7 @@ class WakeWordVadRecorder:
             end_silence_frames=self._end_silence_frames,
         )
         collected: list[AudioClip] = prebuffer.drain()
+        waited = 0
         while len(collected) < self._max_frames:
             frame = self._next_frame()
             if frame is None:
@@ -125,9 +160,17 @@ class WakeWordVadRecorder:
             endpointer.update(self._vad.speech_prob(frame))
             if endpointer.finished:
                 break
+            if not endpointer.started:
+                waited += 1
+                if waited >= self._max_wait_frames:
+                    break  # no speech after the wake word — bail out
 
-        if not collected:
+        # Gate STT strictly on detected speech: if nothing was actually spoken,
+        # return empty so we don't feed silence to Whisper (which hallucinates).
+        if not endpointer.started:
+            print("[mic] No speech after wake word — ignoring.")
             return np.zeros(0, dtype=np.float32)
+
         audio: AudioClip = np.concatenate(collected).astype(np.float32)
         print(f"[mic] Captured {len(audio) / self._settings.sample_rate:.1f}s of audio.")
         return audio

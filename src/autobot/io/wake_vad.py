@@ -28,6 +28,10 @@ class WakeDetector(Protocol):
         """Return the wake-word probability in ``[0, 1]`` for one frame."""
         ...
 
+    def reset(self) -> None:
+        """Clear any internal buffering between detections."""
+        ...
+
 
 @runtime_checkable
 class VoiceActivity(Protocol):
@@ -35,6 +39,10 @@ class VoiceActivity(Protocol):
 
     def speech_prob(self, frame: AudioClip) -> float:
         """Return the speech probability in ``[0, 1]`` for one 16 kHz frame."""
+        ...
+
+    def reset(self) -> None:
+        """Clear recurrent state between utterances."""
         ...
 
 
@@ -54,6 +62,10 @@ class OpenWakeWord:
         scores = self._model.predict(frame_int16)
         return float(scores.get(self._model_name, 0.0))
 
+    def reset(self) -> None:
+        """Clear openWakeWord's internal prediction buffer."""
+        self._model.reset()
+
 
 class SileroVad:
     """Voice-activity detector backed by silero-vad."""
@@ -71,3 +83,7 @@ class SileroVad:
         """Return the speech probability for one 512-sample 16 kHz frame."""
         tensor = self._torch.from_numpy(np.ascontiguousarray(frame))
         return float(self._model(tensor, 16_000).item())
+
+    def reset(self) -> None:
+        """Reset silero's recurrent hidden state between utterances."""
+        self._model.reset_states()

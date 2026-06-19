@@ -28,9 +28,12 @@ class _ScriptedSource:
     def frames(self) -> Iterator[AudioClip]:
         yield from self._frames
 
+    def flush(self) -> None:
+        pass
+
 
 class _WakeOnValue:
-    """Fires the wake word when a frame's first sample equals ``trigger``."""
+    """Fires the wake word when a frame's first sample is non-zero."""
 
     def __init__(self, trigger: float) -> None:
         self._trigger = trigger
@@ -38,12 +41,18 @@ class _WakeOnValue:
     def score(self, frame_int16: Int16Frame) -> float:
         return 1.0 if frame_int16[0] != 0 else 0.0
 
+    def reset(self) -> None:
+        pass
+
 
 class _VadFromSign:
     """Treats a positive-valued frame as speech, zero as silence."""
 
     def speech_prob(self, frame: AudioClip) -> float:
         return 1.0 if float(frame[0]) > 0.0 else 0.0
+
+    def reset(self) -> None:
+        pass
 
 
 def _settings() -> Settings:
@@ -71,17 +80,38 @@ def test_waits_for_wake_then_captures_until_silence() -> None:
 
 
 def test_includes_preroll_so_first_syllable_not_clipped() -> None:
-    frames = [_frame(0.0), _frame(0.0), _frame(0.9), _frame(0.0), _frame(0.0)]
+    # 2 pre-roll (silence) frames, wake, then real speech then trailing silence.
+    frames = [
+        _frame(0.0),
+        _frame(0.0),
+        _frame(0.9),
+        _frame(0.8),
+        _frame(0.8),
+        _frame(0.0),
+        _frame(0.0),
+    ]
     rec = WakeWordVadRecorder(
         _settings(), _ScriptedSource(frames), _WakeOnValue(0.9), _VadFromSign()
     )
     clip = rec.record_clip()
-    # 2 pre-roll frames are prepended ahead of the wake frame.
-    assert clip.size >= 3 * FRAME_SAMPLES
+    # Pre-roll (2) + 4 command frames (speech x2, silence x2 -> endpoint) = 6.
+    assert clip.size == 6 * FRAME_SAMPLES
+    # The two pre-roll frames (silence) are prepended ahead of the speech.
+    assert np.all(clip[: 2 * FRAME_SAMPLES] == 0)
 
 
 def test_returns_empty_if_stream_ends_before_wake() -> None:
     frames = [_frame(0.0), _frame(0.0)]
+    rec = WakeWordVadRecorder(
+        _settings(), _ScriptedSource(frames), _WakeOnValue(0.9), _VadFromSign()
+    )
+    assert rec.record_clip().size == 0
+
+
+def test_no_speech_after_wake_returns_empty() -> None:
+    # Wake fires, but only silence follows -> STT must be gated (empty clip),
+    # not 15s of silence handed to Whisper.
+    frames = [_frame(0.9), _frame(0.0), _frame(0.0), _frame(0.0)]
     rec = WakeWordVadRecorder(
         _settings(), _ScriptedSource(frames), _WakeOnValue(0.9), _VadFromSign()
     )
