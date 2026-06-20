@@ -72,7 +72,13 @@ def serve(settings: Settings | None = None) -> None:
     thread = threading.Thread(target=orchestrator.run, name="engine", daemon=True)
     thread.start()
     print(f"[daemon] serving on ws://{settings.daemon_host}:{settings.daemon_port}/ws")
-    run_daemon(bus, settings.daemon_host, settings.daemon_port)
+    # Live-apply settings/key changes from the Settings view (next turn, no restart).
+    run_daemon(
+        bus,
+        settings.daemon_host,
+        settings.daemon_port,
+        on_change=orchestrator.mark_llm_dirty,
+    )
 
 
 def serve_demo(settings: Settings | None = None) -> None:

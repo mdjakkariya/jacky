@@ -297,7 +297,7 @@
       await fetch(API + "/settings", {method:"POST", headers:{"content-type":"application/json"}, body: JSON.stringify(body)});
       await saveSecret("anthropic_api_key", $("anthropicKey"), $("keyState"));
       await saveSecret("web_api_key", $("webKey"), $("webKeyState"));
-      $("status").style.color = ""; $("status").textContent = "Saved — restart Jack to apply.";
+      $("status").style.color = ""; $("status").textContent = "Saved. Takes effect on your next request.";
     } catch(e){
       $("status").style.color = "#ff6b6b"; $("status").textContent = "Save failed — is Jack running?";
     }

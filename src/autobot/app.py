@@ -137,7 +137,13 @@ def _build_llm(
                 "remembered profile are sent to Anthropic. Actions still run locally."
             )
             return llm
-        except (ImportError, ValueError) as exc:
+        except ImportError:
+            log.warning("cloud LLM extra missing, falling back to local")
+            print(
+                "[llm] cloud needs the 'anthropic' package — run `uv sync --extra cloud`. "
+                "Using local Ollama for now."
+            )
+        except ValueError as exc:
             log.warning("cloud LLM unavailable, falling back to local: %s", exc)
             print(f"[llm] cloud unavailable ({exc}) — using local Ollama.")
     return OllamaLanguageModel(settings, registry, transcript, memory=memory)
@@ -225,11 +231,17 @@ def build(
     # Per-session transcript (readable conversation + debug notes).
     transcript = _build_transcript(settings)
 
+    # Reloadable LLM: rebuilt from fresh settings + Keychain when the Settings
+    # view changes the provider/model/key — no restart needed (applies next turn).
+    from autobot.llm.reloadable import ReloadableLanguageModel
+
+    llm = ReloadableLanguageModel(lambda: _build_llm(Settings.load(), registry, transcript, memory))
+
     return Orchestrator(
         settings=settings,
         audio=_build_audio_source(settings, amplitude_sink),
         stt=FasterWhisperSTT(settings),
-        llm=_build_llm(settings, registry, transcript, memory),
+        llm=llm,
         gate=gate,
         wake_gate=_build_wake_gate(settings),
         tts=_build_tts(settings, amplitude_sink),

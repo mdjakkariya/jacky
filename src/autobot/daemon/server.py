@@ -54,13 +54,19 @@ def _installed_ollama_models(host: str) -> list[str]:
     return sorted(m["name"] for m in data.get("models", []) if isinstance(m, dict) and "name" in m)
 
 
-def create_app(bus: EventBus, settings_path: str | Path | None = None) -> Any:
+def create_app(
+    bus: EventBus,
+    settings_path: str | Path | None = None,
+    on_change: Any | None = None,
+) -> Any:
     """Build the FastAPI app: the event stream plus the Settings-view API.
 
     Args:
         bus: The hub the engine publishes to; each connection subscribes to it.
         settings_path: Override the settings.json path (tests). Defaults to the
             standard ``~/.autobot/settings.json``.
+        on_change: Optional callback invoked after a settings/secret change so the
+            engine can reload live (the orchestrator's ``mark_llm_dirty``).
 
     Returns:
         A FastAPI app: ``/healthz``, WebSocket ``/ws``, and the settings API
@@ -134,7 +140,9 @@ def create_app(bus: EventBus, settings_path: str | Path | None = None) -> Any:
         updates = {k: v for k, v in payload.items() if k in valid}
         merged = {**read_settings(path), **updates}
         write_settings(merged, path)
-        return {"ok": True, "applied": sorted(updates), "restart_required": True}
+        if on_change:
+            on_change()  # let the engine pick up the change live (next turn)
+        return {"ok": True, "applied": sorted(updates)}
 
     async def get_models() -> dict[str, Any]:
         """Installed local Ollama models, for the Settings view's model picker."""
@@ -150,6 +158,8 @@ def create_app(bus: EventBus, settings_path: str | Path | None = None) -> Any:
             return {"ok": False, "error": f"unknown secret; allowed: {list(_SECRET_NAMES)}"}
         value = str(payload.get("value", ""))
         ok = set_secret(name, value) if value else delete_secret(name)
+        if ok and on_change:
+            on_change()  # a new key takes effect on the next turn, no restart
         return {"ok": ok}
 
     # Register routes explicitly (rather than via decorators) so the handlers
@@ -163,11 +173,13 @@ def create_app(bus: EventBus, settings_path: str | Path | None = None) -> Any:
     return app
 
 
-def run_daemon(bus: EventBus, host: str, port: int) -> None:
+def run_daemon(bus: EventBus, host: str, port: int, on_change: Any | None = None) -> None:
     """Run the daemon server (blocking) on ``host:port``.
 
     Refuses to bind anything other than loopback — the daemon is local-only by
     design, and a non-loopback bind would expose the engine on the network.
+    ``on_change`` is invoked after a settings/secret update so the engine can pick
+    it up live.
     """
     if host not in {"127.0.0.1", "localhost", "::1"}:
         raise ValueError(f"daemon must bind loopback only, got host={host!r}")
@@ -177,8 +189,9 @@ def run_daemon(bus: EventBus, host: str, port: int) -> None:
     # lifespan="off": we use no startup/shutdown events, and leaving it on emits a
     # noisy CancelledError traceback on Ctrl-C. KeyboardInterrupt is swallowed for
     # a clean exit.
+    app = create_app(bus, on_change=on_change)
     with contextlib.suppress(KeyboardInterrupt):
-        uvicorn.run(create_app(bus), host=host, port=port, log_level="warning", lifespan="off")
+        uvicorn.run(app, host=host, port=port, log_level="warning", lifespan="off")
     print("\n[daemon] stopped.")
 
 

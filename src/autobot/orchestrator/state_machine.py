@@ -140,6 +140,16 @@ class Orchestrator:
         """The orchestrator's current state."""
         return self._sm.state
 
+    def mark_llm_dirty(self) -> None:
+        """Ask the LLM to rebuild from fresh settings before the next turn.
+
+        Called by the daemon when the Settings view changes the provider/model/key,
+        so the change takes effect without a restart.
+        """
+        reload_fn = getattr(self._llm, "mark_dirty", None)
+        if callable(reload_fn):
+            reload_fn()
+
     def _execute(self, call: ToolCall) -> ToolResult:
         """Executor handed to the LLM: mark EXECUTING and run through the gate."""
         self._sm.transition(State.EXECUTING)

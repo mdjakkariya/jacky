@@ -78,3 +78,16 @@ def test_get_models_returns_a_list(tmp_path: object) -> None:
 def test_post_secret_rejects_unknown_name(tmp_path: object) -> None:
     resp = _settings_client(tmp_path).post("/secret", json={"name": "evil", "value": "x"}).json()
     assert resp["ok"] is False
+
+
+def test_on_change_fires_on_settings_save(tmp_path: object) -> None:
+    from pathlib import Path
+
+    calls = {"n": 0}
+    path = Path(str(tmp_path)) / "settings.json"
+    app = create_app(
+        EventBus(), settings_path=path, on_change=lambda: calls.__setitem__("n", calls["n"] + 1)
+    )
+    client = TestClient(app)
+    client.post("/settings", json={"llm_provider": "anthropic"})
+    assert calls["n"] == 1  # engine notified to reload, no restart needed
