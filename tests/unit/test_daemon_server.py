@@ -39,3 +39,42 @@ def test_run_daemon_refuses_non_loopback_bind() -> None:
     bus = EventBus()
     with pytest.raises(ValueError, match="loopback"):
         run_daemon(bus, "0.0.0.0", 8765)
+
+
+def _settings_client(tmp_path: object) -> TestClient:
+    from pathlib import Path
+
+    path = Path(str(tmp_path)) / "settings.json"
+    return TestClient(create_app(EventBus(), settings_path=path))
+
+
+def test_get_settings_returns_config_and_secret_flags(tmp_path: object) -> None:
+    body = _settings_client(tmp_path).get("/settings").json()
+    assert body["llm_provider"] == "ollama"  # default
+    assert "_secrets" in body
+    assert set(body["_secrets"]) == {"anthropic_api_key", "web_api_key"}
+
+
+def test_post_settings_persists_and_ignores_unknown_keys(tmp_path: object) -> None:
+    client = _settings_client(tmp_path)
+    resp = client.post(
+        "/settings", json={"llm_provider": "anthropic", "bogus": 1, "allow_memory": False}
+    ).json()
+    assert resp["ok"] is True
+    assert resp["applied"] == ["allow_memory", "llm_provider"]
+    # Reflected on read, and the unknown key was dropped.
+    body = client.get("/settings").json()
+    assert body["llm_provider"] == "anthropic"
+    assert body["allow_memory"] is False
+    assert "bogus" not in body
+
+
+def test_get_models_returns_a_list(tmp_path: object) -> None:
+    # No Ollama running in the test env -> empty list, but the shape is stable.
+    body = _settings_client(tmp_path).get("/models").json()
+    assert isinstance(body["models"], list)
+
+
+def test_post_secret_rejects_unknown_name(tmp_path: object) -> None:
+    resp = _settings_client(tmp_path).post("/secret", json={"name": "evil", "value": "x"}).json()
+    assert resp["ok"] is False

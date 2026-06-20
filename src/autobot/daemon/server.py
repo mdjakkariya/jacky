@@ -24,27 +24,69 @@ from typing import TYPE_CHECKING, Any
 # the parameter for a required query field (closing every connection with 1008).
 # This module is the daemon transport, so requiring FastAPI to import it is fine;
 # nothing on the core/engine import path pulls this in. uvicorn stays lazy.
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
 
 from autobot.core.events import EventBus, StateEvent
 from autobot.logging_setup import get_logger
 
 if TYPE_CHECKING:
+    from pathlib import Path
+
     from autobot.config import Settings
 
 _log = get_logger("daemon")
 
+# Secrets the Settings view may store (Keychain account names). Anything else is
+# rejected so the endpoint can't write arbitrary Keychain items.
+_SECRET_NAMES = ("anthropic_api_key", "web_api_key")
 
-def create_app(bus: EventBus) -> Any:
-    """Build the FastAPI app that serves the event stream.
+
+def _installed_ollama_models(host: str) -> list[str]:
+    """List local Ollama model names via its `/api/tags` (empty list on any error)."""
+    import json
+    import urllib.request
+
+    try:
+        with urllib.request.urlopen(host.rstrip("/") + "/api/tags", timeout=3) as resp:
+            data = json.loads(resp.read())
+    except Exception:  # ollama down / unreachable — just an empty list
+        return []
+    return sorted(m["name"] for m in data.get("models", []) if isinstance(m, dict) and "name" in m)
+
+
+def create_app(bus: EventBus, settings_path: str | Path | None = None) -> Any:
+    """Build the FastAPI app: the event stream plus the Settings-view API.
 
     Args:
         bus: The hub the engine publishes to; each connection subscribes to it.
+        settings_path: Override the settings.json path (tests). Defaults to the
+            standard ``~/.autobot/settings.json``.
 
     Returns:
-        A FastAPI application exposing ``GET /healthz`` and ``WebSocket /ws``.
+        A FastAPI app: ``/healthz``, WebSocket ``/ws``, and the settings API
+        (``GET/POST /settings``, ``GET /models``, ``POST /secret``).
     """
+    from fastapi.middleware.cors import CORSMiddleware
+
+    from autobot.config import (
+        DEFAULT_SETTINGS_PATH,
+        Settings,
+        read_settings,
+        setting_names,
+        write_settings,
+    )
+
+    path = settings_path or DEFAULT_SETTINGS_PATH
+
     app = FastAPI(title="Autobot daemon", docs_url=None, redoc_url=None)
+    # The Settings view (Tauri webview / localhost) is a different origin, so it
+    # needs CORS. Restrict to local/Tauri origins — the daemon is loopback-only.
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origin_regex=r"^(tauri://.*|https?://(localhost|127\.0\.0\.1|tauri\.localhost)(:\d+)?)$",
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
 
     async def healthz() -> dict[str, str]:
         """Liveness probe for clients/tests."""
@@ -75,10 +117,49 @@ def create_app(bus: EventBus) -> Any:
         finally:
             unsubscribe()
 
+    async def get_settings() -> dict[str, Any]:
+        """Current effective settings + which secrets are set (never the values)."""
+        from autobot.secrets import has_secret
+
+        data: dict[str, Any] = Settings.load(path).to_dict()
+        data["_secrets"] = {name: has_secret(name) for name in _SECRET_NAMES}
+        return data
+
+    async def post_settings(request: Request) -> dict[str, Any]:
+        """Persist the given setting keys (sparse merge onto the file)."""
+        payload = await request.json()
+        if not isinstance(payload, dict):
+            return {"ok": False, "error": "expected a JSON object"}
+        valid = setting_names()
+        updates = {k: v for k, v in payload.items() if k in valid}
+        merged = {**read_settings(path), **updates}
+        write_settings(merged, path)
+        return {"ok": True, "applied": sorted(updates), "restart_required": True}
+
+    async def get_models() -> dict[str, Any]:
+        """Installed local Ollama models, for the Settings view's model picker."""
+        return {"models": _installed_ollama_models(Settings.load(path).ollama_host)}
+
+    async def post_secret(request: Request) -> dict[str, Any]:
+        """Store (or clear) an API key in the Keychain. Only known names allowed."""
+        from autobot.secrets import delete_secret, set_secret
+
+        payload = await request.json()
+        name = payload.get("name") if isinstance(payload, dict) else None
+        if name not in _SECRET_NAMES:
+            return {"ok": False, "error": f"unknown secret; allowed: {list(_SECRET_NAMES)}"}
+        value = str(payload.get("value", ""))
+        ok = set_secret(name, value) if value else delete_secret(name)
+        return {"ok": ok}
+
     # Register routes explicitly (rather than via decorators) so the handlers
     # stay statically typed under mypy strict — FastAPI ships no type info here.
     app.add_api_route("/healthz", healthz, methods=["GET"])
     app.add_api_websocket_route("/ws", ws)
+    app.add_api_route("/settings", get_settings, methods=["GET"])
+    app.add_api_route("/settings", post_settings, methods=["POST"])
+    app.add_api_route("/models", get_models, methods=["GET"])
+    app.add_api_route("/secret", post_secret, methods=["POST"])
     return app
 
 

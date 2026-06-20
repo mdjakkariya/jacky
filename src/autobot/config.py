@@ -155,6 +155,16 @@ class Settings:
         return asdict(self)
 
 
+def read_settings(path: str | Path = DEFAULT_SETTINGS_PATH) -> dict[str, Any]:
+    """Public read of the raw settings file (sparse — only keys the user set)."""
+    return _read_settings(path)
+
+
+def setting_names() -> set[str]:
+    """The set of valid setting keys (the dataclass field names)."""
+    return {f.name for f in fields(Settings)}
+
+
 def _read_settings(path: str | Path) -> dict[str, Any]:
     """Read the settings JSON, returning ``{}`` if missing or malformed."""
     p = Path(path).expanduser()
