@@ -5,80 +5,153 @@
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>Jack — Settings</title>
 <style>
-  :root { color-scheme: dark; }
-  html,body{margin:0;background:#0E0C18;color:#e7ecff;font:14px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,sans-serif;}
-  .wrap{max-width:560px;margin:0 auto;padding:22px;}
-  h1{font-size:18px;font-weight:600;margin:0 0 4px;}
-  .sub{color:#8e98c8;font-size:12px;margin:0 0 20px;}
-  fieldset{border:.5px solid rgba(160,190,255,.22);border-radius:12px;margin:0 0 16px;padding:14px 16px;}
-  legend{padding:0 6px;color:#9db8ff;font-size:12px;letter-spacing:.08em;text-transform:uppercase;}
-  label{display:block;margin:10px 0 4px;color:#c5ccea;}
-  input[type=text],input[type=password],input[type=number],select{
-    width:100%;box-sizing:border-box;background:#15131f;border:.5px solid rgba(160,190,255,.3);
-    color:#eaf1ff;border-radius:8px;padding:8px 10px;font-size:14px;}
-  .row{display:flex;gap:18px;align-items:center;margin:8px 0;}
-  .row label{display:flex;align-items:center;gap:8px;margin:0;cursor:pointer;}
-  .note{font-size:12px;color:#ffd27f;background:rgba(255,200,120,.08);border-radius:8px;padding:8px 10px;margin-top:8px;}
-  .muted{color:#7d87b5;font-size:12px;}
-  .actions{display:flex;gap:10px;align-items:center;margin-top:8px;}
-  button{background:#2e6be6;border:none;color:#fff;border-radius:8px;padding:9px 18px;font-size:14px;cursor:pointer;}
-  button.secondary{background:rgba(160,190,255,.12);color:#cfe0ff;}
-  #status{font-size:13px;color:#8fe0b0;min-height:18px;}
-  .hidden{display:none;}
+  /* macOS-style settings: adapts to light/dark, grouped cards, segmented tabs,
+     switch toggles. Vanilla CSS so it works under the strict CSP. */
+  :root{
+    --bg:#ececec; --panel:#ffffff; --text:#1d1d1f; --muted:#86868b;
+    --line:rgba(0,0,0,.08); --field:#ffffff; --field-line:rgba(0,0,0,.18);
+    --seg-bg:rgba(0,0,0,.06); --seg-active:#ffffff; --accent:#0a84ff; --switch-off:#c7c7cc;
+    --note-bg:rgba(10,132,255,.08); --note-text:#0a5bbf;
+  }
+  @media (prefers-color-scheme: dark){
+    :root{
+      --bg:#1e1e1e; --panel:#2a2a2c; --text:#f5f5f7; --muted:#98989d;
+      --line:rgba(255,255,255,.1); --field:#1c1c1e; --field-line:rgba(255,255,255,.15);
+      --seg-bg:rgba(255,255,255,.08); --seg-active:#48484a; --accent:#0a84ff; --switch-off:#48484a;
+      --note-bg:rgba(10,132,255,.14); --note-text:#9cc7ff;
+    }
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;height:100%}
+  body{background:var(--bg);color:var(--text);
+    font:13px/1.45 -apple-system,BlinkMacSystemFont,"SF Pro Text","Segoe UI",system-ui,sans-serif;
+    -webkit-font-smoothing:antialiased;display:flex;flex-direction:column;min-height:100vh;}
+  header{padding:16px 20px 8px;}
+  header h1{font-size:15px;font-weight:600;margin:0;text-align:center;}
+  .tabs{display:flex;gap:2px;background:var(--seg-bg);border-radius:8px;padding:2px;margin:10px 20px 0;}
+  .tabs button{flex:1;border:none;background:transparent;color:var(--text);font-size:13px;
+    padding:5px 8px;border-radius:6px;cursor:pointer;font-weight:500;}
+  .tabs button.active{background:var(--seg-active);box-shadow:0 1px 2px rgba(0,0,0,.12);}
+  main{flex:1;overflow:auto;padding:16px 20px;}
+  .panel{display:none}.panel.active{display:block}
+  .card{background:var(--panel);border-radius:10px;overflow:hidden;border:.5px solid var(--line);}
+  .row{display:flex;align-items:center;justify-content:space-between;gap:12px;
+    padding:11px 14px;border-top:.5px solid var(--line);}
+  .row:first-child{border-top:none}
+  .row .label{font-weight:500}
+  .row .desc{color:var(--muted);font-size:11.5px;margin-top:1px}
+  .grow{flex:1;min-width:0}
+  select,input[type=text],input[type=password],input[type=number]{
+    background:var(--field);border:.5px solid var(--field-line);color:var(--text);
+    border-radius:7px;padding:6px 9px;font-size:13px;max-width:220px;width:220px;}
+  input[type=number]{width:90px}
+  .stack{display:block;padding:11px 14px;border-top:.5px solid var(--line)}
+  .stack:first-child{border-top:none}
+  .stack label{display:block;font-weight:500;margin-bottom:6px}
+  .stack select,.stack input{max-width:100%;width:100%}
+  .hint{color:var(--muted);font-size:11.5px;margin:6px 2px 0}
+  .note{background:var(--note-bg);color:var(--note-text);border-radius:8px;padding:9px 11px;font-size:12px;margin:12px 0 0;}
+  .section-title{color:var(--muted);font-size:11px;font-weight:600;letter-spacing:.04em;
+    text-transform:uppercase;margin:0 4px 7px;}
+  /* macOS switch */
+  .switch{position:relative;display:inline-block;width:38px;height:22px;flex:none}
+  .switch input{opacity:0;width:0;height:0}
+  .slider{position:absolute;inset:0;background:var(--switch-off);border-radius:22px;transition:.18s}
+  .slider:before{content:"";position:absolute;height:18px;width:18px;left:2px;top:2px;background:#fff;
+    border-radius:50%;transition:.18s;box-shadow:0 1px 2px rgba(0,0,0,.35)}
+  .switch input:checked+.slider{background:var(--accent)}
+  .switch input:checked+.slider:before{transform:translateX(16px)}
+  .radio-row{display:flex;align-items:flex-start;gap:10px;padding:11px 14px;border-top:.5px solid var(--line);cursor:pointer}
+  .radio-row:first-child{border-top:none}
+  .radio-row input{margin-top:2px}
+  footer{padding:12px 20px;border-top:.5px solid var(--line);display:flex;align-items:center;gap:12px;
+    background:var(--panel)}
+  #status{flex:1;font-size:12px;color:var(--muted)}
+  button.btn{background:var(--accent);color:#fff;border:none;border-radius:7px;padding:7px 16px;font-size:13px;
+    font-weight:500;cursor:pointer}
+  button.btn.ghost{background:transparent;color:var(--accent)}
+  #banner{display:none;margin:0 20px 0;padding:10px 12px;border-radius:8px;background:var(--note-bg);
+    color:var(--note-text);font-size:12px;align-items:center;justify-content:space-between;gap:10px}
+  #banner.show{display:flex}
+  .hidden{display:none !important}
 </style>
 </head>
 <body>
-<div class="wrap">
-  <h1>Jack — Settings</h1>
-  <p class="sub">Saved to <code>~/.autobot/settings.json</code>. Changes apply after a restart.</p>
-
-  <fieldset>
-    <legend>Model</legend>
-    <div class="row">
-      <label><input type="radio" name="provider" value="ollama" id="pv-ollama"> Local (Ollama) — private, on-device</label>
-    </div>
-    <div class="row">
-      <label><input type="radio" name="provider" value="anthropic" id="pv-anthropic"> Claude (cloud) — faster, but sends data out</label>
-    </div>
-
-    <div id="local-box">
-      <label for="ollamaModel">Local model</label>
-      <select id="ollamaModel"></select>
-      <p class="muted" id="ollamaNote"></p>
-    </div>
-
-    <div id="cloud-box" class="hidden">
-      <label for="anthropicModel">Claude model</label>
-      <input type="text" id="anthropicModel" placeholder="claude-3-5-haiku-latest" />
-      <label for="anthropicKey">Anthropic API key <span class="muted" id="keyState"></span></label>
-      <input type="password" id="anthropicKey" placeholder="sk-ant-…  (stored in your macOS Keychain)" autocomplete="off" />
-      <p class="note">Cloud mode sends your requests and remembered profile to Anthropic. Your voice never leaves, and actions still run locally. The key is stored encrypted in the macOS Keychain, never in the settings file.</p>
-    </div>
-  </fieldset>
-
-  <fieldset>
-    <legend>Capabilities</legend>
-    <div class="row"><label><input type="checkbox" id="tts_enabled"> Speak replies (TTS)</label></div>
-    <div class="row"><label><input type="checkbox" id="allow_app_control"> App control (open/quit apps)</label></div>
-    <div class="row"><label><input type="checkbox" id="allow_system_info"> System info (battery/wifi/disk)</label></div>
-    <div class="row"><label><input type="checkbox" id="allow_memory"> Remember me (personalization)</label></div>
-    <div class="row"><label><input type="checkbox" id="allow_web"> Web search (off-device)</label></div>
-  </fieldset>
-
-  <fieldset>
-    <legend>Listening</legend>
-    <label for="wake_phrase">Wake word</label>
-    <input type="text" id="wake_phrase" />
-    <label for="follow_up_window_s">Follow-up window (seconds, 0 = always require wake word)</label>
-    <input type="number" id="follow_up_window_s" min="0" max="120" step="1" />
-  </fieldset>
-
-  <div class="actions">
-    <button id="save">Save</button>
-    <button class="secondary" id="reload">Reload</button>
-    <span id="status"></span>
+  <header><h1>Jack Settings</h1></header>
+  <div id="banner">
+    <span>Jack isn't running. Start it, then retry.</span>
+    <button class="btn ghost" id="retry">Retry</button>
   </div>
-</div>
+  <div class="tabs">
+    <button data-tab="model" class="active">Model</button>
+    <button data-tab="caps">Capabilities</button>
+    <button data-tab="listen">Listening</button>
+  </div>
+
+  <main>
+    <!-- MODEL -->
+    <section class="panel active" id="tab-model">
+      <div class="card">
+        <div class="row"><span class="grow"><span class="label">Provider</span><div class="desc" id="providerDesc">Runs privately on your Mac.</div></span>
+          <select id="provider" style="width:170px">
+            <option value="ollama">Local (Ollama)</option>
+            <option value="anthropic">Claude (cloud)</option>
+          </select></div>
+      </div>
+
+      <div id="local-box">
+        <div class="card" style="margin-top:14px">
+          <div class="stack"><label for="ollamaModel">Local model</label>
+            <select id="ollamaModel"></select>
+            <div class="hint" id="ollamaNote"></div></div>
+        </div>
+      </div>
+
+      <div id="cloud-box" class="hidden">
+        <div class="card" style="margin-top:14px">
+          <div class="stack"><label for="anthropicModel">Claude model</label>
+            <select id="anthropicModel"></select>
+            <input type="text" id="anthropicModelCustom" class="hidden" placeholder="model id, e.g. claude-3-5-haiku-latest" style="margin-top:8px" /></div>
+          <div class="stack"><label for="anthropicKey">API key <span id="keyState" class="hint" style="font-weight:400"></span></label>
+            <input type="password" id="anthropicKey" placeholder="sk-ant-…" autocomplete="off" />
+            <div class="hint">Stored securely in your macOS Keychain.</div></div>
+        </div>
+        <div class="note">Cloud mode sends your requests and what Jack remembers about you to Anthropic. Nothing else leaves your device — your voice stays local and actions run on your Mac.</div>
+      </div>
+    </section>
+
+    <!-- CAPABILITIES -->
+    <section class="panel" id="tab-caps">
+      <div class="card">
+        <div class="row"><span class="grow"><span class="label">Speak replies</span><div class="desc">Voice output (TTS)</div></span>
+          <label class="switch"><input type="checkbox" id="tts_enabled"><span class="slider"></span></label></div>
+        <div class="row"><span class="grow"><span class="label">App control</span><div class="desc">Open, switch, quit apps</div></span>
+          <label class="switch"><input type="checkbox" id="allow_app_control"><span class="slider"></span></label></div>
+        <div class="row"><span class="grow"><span class="label">System info</span><div class="desc">Battery, Wi-Fi, disk</div></span>
+          <label class="switch"><input type="checkbox" id="allow_system_info"><span class="slider"></span></label></div>
+        <div class="row"><span class="grow"><span class="label">Remember me</span><div class="desc">Personalization</div></span>
+          <label class="switch"><input type="checkbox" id="allow_memory"><span class="slider"></span></label></div>
+        <div class="row"><span class="grow"><span class="label">Web search</span><div class="desc">Sends queries off-device</div></span>
+          <label class="switch"><input type="checkbox" id="allow_web"><span class="slider"></span></label></div>
+      </div>
+    </section>
+
+    <!-- LISTENING -->
+    <section class="panel" id="tab-listen">
+      <div class="card">
+        <div class="row"><span class="grow"><span class="label">Wake word</span><div class="desc">What you say to summon Jack</div></span>
+          <input type="text" id="wake_phrase" style="width:140px" /></div>
+        <div class="row"><span class="grow"><span class="label">Follow-up window</span><div class="desc">Seconds to keep listening (0 = always need wake word)</div></span>
+          <input type="number" id="follow_up_window_s" min="0" max="120" step="1" /></div>
+      </div>
+    </section>
+  </main>
+
+  <footer>
+    <span id="status"></span>
+    <button class="btn ghost" id="reload">Reload</button>
+    <button class="btn" id="save">Save</button>
+  </footer>
 
 <script>
 (function(){
@@ -86,56 +159,98 @@
   var $ = function(id){ return document.getElementById(id); };
   var CHECKS = ["tts_enabled","allow_app_control","allow_system_info","allow_memory","allow_web"];
 
+  // tabs
+  document.querySelectorAll(".tabs button").forEach(function(b){
+    b.addEventListener("click", function(){
+      document.querySelectorAll(".tabs button").forEach(function(x){x.classList.remove("active");});
+      document.querySelectorAll(".panel").forEach(function(p){p.classList.remove("active");});
+      b.classList.add("active"); $("tab-" + b.dataset.tab).classList.add("active");
+    });
+  });
+
+  // Suggested Claude models (fast, tool-capable). Plus a "Custom…" escape hatch
+  // so newer model names aren't locked out.
+  var CLAUDE_SUGGESTIONS = [
+    "claude-3-5-haiku-latest",
+    "claude-3-5-sonnet-latest",
+    "claude-3-7-sonnet-latest",
+  ];
+
   function setProviderUI(p){
     $("cloud-box").classList.toggle("hidden", p !== "anthropic");
     $("local-box").classList.toggle("hidden", p === "anthropic");
+    $("providerDesc").textContent = p === "anthropic"
+      ? "Faster, but your requests are sent to Anthropic."
+      : "Runs privately on your Mac.";
   }
-  document.querySelectorAll("input[name=provider]").forEach(function(r){
-    r.addEventListener("change", function(){ setProviderUI(r.value); });
+  $("provider").addEventListener("change", function(){ setProviderUI($("provider").value); });
+
+  function populateClaudeModels(current){
+    var sel = $("anthropicModel"); sel.innerHTML = "";
+    CLAUDE_SUGGESTIONS.forEach(function(m){
+      var o = document.createElement("option"); o.value = m; o.textContent = m; sel.appendChild(o);
+    });
+    var custom = document.createElement("option"); custom.value = "__custom__"; custom.textContent = "Custom…";
+    sel.appendChild(custom);
+    if(current && CLAUDE_SUGGESTIONS.indexOf(current) === -1){
+      sel.value = "__custom__"; $("anthropicModelCustom").value = current;
+      $("anthropicModelCustom").classList.remove("hidden");
+    } else {
+      sel.value = current || CLAUDE_SUGGESTIONS[0];
+      $("anthropicModelCustom").classList.add("hidden");
+    }
+  }
+  $("anthropicModel").addEventListener("change", function(){
+    $("anthropicModelCustom").classList.toggle("hidden", $("anthropicModel").value !== "__custom__");
   });
+  function selectedClaudeModel(){
+    var v = $("anthropicModel").value;
+    return v === "__custom__" ? $("anthropicModelCustom").value.trim() : v;
+  }
+
+  function setEnabled(on){ ["save"].forEach(function(id){ $(id).disabled = !on; }); }
 
   async function load(){
-    $("status").textContent = "";
+    $("status").textContent = ""; $("banner").classList.remove("show");
     var s;
     try { s = await (await fetch(API + "/settings")).json(); }
-    catch(e){ $("status").style.color="#ff9a9a"; $("status").textContent = "Can't reach Jack — is it running?"; return; }
+    catch(e){ $("banner").classList.add("show"); setEnabled(false); return; }
+    setEnabled(true);
     var provider = s.llm_provider || "ollama";
-    (provider === "anthropic" ? $("pv-anthropic") : $("pv-ollama")).checked = true;
+    $("provider").value = provider;
     setProviderUI(provider);
-    $("anthropicModel").value = s.anthropic_model || "";
+    populateClaudeModels(s.anthropic_model || "");
     $("wake_phrase").value = s.wake_phrase || "";
     $("follow_up_window_s").value = s.follow_up_window_s != null ? s.follow_up_window_s : 30;
     CHECKS.forEach(function(k){ $(k).checked = !!s[k]; });
     var keySet = s._secrets && s._secrets.anthropic_api_key;
-    $("keyState").textContent = keySet ? "— a key is saved (leave blank to keep it)" : "— not set";
+    $("keyState").textContent = keySet ? "— saved (leave blank to keep)" : "— not set";
+    await populateModels(s.llm_model || "");
+  }
 
-    // installed local models
-    try {
-      var m = await (await fetch(API + "/models")).json();
-      var sel = $("ollamaModel"); sel.innerHTML = "";
-      var models = (m.models || []);
-      if(!models.length){
-        $("ollamaNote").textContent = "No Ollama models found (is `ollama serve` running?). Current: " + (s.llm_model||"");
-        var o = document.createElement("option"); o.value = s.llm_model||""; o.textContent = s.llm_model||"(none)"; sel.appendChild(o);
-      } else {
-        $("ollamaNote").textContent = "";
-        models.forEach(function(name){
-          var o = document.createElement("option"); o.value = name; o.textContent = name;
-          if(name === s.llm_model) o.selected = true; sel.appendChild(o);
-        });
-        if(models.indexOf(s.llm_model) === -1 && s.llm_model){
-          var c = document.createElement("option"); c.value=s.llm_model; c.textContent=s.llm_model+" (not installed)"; c.selected=true; sel.appendChild(c);
-        }
-      }
-    } catch(e){ $("ollamaNote").textContent = "Couldn't list models."; }
+  async function populateModels(current){
+    var sel = $("ollamaModel"); sel.innerHTML = "";
+    var models = [];
+    try { models = ((await (await fetch(API + "/models")).json()).models) || []; }
+    catch(e){ /* leave empty */ }
+    if(!models.length){
+      $("ollamaNote").textContent = "No Ollama models found (is `ollama serve` running?).";
+      if(current){ models = [current]; }
+    } else { $("ollamaNote").textContent = ""; }
+    if(current && models.indexOf(current) === -1) models.unshift(current);
+    models.forEach(function(name){
+      var o = document.createElement("option"); o.value = name; o.textContent = name;
+      if(name === current) o.selected = true;     // preselect the current model
+      sel.appendChild(o);
+    });
   }
 
   async function save(){
-    var provider = document.querySelector("input[name=provider]:checked").value;
+    var provider = $("provider").value;
     var body = {
       llm_provider: provider,
       llm_model: $("ollamaModel").value,
-      anthropic_model: $("anthropicModel").value.trim(),
+      anthropic_model: selectedClaudeModel(),
       wake_phrase: $("wake_phrase").value.trim(),
       follow_up_window_s: Number($("follow_up_window_s").value)
     };
@@ -145,18 +260,17 @@
       var key = $("anthropicKey").value.trim();
       if(key){
         await fetch(API + "/secret", {method:"POST", headers:{"content-type":"application/json"}, body: JSON.stringify({name:"anthropic_api_key", value:key})});
-        $("anthropicKey").value = "";
+        $("anthropicKey").value = ""; $("keyState").textContent = "— saved (leave blank to keep)";
       }
-      $("status").style.color = "#8fe0b0";
-      $("status").textContent = "Saved. Restart Jack to apply.";
+      $("status").style.color = ""; $("status").textContent = "Saved — restart Jack to apply.";
     } catch(e){
-      $("status").style.color = "#ff9a9a";
-      $("status").textContent = "Save failed — is Jack running?";
+      $("status").style.color = "#ff6b6b"; $("status").textContent = "Save failed — is Jack running?";
     }
   }
 
   $("save").addEventListener("click", save);
   $("reload").addEventListener("click", load);
+  $("retry").addEventListener("click", load);
   load();
 })();
 </script>
