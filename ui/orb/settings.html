@@ -138,9 +138,19 @@
           <label class="switch"><input type="checkbox" id="allow_memory"><span class="slider"></span></label></div>
         <div class="row"><span class="grow"><span class="label">Web search</span><div class="desc">Sends queries off-device</div></span>
           <label class="switch"><input type="checkbox" id="allow_web"><span class="slider"></span></label></div>
-        <div class="stack"><label for="webKey">Web search API key <span id="webKeyState" class="hint" style="font-weight:400"></span></label>
-          <input type="password" id="webKey" placeholder="optional — SearchSpace key" autocomplete="off" />
-          <div class="hint">Optional. Stored in your macOS Keychain. Without it, search uses a free fallback.</div></div>
+        <!-- Provider-driven, like the Model tab: add a future search provider by
+             adding an <option> here (+ a backend SearchFn) — nothing else changes. -->
+        <div id="web-config" class="hidden">
+          <div class="stack"><label for="web_provider">Search provider</label>
+            <select id="web_provider">
+              <option value="auto">Auto — use API key if set, else free</option>
+              <option value="searchspace">SearchSpace (API)</option>
+              <option value="ddgs">Free (DuckDuckGo, no key)</option>
+            </select></div>
+          <div class="stack" id="web-key-stack"><label for="webKey">API key <span id="webKeyState" class="hint" style="font-weight:400"></span></label>
+            <input type="password" id="webKey" placeholder="provider API key" autocomplete="off" />
+            <div class="hint">Stored in your macOS Keychain.</div></div>
+        </div>
       </div>
     </section>
 
@@ -218,6 +228,15 @@
 
   function setEnabled(on){ ["save"].forEach(function(id){ $(id).disabled = !on; }); }
 
+  function updateWebUI(){
+    var on = $("allow_web").checked;
+    $("web-config").classList.toggle("hidden", !on);
+    // No key field for the free (ddgs) provider.
+    $("web-key-stack").classList.toggle("hidden", $("web_provider").value === "ddgs");
+  }
+  $("allow_web").addEventListener("change", updateWebUI);
+  $("web_provider").addEventListener("change", updateWebUI);
+
   async function load(){
     $("status").textContent = ""; $("banner").classList.remove("show");
     var s;
@@ -231,6 +250,8 @@
     $("wake_phrase").value = s.wake_phrase || "";
     $("follow_up_window_s").value = s.follow_up_window_s != null ? s.follow_up_window_s : 30;
     CHECKS.forEach(function(k){ $(k).checked = !!s[k]; });
+    $("web_provider").value = s.web_provider || "auto";
+    updateWebUI();
     var sec = s._secrets || {};
     $("keyState").textContent = sec.anthropic_api_key ? "— saved (leave blank to keep)" : "— not set";
     $("webKeyState").textContent = sec.web_api_key ? "— saved (leave blank to keep)" : "— not set";
@@ -267,6 +288,7 @@
       llm_provider: provider,
       llm_model: $("ollamaModel").value,
       anthropic_model: selectedClaudeModel(),
+      web_provider: $("web_provider").value,
       wake_phrase: $("wake_phrase").value.trim(),
       follow_up_window_s: Number($("follow_up_window_s").value)
     };
