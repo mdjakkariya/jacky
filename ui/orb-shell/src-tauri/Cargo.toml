@@ -16,6 +16,7 @@ tauri = { version = "2", features = ["macos-private-api", "tray-icon"] }
 # is the established Tauri approach used by Spotlight-style overlays (Cap, etc.).
 [target.'cfg(target_os = "macos")'.dependencies]
 tauri-nspanel = { git = "https://github.com/ahkohd/tauri-nspanel", branch = "v2" }
+objc = "0.2"
 
 # Smaller, faster release binary — this is just a thin UI shell.
 [profile.release]

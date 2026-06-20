@@ -114,6 +114,18 @@ fn main() {
         .expect("error while running Jack orb");
 }
 
+/// Bring the app to the foreground so its windows can become key (and text
+/// fields editable). An accessory app stays inactive otherwise.
+#[cfg(target_os = "macos")]
+fn activate_app() {
+    use objc::runtime::{Object, YES};
+    use objc::{class, msg_send, sel, sel_impl};
+    unsafe {
+        let ns_app: *mut Object = msg_send![class!(NSApplication), sharedApplication];
+        let _: () = msg_send![ns_app, activateIgnoringOtherApps: YES];
+    }
+}
+
 /// Install a minimal app menu whose Edit items give text fields their standard
 /// keyboard editing (typing relies on the window being key; Cut/Copy/Paste/
 /// Select-All rely on these menu items' ⌘ key equivalents).
@@ -145,8 +157,13 @@ fn install_edit_menu(app: &tauri::App) -> tauri::Result<()> {
 /// activation policy (the app activates, fields are typable, a Dock icon appears)
 /// and switch back to accessory when the window closes.
 fn open_settings(app: &tauri::AppHandle) {
+    // Become a regular app AND actually activate it — without activating, no
+    // window can become "key", so text fields can't take focus or accept input.
     #[cfg(target_os = "macos")]
-    let _ = app.set_activation_policy(tauri::ActivationPolicy::Regular);
+    {
+        let _ = app.set_activation_policy(tauri::ActivationPolicy::Regular);
+        activate_app();
+    }
 
     if let Some(win) = app.get_webview_window("settings") {
         let _ = win.show();
