@@ -141,6 +141,11 @@ class Settings:
     ollama_host: str = _DEFAULT_OLLAMA_HOST
     llm_temperature: float = 0.0
     llm_max_tokens: int = _DEFAULT_LLM_MAX_TOKENS
+    # qwen3 reasoning. ON makes tool-calling far more reliable (the model decides
+    # "they want me to act -> call the tool" instead of reflexively answering a
+    # 'can you…?' as yes) at the cost of some latency. Reasoning goes to the
+    # model's `thinking` field, not the spoken reply. AUTOBOT_LLM_THINK=0 for speed.
+    llm_think: bool = True
     # Conversational memory with dynamic context management:
     #   context_tokens=0 -> auto-detect the model's window via Ollama (else this cap).
     #   When the prompt reaches compact_at of the window, older turns are summarized
@@ -206,6 +211,10 @@ class Settings:
     # never audio or text. The bind is enforced to loopback in the server.
     daemon_host: str = "127.0.0.1"
     daemon_port: int = 8765
+    # App control (macOS): let Jack open/focus/quit/etc. apps by voice. On-device
+    # (osascript/open); lifecycle actions are WRITE (audited), uninstall is
+    # DESTRUCTIVE (confirmed). Set AUTOBOT_ALLOW_APPS=0 to disable the tools.
+    allow_app_control: bool = True
     # Debugging aids.
     session_log: bool = True
     session_dir: str = _DEFAULT_SESSION_DIR
@@ -233,6 +242,7 @@ class Settings:
             ollama_host=_env_str("OLLAMA_HOST", d.ollama_host),
             llm_temperature=_env_float("AUTOBOT_LLM_TEMPERATURE", d.llm_temperature),
             llm_max_tokens=_env_int("AUTOBOT_LLM_MAX_TOKENS", d.llm_max_tokens),
+            llm_think=_env_bool("AUTOBOT_LLM_THINK", d.llm_think),
             context_tokens=_env_int("AUTOBOT_CONTEXT_TOKENS", d.context_tokens),
             compact_at=_env_float("AUTOBOT_COMPACT_AT", d.compact_at),
             keep_recent_messages=_env_int("AUTOBOT_KEEP_RECENT", d.keep_recent_messages),
@@ -264,6 +274,7 @@ class Settings:
             web_backend=_env_str("AUTOBOT_WEB_BACKEND", d.web_backend),
             daemon_host=_env_str("AUTOBOT_DAEMON_HOST", d.daemon_host),
             daemon_port=_env_int("AUTOBOT_DAEMON_PORT", d.daemon_port),
+            allow_app_control=_env_bool("AUTOBOT_ALLOW_APPS", d.allow_app_control),
             session_log=_env_bool("AUTOBOT_SESSION_LOG", d.session_log),
             session_dir=_env_str("AUTOBOT_SESSION_DIR", d.session_dir),
             show_debug=_env_bool("AUTOBOT_DEBUG", d.show_debug),

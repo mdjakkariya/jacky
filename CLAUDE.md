@@ -87,6 +87,13 @@ docs/          roadmap + architecture
 - Value objects are `frozen=True, slots=True` dataclasses. No business logic on them.
 - Tools return strings and never raise out of `dispatch`; errors become failed
   `ToolResult`s so a bad tool can't crash the loop.
+- **Prompt vs. tool descriptions.** Keep `SYSTEM_PROMPT` (`llm/ollama_llm.py`) to
+  short, *general* behavioral principles. Per-tool guidance — when to use a tool
+  and which spoken words map to it (synonyms) — lives in that tool's
+  `ToolSpec.description`, next to the tool. So adding/teaching a tool never edits
+  the global prompt. When the model misbehaves, fix the *general* principle (one
+  rule that covers a whole class) or the relevant tool description — never append
+  an incident-specific line to the prompt.
 
 ## Commands
 

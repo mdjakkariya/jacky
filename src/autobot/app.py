@@ -145,6 +145,14 @@ def build(
     register_builtins(registry)
     sandbox = Sandbox(settings.sandbox_dir)
     register_filesystem_tools(registry, sandbox)
+    if settings.allow_app_control:
+        # macOS app lifecycle by voice; gated like everything else (uninstall
+        # confirms, the rest are audited WRITEs).
+        from autobot.tools.apps import register_app_tools
+
+        register_app_tools(registry)
+        log.info("app control ENABLED (open/focus/quit/uninstall …)")
+        print("[apps] app control ENABLED — Jack can open/quit apps by voice.")
     if settings.allow_web:
         # The one tool that reaches off-device; only registered when opted in.
         from autobot.tools.web import register_web_tools

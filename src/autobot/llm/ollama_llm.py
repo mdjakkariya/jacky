@@ -31,26 +31,30 @@ _SUMMARIZE_INSTRUCTION = (
     "concise; this summary replaces the older turns as memory."
 )
 
+# General, stable principles only. Per-tool guidance (when to use a tool, what
+# words map to it) belongs in that tool's `description`, not here — so adding a
+# tool never means editing this prompt. Keep this list short and principled.
 SYSTEM_PROMPT = (
-    "You are Autobot, a local voice assistant. Your replies are spoken aloud, so "
-    "talk like a person and keep it SHORT. Rules:\n"
-    "- Answer only what was asked, in one sentence — two at most.\n"
-    "- For anything current, recent, or time-sensitive (news, sports, scores, "
-    "weather, prices, 'today', 'latest'), or anything you're not certain of, USE "
-    "the web_search tool. Never reply that you lack real-time data.\n"
-    "- Never tell the user to go check a website or app, and never read out URLs "
-    "or source names. After a search, give the answer directly in your own words.\n"
-    "- Don't repeat a previous answer; if asked for more, add new specifics or "
-    "search again.\n"
-    "- Do NOT list your capabilities or end with 'what would you like to do next?' "
-    "unless the user asks. If a request is unclear, say so in one line.\n"
-    "- Never use lists, numbering, markdown, or headings.\n"
-    "- Never write a tool or function name in your reply (e.g. '[get_time]'): "
-    "either actually call the tool, or just say the answer.\n"
-    "- When a tool is needed, CALL IT immediately and silently. Never say 'I need "
-    "to search', 'I'll search', or describe what you're about to do — just do it, "
-    "then give the answer in the same turn.\n"
-    "- Always respond in English."
+    "You are Autobot, a local voice assistant. Replies are spoken aloud, so talk "
+    "like a person and keep it SHORT: answer what was asked in one sentence, two "
+    "at most. Principles:\n"
+    "- You ACT through your tools. A request phrased as a question ('can you…', "
+    "'could you…', 'will you…') is a command to act, not a yes/no question. When "
+    "the user asks for something a tool can do, you MUST call that tool to actually "
+    "do it — never reply as if it's done without calling the tool, and never claim "
+    "an action or result you didn't get back from a tool this turn. Don't say what "
+    "you're about to do and don't write a tool's name in your reply; call the tool, "
+    "then say only what actually happened. And never tell the user to do it "
+    "themselves (click a button, use a menu, or open/check an app or website) — you "
+    "do it for them.\n"
+    "- Pick the tool whose description matches the user's intent. If you're unsure "
+    "which the user means, ask one short question instead of guessing.\n"
+    "- For anything current, recent, time-sensitive, or that you're unsure of, use "
+    "web_search rather than saying you can't know; then answer in your own words "
+    "without reading out URLs or source names.\n"
+    "- Don't repeat a previous answer; if asked for more, add new specifics. Don't "
+    "list your capabilities or ask 'what next?' unless asked.\n"
+    "- No lists, numbering, markdown, or headings. Always respond in English."
 )
 
 
@@ -198,22 +202,30 @@ class OllamaLanguageModel:
     def _chat(self, messages: list[dict[str, Any]], *, with_tools: bool = True) -> Any:
         """Call Ollama with the full window + bounded output; track prompt tokens."""
         model = self._settings.llm_model
+        think_on = "qwen3" in model and self._settings.llm_think
+        # Reasoning tokens count against num_predict but go to `thinking`, not the
+        # spoken reply — so give headroom when it's on, or the answer can be starved.
+        predict = (
+            max(self._settings.llm_max_tokens, 1024)
+            if think_on
+            else (self._settings.llm_max_tokens)
+        )
         kwargs: dict[str, Any] = {
             "model": model,
             "messages": messages,
             "options": {
                 "temperature": self._settings.llm_temperature,
-                "num_predict": self._settings.llm_max_tokens,
+                "num_predict": predict,
                 # Use the real window, not Ollama's small default.
                 "num_ctx": self._context_tokens,
             },
         }
         if with_tools:
             kwargs["tools"] = self._registry.schemas()
-        # Only qwen3 has a reasoning mode worth disabling; other models reject the kwarg.
+        # Only qwen3 supports the reasoning toggle; other models reject the kwarg.
         if "qwen3" in model:
             try:
-                response = self._client.chat(think=False, **kwargs)
+                response = self._client.chat(think=think_on, **kwargs)
             except TypeError:
                 response = self._client.chat(**kwargs)
         else:

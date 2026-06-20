@@ -14,6 +14,7 @@ user — and it is reachable only from the local machine.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 from typing import TYPE_CHECKING, Any
 
 # Imported at module top (not lazily) on purpose: with ``from __future__ import
@@ -66,8 +67,11 @@ def create_app(bus: EventBus) -> Any:
             await websocket.send_json(StateEvent(bus.last_state).message())
             while True:
                 await websocket.send_json(await queue.get())
-        except WebSocketDisconnect:
+        except (WebSocketDisconnect, asyncio.CancelledError):
+            # Normal disconnect, or the task being cancelled on Ctrl-C shutdown.
             _log.info("client disconnected")
+        except Exception:  # never let a send error surface as an ASGI crash
+            _log.debug("ws closed on error", exc_info=True)
         finally:
             unsubscribe()
 
@@ -89,7 +93,12 @@ def run_daemon(bus: EventBus, host: str, port: int) -> None:
     import uvicorn
 
     _log.info("serving host=%s port=%d", host, port)
-    uvicorn.run(create_app(bus), host=host, port=port, log_level="warning")
+    # lifespan="off": we use no startup/shutdown events, and leaving it on emits a
+    # noisy CancelledError traceback on Ctrl-C. KeyboardInterrupt is swallowed for
+    # a clean exit.
+    with contextlib.suppress(KeyboardInterrupt):
+        uvicorn.run(create_app(bus), host=host, port=port, log_level="warning", lifespan="off")
+    print("\n[daemon] stopped.")
 
 
 def daemon_settings(settings: Settings) -> tuple[str, int]:
