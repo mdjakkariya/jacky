@@ -215,6 +215,9 @@ class Settings:
     # (osascript/open); lifecycle actions are WRITE (audited), uninstall is
     # DESTRUCTIVE (confirmed). Set AUTOBOT_ALLOW_APPS=0 to disable the tools.
     allow_app_control: bool = True
+    # Read-only system status (battery, Wi-Fi, disk) by voice. Safe (queries only,
+    # never changes anything). AUTOBOT_ALLOW_SYSTEM=0 to disable.
+    allow_system_info: bool = True
     # Debugging aids.
     session_log: bool = True
     session_dir: str = _DEFAULT_SESSION_DIR
@@ -275,6 +278,7 @@ class Settings:
             daemon_host=_env_str("AUTOBOT_DAEMON_HOST", d.daemon_host),
             daemon_port=_env_int("AUTOBOT_DAEMON_PORT", d.daemon_port),
             allow_app_control=_env_bool("AUTOBOT_ALLOW_APPS", d.allow_app_control),
+            allow_system_info=_env_bool("AUTOBOT_ALLOW_SYSTEM", d.allow_system_info),
             session_log=_env_bool("AUTOBOT_SESSION_LOG", d.session_log),
             session_dir=_env_str("AUTOBOT_SESSION_DIR", d.session_dir),
             show_debug=_env_bool("AUTOBOT_DEBUG", d.show_debug),

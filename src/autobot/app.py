@@ -153,6 +153,12 @@ def build(
         register_app_tools(registry)
         log.info("app control ENABLED (open/focus/quit/uninstall …)")
         print("[apps] app control ENABLED — Jack can open/quit apps by voice.")
+    if settings.allow_system_info:
+        # Read-only system status (battery/wifi/disk) — safe, queries only.
+        from autobot.tools.system import register_system_tools
+
+        register_system_tools(registry)
+        log.info("system info ENABLED (battery/wifi/disk)")
     if settings.allow_web:
         # The one tool that reaches off-device; only registered when opted in.
         from autobot.tools.web import register_web_tools
