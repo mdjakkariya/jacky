@@ -148,7 +148,7 @@
     ws.onopen=function(){conn.textContent="";};
     ws.onmessage=function(ev){
       var msg;try{msg=JSON.parse(ev.data);}catch(e){return;}
-      if(msg.type==="state"&&SC[msg.value]){state=msg.value;}
+      if(msg.type==="state"&&SC[msg.value]){var prev=state;state=msg.value;if(prev!==state)onStateChange(prev,state);}
       else if(msg.type==="amplitude"){liveAmp=Math.max(0,Math.min(1,+msg.value||0));}
     };
     ws.onclose=function(){scheduleReconnect();};
@@ -159,8 +159,93 @@
     clearTimeout(retry);retry=setTimeout(connect,1000);
   }
 
+  // --- "come to me": glide to the active screen when engaged (Tauri only) ----
+  // Idle, the orb rests wherever it's parked. The moment it's engaged (you've
+  // addressed Jack — thinking/talking), it glides to the centre-top of the screen
+  // you're working on, then slides back to its parked spot when done. So it feels
+  // like it comes over to help and tidies itself away after.
+  var tauriApi=null,tauriWin=null,suppressSave=false,parkedPos=null,animTok=0;
+  var ENGAGED={listening:1,thinking:1,talking:1};
+  function comeForwardEnabled(){ try{return localStorage.getItem("jackComeForward")!=="0";}catch(e){return true;} }
+  function onStateChange(prev,next){
+    if(!tauriWin||!comeForwardEnabled()) return;
+    var was=ENGAGED[prev],now=ENGAGED[next];
+    if(!was&&now) comeForward();
+    else if(was&&!now) goBack();
+  }
+  function glideTo(tx,ty){
+    if(!tauriWin||!tauriApi||!tauriApi.PhysicalPosition) return;
+    var P=tauriApi.PhysicalPosition,tok=++animTok;
+    tauriWin.outerPosition().then(function(cur){
+      var sx=cur.x,sy=cur.y,steps=18,i=0;suppressSave=true;
+      (function step(){
+        if(tok!==animTok) return;
+        i++;var e=i/steps,k=1-Math.pow(1-e,3);
+        tauriWin.setPosition(new P(Math.round(sx+(tx-sx)*k),Math.round(sy+(ty-sy)*k)));
+        if(i>=steps){ setTimeout(function(){ if(tok===animTok) suppressSave=false; },150); return; }
+        setTimeout(step,16);
+      })();
+    }).catch(function(){});
+  }
+  function comeForward(){
+    if(!tauriApi.currentMonitor) return;
+    Promise.all([tauriWin.outerPosition(),tauriApi.currentMonitor(),tauriWin.outerSize()]).then(function(r){
+      if(!parkedPos) parkedPos=r[0];
+      var mon=r[1],sz=r[2]; if(!mon) return;
+      var tx=mon.position.x+Math.round((mon.size.width-sz.width)/2);
+      var ty=mon.position.y+Math.round(mon.size.height*0.18);
+      glideTo(tx,ty);
+    }).catch(function(e){console.warn("comeForward",e);});
+  }
+  function goBack(){
+    if(!parkedPos) return;
+    var p=parkedPos;parkedPos=null;glideTo(p.x,p.y);
+  }
+
   window.addEventListener("resize",size);
   size();connect();frame();
+
+  // --- Tauri shell integration (no-op in a plain browser) ----------------
+  // When loaded inside the Tauri window (withGlobalTauri), make the page
+  // transparent, hide the dev hint, keep it floating on top of every Space, and
+  // let the user drag the orb anywhere by grabbing it.
+  if (window.__TAURI__ && window.__TAURI__.window){
+    try{
+      document.body.style.background="transparent";
+      if(conn) conn.style.display="none";
+      var api=window.__TAURI__.window;
+      var win=(api.getCurrentWindow||api.getCurrent).call(api);
+      tauriApi=api; tauriWin=win;   // shared with the "come to me" glide logic
+      if(win.setAlwaysOnTop) win.setAlwaysOnTop(true);
+      if(win.setVisibleOnAllWorkspaces) win.setVisibleOnAllWorkspaces(true);
+      var stage=document.querySelector(".stage");
+      if(stage) stage.addEventListener("mousedown",function(){ if(win.startDragging) win.startDragging(); });
+
+      // Remember where the user parked the orb (persists across launches via the
+      // webview's localStorage). onMoved gives a physical-pixel position.
+      var POS_KEY="jackOrbPos", PhysPos=api.PhysicalPosition;
+      try{
+        var saved=JSON.parse(localStorage.getItem(POS_KEY)||"null");
+        if(saved && PhysPos && typeof saved.x==="number") win.setPosition(new PhysPos(saved.x,saved.y));
+      }catch(e){}
+      if(win.onMoved) win.onMoved(function(ev){
+        if(suppressSave) return;   // ignore programmatic glides — keep the parked spot
+        var p=ev&&ev.payload?ev.payload:ev;
+        if(p && typeof p.x==="number") localStorage.setItem(POS_KEY, JSON.stringify({x:p.x,y:p.y}));
+      });
+
+      // Remember the chosen size too (set from the tray's Small/Medium/Large).
+      var SIZE_KEY="jackOrbSize", PhysSize=api.PhysicalSize;
+      try{
+        var sz=JSON.parse(localStorage.getItem(SIZE_KEY)||"null");
+        if(sz && PhysSize && typeof sz.w==="number") win.setSize(new PhysSize(sz.w,sz.h));
+      }catch(e){}
+      if(win.onResized) win.onResized(function(ev){
+        var s=ev&&ev.payload?ev.payload:ev;
+        if(s && typeof s.width==="number") localStorage.setItem(SIZE_KEY, JSON.stringify({w:s.width,h:s.height}));
+      });
+    }catch(e){ console.warn("tauri init failed",e); }
+  }
 })();
 </script>
 </body>

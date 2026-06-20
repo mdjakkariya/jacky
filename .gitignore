@@ -34,6 +34,11 @@ models/
 logs/
 sessions/
 
+# Tauri / Rust build artifacts (orb shell)
+target/
+ui/orb-shell/src-tauri/gen/
+ui/orb-shell/src-tauri/icons/
+
 # OS / editor
 .DS_Store
 .idea/
