@@ -218,6 +218,11 @@ class Settings:
     # Read-only system status (battery, Wi-Fi, disk) by voice. Safe (queries only,
     # never changes anything). AUTOBOT_ALLOW_SYSTEM=0 to disable.
     allow_system_info: bool = True
+    # Phase 4: persistent personalization. Jack remembers the user's name and
+    # facts (on-device SQLite) and addresses them by name. AUTOBOT_ALLOW_MEMORY=0
+    # disables it; the DB path is configurable.
+    allow_memory: bool = True
+    memory_db: str = "~/.autobot/memory.db"
     # Debugging aids.
     session_log: bool = True
     session_dir: str = _DEFAULT_SESSION_DIR
@@ -279,6 +284,8 @@ class Settings:
             daemon_port=_env_int("AUTOBOT_DAEMON_PORT", d.daemon_port),
             allow_app_control=_env_bool("AUTOBOT_ALLOW_APPS", d.allow_app_control),
             allow_system_info=_env_bool("AUTOBOT_ALLOW_SYSTEM", d.allow_system_info),
+            allow_memory=_env_bool("AUTOBOT_ALLOW_MEMORY", d.allow_memory),
+            memory_db=_env_str("AUTOBOT_MEMORY_DB", d.memory_db),
             session_log=_env_bool("AUTOBOT_SESSION_LOG", d.session_log),
             session_dir=_env_str("AUTOBOT_SESSION_DIR", d.session_dir),
             show_debug=_env_bool("AUTOBOT_DEBUG", d.show_debug),

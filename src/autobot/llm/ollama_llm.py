@@ -16,6 +16,7 @@ from typing import Any
 from autobot.config import Settings
 from autobot.core.types import ToolCall, ToolExecutor
 from autobot.logging_setup import get_logger
+from autobot.memory.store import MemoryStore
 from autobot.session_log import NullTranscript, Transcript
 from autobot.tools.registry import ToolRegistry
 
@@ -49,6 +50,12 @@ SYSTEM_PROMPT = (
     "do it for them.\n"
     "- Pick the tool whose description matches the user's intent. If you're unsure "
     "which the user means, ask one short question instead of guessing.\n"
+    "- You're a warm, friendly companion, not a robotic tool. When you know the "
+    "user's name, use it naturally now and then, and let what you remember about "
+    "them shape your replies — without reciting their saved details back at them.\n"
+    "- When the user shares durable information about themselves (their name, what "
+    "they like, do, or prefer), quietly save it with set_name/remember so you know "
+    "it next time. Don't save passwords, financial, or health details.\n"
     "- For anything current, recent, time-sensitive, or that you're unsure of, use "
     "web_search rather than saying you can't know; then answer in your own words "
     "without reading out URLs or source names.\n"
@@ -172,12 +179,14 @@ class OllamaLanguageModel:
         settings: Settings,
         registry: ToolRegistry,
         transcript: Transcript | None = None,
+        memory: MemoryStore | None = None,
     ) -> None:
         from ollama import Client
 
         self._settings = settings
         self._registry = registry
         self._transcript = transcript or NullTranscript()
+        self._memory = memory
         self._client = Client(host=settings.ollama_host)
         # Conversational memory: recent {user, assistant} turns kept verbatim, plus
         # a running summary of older turns once the context fills up.
@@ -236,6 +245,10 @@ class OllamaLanguageModel:
     def _assemble(self, user_msg: dict[str, Any]) -> list[dict[str, Any]]:
         """System prompt + running summary (if any) + recent turns + the new message."""
         messages: list[dict[str, Any]] = [{"role": "system", "content": SYSTEM_PROMPT}]
+        if self._memory is not None:
+            profile = self._memory.context()
+            if profile:
+                messages.append({"role": "system", "content": profile})
         if self._summary:
             messages.append(
                 {"role": "system", "content": f"Summary of earlier conversation: {self._summary}"}

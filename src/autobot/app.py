@@ -159,6 +159,19 @@ def build(
 
         register_system_tools(registry)
         log.info("system info ENABLED (battery/wifi/disk)")
+
+    # Phase 4: persistent personalization. The store is read into the prompt each
+    # turn and grown via the (gated) memory tools.
+    memory = None
+    if settings.allow_memory:
+        from autobot.memory.store import MemoryStore
+        from autobot.tools.memory import register_memory_tools
+
+        memory = MemoryStore(settings.memory_db)
+        register_memory_tools(registry, memory)
+        log.info("memory ENABLED db=%s", settings.memory_db)
+        name = memory.get_name()
+        print(f"[memory] personalization ON{f' — hi {name}!' if name else ''}")
     if settings.allow_web:
         # The one tool that reaches off-device; only registered when opted in.
         from autobot.tools.web import register_web_tools
@@ -180,12 +193,13 @@ def build(
         settings=settings,
         audio=_build_audio_source(settings, amplitude_sink),
         stt=FasterWhisperSTT(settings),
-        llm=OllamaLanguageModel(settings, registry, transcript),
+        llm=OllamaLanguageModel(settings, registry, transcript, memory=memory),
         gate=gate,
         wake_gate=_build_wake_gate(settings),
         tts=_build_tts(settings, amplitude_sink),
         transcript=transcript,
         on_state=on_state or _print_transition,
+        memory=memory,
     )
 
 

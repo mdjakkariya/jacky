@@ -18,6 +18,7 @@ from autobot.config import Settings
 from autobot.core.interfaces import AudioSource, LanguageModel, SpeechToText, TextToSpeech
 from autobot.core.types import State, ToolCall, ToolResult
 from autobot.logging_setup import get_logger
+from autobot.memory.store import MemoryStore
 from autobot.orchestrator.wake_gate import Address, WakeGate
 from autobot.session_log import NullTranscript, Transcript
 from autobot.tools.permission import PermissionGate
@@ -108,6 +109,7 @@ class Orchestrator:
         tts: TextToSpeech,
         transcript: Transcript | None = None,
         on_state: StateListener | None = _print_transition,
+        memory: MemoryStore | None = None,
     ) -> None:
         self._settings = settings
         self._audio = audio
@@ -117,8 +119,21 @@ class Orchestrator:
         self._wake_gate = wake_gate
         self._tts = tts
         self._transcript = transcript or NullTranscript()
+        self._memory = memory
         self._sm = StateMachine(on_change=on_state)
         self._acknowledged = False  # spoke a filler this turn?
+
+    def _greeting(self) -> str:
+        """The reply to a bare wake word — name-aware, and a first hello if new."""
+        if self._memory is not None:
+            name = self._memory.get_name()
+            if name:
+                return f"Yes, {name}?"
+            return (
+                "Hey, I'm Jack — your friendly assistant for getting things done on "
+                "your Mac. I don't think we've met — what's your name?"
+            )
+        return "Yes?"
 
     @property
     def state(self) -> State:
@@ -170,9 +185,10 @@ class Orchestrator:
             self._transcript.user(transcription.text, transcription.confidence)
             self._sm.transition(State.PLANNING)
             self._sm.transition(State.RESPONDING)
-            print("[autobot] Yes?\n")
-            self._transcript.assistant("Yes sensei?")
-            self._tts.speak("Yes sensei?")
+            greeting = self._greeting()
+            print(f"[autobot] {greeting}\n")
+            self._transcript.assistant(greeting)
+            self._tts.speak(greeting)
             self._wake_gate.mark_turn_complete()
             self._sm.transition(State.IDLE)
             return
