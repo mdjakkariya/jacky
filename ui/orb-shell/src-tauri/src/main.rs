@@ -126,21 +126,27 @@ fn open_settings(app: &tauri::AppHandle) {
     }
 
     let handle = app.clone();
-    let _ = WebviewWindowBuilder::new(app, "settings", WebviewUrl::App("settings.html".into()))
+    match WebviewWindowBuilder::new(app, "settings", WebviewUrl::App("settings.html".into()))
         .title("Jack — Settings")
         .inner_size(580.0, 680.0)
         .resizable(true)
-        .on_window_event(move |event| {
-            if matches!(
-                event,
-                tauri::WindowEvent::CloseRequested { .. } | tauri::WindowEvent::Destroyed
-            ) {
-                // Back to a background presence once Settings is closed.
-                #[cfg(target_os = "macos")]
-                let _ = handle.set_activation_policy(tauri::ActivationPolicy::Accessory);
-            }
-        })
-        .build();
+        .build()
+    {
+        Ok(win) => {
+            // on_window_event lives on the built window (not the builder) in v2.
+            win.on_window_event(move |event| {
+                if matches!(
+                    event,
+                    tauri::WindowEvent::CloseRequested { .. } | tauri::WindowEvent::Destroyed
+                ) {
+                    // Back to a background presence once Settings is closed.
+                    #[cfg(target_os = "macos")]
+                    let _ = handle.set_activation_policy(tauri::ActivationPolicy::Accessory);
+                }
+            });
+        }
+        Err(e) => eprintln!("[jack] failed to open Settings: {e}"),
+    }
 }
 
 /// Run `f` against the orb window if it exists.
@@ -165,6 +171,7 @@ fn resize(app: &tauri::AppHandle, px: f64) {
 /// working recipe — used by Spotlight-style overlays — is a panel with the
 /// non-activating style mask plus `canJoinAllSpaces | fullScreenAuxiliary`.
 #[cfg(target_os = "macos")]
+#[allow(deprecated)] // tauri-nspanel re-exports the (now-deprecated) cocoa crate; still correct.
 fn make_floating_panel(window: &tauri::WebviewWindow) {
     use tauri_nspanel::cocoa::appkit::NSWindowCollectionBehavior;
     use tauri_nspanel::WebviewWindowExt;
