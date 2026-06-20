@@ -43,6 +43,11 @@ daemon = [
     "fastapi>=0.110",
     "uvicorn[standard]>=0.29",
 ]
+# Optional cloud LLM (Claude). Opt-in, off by default: `uv sync --extra cloud`.
+# Lazy-imported; only needed when llm_provider="anthropic".
+cloud = [
+    "anthropic>=0.40",
+]
 dev = [
     "ruff>=0.6",
     "mypy>=1.11",
@@ -130,6 +135,7 @@ module = [
     "ddgs.*",
     "fastapi.*",
     "uvicorn.*",
+    "anthropic.*",
 ]
 ignore_missing_imports = true
 

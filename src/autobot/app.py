@@ -11,9 +11,11 @@ audit log and sandboxed filesystem tools) in front of the language model.
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 from autobot.config import Settings
 from autobot.core.events import AmplitudeSink
-from autobot.core.interfaces import AudioSource, TextToSpeech
+from autobot.core.interfaces import AudioSource, LanguageModel, TextToSpeech
 from autobot.io.audio import PushToTalkRecorder
 from autobot.llm.ollama_llm import OllamaLanguageModel
 from autobot.logging_setup import get_logger, setup_logging
@@ -27,6 +29,9 @@ from autobot.tools.filesystem import register_filesystem_tools
 from autobot.tools.permission import PermissionGate, TerminalConfirmer
 from autobot.tools.registry import ToolRegistry
 from autobot.tools.sandbox import Sandbox
+
+if TYPE_CHECKING:
+    from autobot.memory.store import MemoryStore
 
 
 def _build_audio_source(settings: Settings, on_level: AmplitudeSink | None = None) -> AudioSource:
@@ -107,6 +112,35 @@ def _build_tts(settings: Settings, on_level: AmplitudeSink | None = None) -> Tex
         print(f"[tts] voice output OFF — {exc}")
         print("      Fix: `uv sync --extra tts` and download a voice (see README).")
         return NullTTS()
+
+
+def _build_llm(
+    settings: Settings,
+    registry: ToolRegistry,
+    transcript: Transcript,
+    memory: MemoryStore | None,
+) -> LanguageModel:
+    """Pick the language-model backend: local Ollama (default) or Anthropic (opt-in).
+
+    Cloud is disclosed and degrades gracefully — a missing key or the missing
+    ``cloud`` extra falls back to local rather than failing startup.
+    """
+    log = get_logger("app")
+    if settings.llm_provider == "anthropic":
+        try:
+            from autobot.llm.anthropic_llm import AnthropicLanguageModel
+
+            llm = AnthropicLanguageModel(settings, registry, transcript, memory=memory)
+            log.info("llm provider=anthropic model=%s (OFF-DEVICE)", settings.anthropic_model)
+            print(
+                f"[llm] CLOUD mode — Claude ({settings.anthropic_model}). Your requests and "
+                "remembered profile are sent to Anthropic. Actions still run locally."
+            )
+            return llm
+        except (ImportError, ValueError) as exc:
+            log.warning("cloud LLM unavailable, falling back to local: %s", exc)
+            print(f"[llm] cloud unavailable ({exc}) — using local Ollama.")
+    return OllamaLanguageModel(settings, registry, transcript, memory=memory)
 
 
 def build(
@@ -195,7 +229,7 @@ def build(
         settings=settings,
         audio=_build_audio_source(settings, amplitude_sink),
         stt=FasterWhisperSTT(settings),
-        llm=OllamaLanguageModel(settings, registry, transcript, memory=memory),
+        llm=_build_llm(settings, registry, transcript, memory),
         gate=gate,
         wake_gate=_build_wake_gate(settings),
         tts=_build_tts(settings, amplitude_sink),

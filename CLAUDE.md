@@ -19,11 +19,14 @@ Everything runs on-device; no audio, text, or memory ever leaves the machine.
 
 1. **On-device only.** Never add a dependency or call that sends audio, text, or
    user data off the machine. This is the entire point of the project. **The one
-   sanctioned exception is the `web_search` tool** (`tools/web.py`): it sends only
-   the search *query* to a search engine, is **opt-in** (`AUTOBOT_ALLOW_WEB`, off
-   by default; the tool isn't even registered otherwise), and every call is
-   audited. Any other off-device feature needs the same explicit, opt-in, audited
-   treatment.
+   sanctioned exceptions are **opt-in, off by default, and disclosed**:
+   (a) the `web_search` tool (`tools/web.py`) sends only the search *query* and is
+   only registered when `allow_web` is set; and (b) the **optional cloud LLM**
+   (`llm/anthropic_llm.py`, `llm_provider="anthropic"`) sends the conversation +
+   memory profile + tool schemas/results to Anthropic — but never audio, and
+   never the *actions* (those still run locally through the permission gate). Any
+   other off-device feature needs the same explicit, opt-in, disclosed treatment.
+   Secrets (API keys) live in the macOS Keychain (`autobot.secrets`), never on disk.
 2. **English only**, both directions (STT and TTS). Prefer English-optimized
    models (Moonshine, Parakeet, `*.en` whisper builds). Do not reintroduce
    multilingual options.
