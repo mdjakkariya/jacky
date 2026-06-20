@@ -9,7 +9,7 @@ use std::sync::Arc;
 use tauri::{
     menu::{Menu, MenuItem, Submenu},
     tray::TrayIconBuilder,
-    LogicalSize, Manager,
+    LogicalSize, Manager, WebviewUrl, WebviewWindowBuilder,
 };
 
 // Orb size presets (square, logical px). The web orb scales to fill the window.
@@ -58,8 +58,9 @@ fn main() {
             let large = MenuItem::with_id(app, "size_l", "Large", true, None::<&str>)?;
             let size = Submenu::with_items(app, "Size", true, &[&small, &medium, &large])?;
 
+            let settings = MenuItem::with_id(app, "settings", "Settings…", true, None::<&str>)?;
             let quit = MenuItem::with_id(app, "quit", "Quit Jack", true, None::<&str>)?;
-            let menu = Menu::with_items(app, &[&view, &lock, &size, &quit])?;
+            let menu = Menu::with_items(app, &[&view, &lock, &size, &settings, &quit])?;
 
             let visible = Arc::new(AtomicBool::new(true));
             let locked = Arc::new(AtomicBool::new(false));
@@ -95,6 +96,7 @@ fn main() {
                     "size_s" => resize(app, SIZE_SMALL),
                     "size_m" => resize(app, SIZE_MEDIUM),
                     "size_l" => resize(app, SIZE_LARGE),
+                    "settings" => open_settings(app),
                     "quit" => app.exit(0),
                     _ => {}
                 })
@@ -104,6 +106,20 @@ fn main() {
         })
         .run(tauri::generate_context!())
         .expect("error while running Jack orb");
+}
+
+/// Open (or focus) the Settings window — a normal window loading settings.html.
+fn open_settings(app: &tauri::AppHandle) {
+    if let Some(win) = app.get_webview_window("settings") {
+        let _ = win.show();
+        let _ = win.set_focus();
+        return;
+    }
+    let _ = WebviewWindowBuilder::new(app, "settings", WebviewUrl::App("settings.html".into()))
+        .title("Jack — Settings")
+        .inner_size(580.0, 680.0)
+        .resizable(true)
+        .build();
 }
 
 /// Run `f` against the orb window if it exists.

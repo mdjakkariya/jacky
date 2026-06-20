@@ -67,6 +67,10 @@ toggles, a Size submenu, and Quit:
     switch to movable only to reposition.
 - **Size ▸ Small / Medium / Large**: resize the orb; the choice is remembered
   across launches.
+- **Settings…**: opens a window to choose the model/provider (Local Ollama or
+  cloud Claude), enter an API key (stored in the Keychain), and toggle
+  capabilities. It talks to the daemon's settings API, so **the daemon must be
+  running**; changes apply on restart.
 - **Quit Jack**.
 
 The orb floats **above other app windows, across every Space, and over
