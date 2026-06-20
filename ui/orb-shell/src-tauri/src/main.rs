@@ -108,17 +108,38 @@ fn main() {
         .expect("error while running Jack orb");
 }
 
-/// Open (or focus) the Settings window — a normal window loading settings.html.
+/// Open (or focus) the Settings window — a normal, focusable window.
+///
+/// The app normally runs as a macOS *accessory* (no Dock icon, non-activating),
+/// which means its windows can't receive keyboard focus — you couldn't type in
+/// the API-key field. So while Settings is open we switch to the regular
+/// activation policy (the app activates, fields are typable, a Dock icon appears)
+/// and switch back to accessory when the window closes.
 fn open_settings(app: &tauri::AppHandle) {
+    #[cfg(target_os = "macos")]
+    let _ = app.set_activation_policy(tauri::ActivationPolicy::Regular);
+
     if let Some(win) = app.get_webview_window("settings") {
         let _ = win.show();
         let _ = win.set_focus();
         return;
     }
+
+    let handle = app.clone();
     let _ = WebviewWindowBuilder::new(app, "settings", WebviewUrl::App("settings.html".into()))
         .title("Jack — Settings")
         .inner_size(580.0, 680.0)
         .resizable(true)
+        .on_window_event(move |event| {
+            if matches!(
+                event,
+                tauri::WindowEvent::CloseRequested { .. } | tauri::WindowEvent::Destroyed
+            ) {
+                // Back to a background presence once Settings is closed.
+                #[cfg(target_os = "macos")]
+                let _ = handle.set_activation_policy(tauri::ActivationPolicy::Accessory);
+            }
+        })
         .build();
 }
 

@@ -138,6 +138,9 @@
           <label class="switch"><input type="checkbox" id="allow_memory"><span class="slider"></span></label></div>
         <div class="row"><span class="grow"><span class="label">Web search</span><div class="desc">Sends queries off-device</div></span>
           <label class="switch"><input type="checkbox" id="allow_web"><span class="slider"></span></label></div>
+        <div class="stack"><label for="webKey">Web search API key <span id="webKeyState" class="hint" style="font-weight:400"></span></label>
+          <input type="password" id="webKey" placeholder="optional — SearchSpace key" autocomplete="off" />
+          <div class="hint">Optional. Stored in your macOS Keychain. Without it, search uses a free fallback.</div></div>
       </div>
     </section>
 
@@ -228,8 +231,9 @@
     $("wake_phrase").value = s.wake_phrase || "";
     $("follow_up_window_s").value = s.follow_up_window_s != null ? s.follow_up_window_s : 30;
     CHECKS.forEach(function(k){ $(k).checked = !!s[k]; });
-    var keySet = s._secrets && s._secrets.anthropic_api_key;
-    $("keyState").textContent = keySet ? "— saved (leave blank to keep)" : "— not set";
+    var sec = s._secrets || {};
+    $("keyState").textContent = sec.anthropic_api_key ? "— saved (leave blank to keep)" : "— not set";
+    $("webKeyState").textContent = sec.web_api_key ? "— saved (leave blank to keep)" : "— not set";
     await populateModels(s.llm_model || "");
   }
 
@@ -250,6 +254,13 @@
     });
   }
 
+  async function saveSecret(name, input, stateEl){
+    var v = input.value.trim();
+    if(!v) return;  // blank = keep existing
+    await fetch(API + "/secret", {method:"POST", headers:{"content-type":"application/json"}, body: JSON.stringify({name:name, value:v})});
+    input.value = ""; stateEl.textContent = "— saved (leave blank to keep)";
+  }
+
   async function save(){
     var provider = $("provider").value;
     var body = {
@@ -262,11 +273,8 @@
     CHECKS.forEach(function(k){ body[k] = $(k).checked; });
     try {
       await fetch(API + "/settings", {method:"POST", headers:{"content-type":"application/json"}, body: JSON.stringify(body)});
-      var key = $("anthropicKey").value.trim();
-      if(key){
-        await fetch(API + "/secret", {method:"POST", headers:{"content-type":"application/json"}, body: JSON.stringify({name:"anthropic_api_key", value:key})});
-        $("anthropicKey").value = ""; $("keyState").textContent = "— saved (leave blank to keep)";
-      }
+      await saveSecret("anthropic_api_key", $("anthropicKey"), $("keyState"));
+      await saveSecret("web_api_key", $("webKey"), $("webKeyState"));
       $("status").style.color = ""; $("status").textContent = "Saved — restart Jack to apply.";
     } catch(e){
       $("status").style.color = "#ff6b6b"; $("status").textContent = "Save failed — is Jack running?";
