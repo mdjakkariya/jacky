@@ -117,7 +117,7 @@ def build(
     """Compose a fully wired :class:`Orchestrator`.
 
     Args:
-        settings: Configuration to use; defaults to :meth:`Settings.from_env`.
+        settings: Configuration to use; defaults to :meth:`Settings.load`.
         on_state: Optional state-transition listener. Defaults to the console
             printer; the daemon passes one that also publishes to its event bus.
         amplitude_sink: Optional callback fed normalized loudness (0..1) while
@@ -128,7 +128,7 @@ def build(
         A ready-to-run orchestrator. Constructing it loads the STT model, opens
         the audit log, prepares the sandbox, and connects to Ollama.
     """
-    settings = settings or Settings.from_env()
+    settings = settings or Settings.load()
     log_path = setup_logging(settings)
     log = get_logger("app")
     log.info(
@@ -177,7 +177,9 @@ def build(
         from autobot.tools.web import register_web_tools
 
         register_web_tools(registry, settings)
-        using_api = settings.web_provider != "ddgs" and bool(settings.web_api_key)
+        from autobot.secrets import get_secret
+
+        using_api = settings.web_provider != "ddgs" and bool(get_secret("web_api_key"))
         provider = "API" if using_api else "ddgs scraping"
         log.info("web search ENABLED provider=%s (queries leave the device)", provider)
         print(f"[web] web search ENABLED via {provider} — queries leave the device.")

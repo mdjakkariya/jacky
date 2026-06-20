@@ -99,9 +99,12 @@ class WebSearchTool:
     @staticmethod
     def _default_primary(settings: Settings) -> SearchFn | None:
         """Use the keyed API when configured; otherwise there's no primary (ddgs only)."""
-        if settings.web_provider == "ddgs" or not settings.web_api_key:
+        from autobot.secrets import get_secret
+
+        key = get_secret("web_api_key")
+        if settings.web_provider == "ddgs" or not key:
             return None
-        return SearchSpaceBackend(settings.web_api_url, settings.web_api_key).search
+        return SearchSpaceBackend(settings.web_api_url, key).search
 
     def _ddgs_search(self, query: str, max_results: int) -> list[dict[str, str]]:
         """No-key fallback: ddgs, rotating across engines (lazy import)."""

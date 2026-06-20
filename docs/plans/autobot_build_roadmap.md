@@ -85,10 +85,17 @@ shell + system webview rendering a WebGL orb).
 
 ## Phase 4 — Memory / self-learning
 
-- [ ] Structured user profile (SQLite): preferences, names, recurring tasks
-- [ ] Episodic memory: embed past interactions (sqlite-vec) for semantic recall
-- [ ] Orchestrator queries memory before reasoning (RAG); writes back after each turn
-- [ ] **Done when:** the assistant recalls a fact from a previous session.
+- [x] Structured user profile (SQLite): name + learned facts — **done (fd54851):**
+  `memory/store.py` (on-device `~/.autobot/memory.db`, single evolving profile,
+  deduped facts, `forget`), `tools/memory.py` (`set_name`/`remember`/`forget`,
+  gated WRITE). Model auto-saves durable facts inline during a turn (reasoning on).
+- [x] Orchestrator/LLM queries memory before reasoning, writes back after — profile
+  injected into the prompt each turn; first-meeting greeting introduces Jack and
+  asks the name when unknown; warm-friend persona.
+- [ ] Episodic memory: embed past interactions (sqlite-vec) for semantic recall —
+  deferred until the flat profile outgrows direct injection (RAG-ready).
+- [x] **Done when:** the assistant recalls a fact from a previous session. ✅
+  (name + facts persist across restarts; behind `AUTOBOT_ALLOW_MEMORY`).
 
 ---
 

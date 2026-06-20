@@ -114,21 +114,30 @@ There are two wake detectors, selected with `AUTOBOT_WAKE_DETECTOR`:
 
 Common tuning: `AUTOBOT_VAD_THRESHOLD`, `AUTOBOT_END_SILENCE_MS` (raise if you're cut off mid-sentence), `AUTOBOT_FOLLOWUP_WINDOW_S`.
 
-### Speed vs. accuracy (no code changes)
+### Configuration
 
-Default is `qwen3:8b` (most reliable tool-calling). Trade toward speed if you like:
+All tunables live in one JSON file, **`~/.autobot/settings.json`** — there are
+**no environment variables**. Missing file or key → the built-in default. The
+setting names are the field names in `src/autobot/config.py` (the single source
+of defaults). For example:
 
-```bash
-AUTOBOT_LLM_MODEL=qwen2.5:3b make run     # faster replies, less reliable tool-calling
-AUTOBOT_LLM_MODEL=qwen2.5:1.5b make run   # fastest, least reliable
-AUTOBOT_STT_MODEL=base.en    make run     # faster transcription, less accurate
-AUTOBOT_STT_MODEL=medium.en  make run     # most accurate transcription, slower
-AUTOBOT_STT_BEAM=1           make run     # greedy decode (faster, less accurate)
+```json
+{ "llm_model": "qwen2.5:3b", "stt_model": "base.en", "stt_beam_size": 1,
+  "save_audio": true, "follow_up_window_s": 20 }
 ```
 
-STT defaults to `small.en` with beam size 5 — accurate on connected speech. Set `AUTOBOT_SAVE_AUDIO=1` to dump each captured clip as a WAV in `sessions/` (with the transcript noted) so you can hear what was captured vs. what it heard.
+Secrets (API keys) are **not** in this file — they're stored in the macOS
+**Keychain** (`security ... -s autobot -a <name>`). A **Settings view** in the orb
+to edit all of this is on the way (see `docs/plans/autobot_cloud_llm_plan.md`).
 
-Reply length is capped by `AUTOBOT_LLM_MAX_TOKENS` (default 256) to keep spoken answers short and fast. Watch `replied latency_ms=` and `transcribed … latency_ms=` in the log to compare. Remember to `ollama pull <model>` first. All tunables live in `src/autobot/config.py`.
+### Speed vs. accuracy
+
+Default is `qwen3:8b` (most reliable tool-calling). To trade toward speed, set in
+`settings.json`: `"llm_model": "qwen2.5:3b"` (or `:1.5b`, fastest/least reliable),
+`"stt_model": "base.en"` (faster) or `"medium.en"` (most accurate),
+`"stt_beam_size": 1` (greedy). STT defaults to `small.en` beam 5. Set
+`"save_audio": true` to dump each captured clip as a WAV in `sessions/`. Reply
+length is capped by `llm_max_tokens`. `ollama pull <model>` first.
 
 ### Conversation memory
 
@@ -141,19 +150,20 @@ Everything above is on-device. Web search is the **one exception** and is **off 
 ```bash
 # install ddgs (the fallback) while keeping the other extras:
 uv sync --extra dev --extra all --extra web
-cp .env.example .env        # then put your SearchSpace key in .env (gitignored)
-uv run autobot              # .env is loaded automatically
+# set "allow_web": true in ~/.autobot/settings.json, then store your key once:
+security add-generic-password -U -s autobot -a web_api_key -w 'YOUR-KEY'
+uv run autobot
 # "jack what's the weather in Bengaluru"
 ```
 
-Config lives in a gitignored **`.env`** (loaded at startup; real env vars still override it) — set `AUTOBOT_WEB_API_KEY` and `AUTOBOT_ALLOW_WEB=1` there once instead of exporting each shell. See `.env.example`. The key is never read from or written to source.
+Enable it by setting `allow_web: true` in `~/.autobot/settings.json`. The **API key is never in settings or source** — it's stored in the macOS **Keychain** (service `autobot`, account `web_api_key`) via `autobot.secrets`, and read from there at runtime.
 
-**Backends, configurable with automatic fallback** (`AUTOBOT_WEB_PROVIDER`):
+**Backends, configurable with automatic fallback** (`web_provider` in settings.json):
 
-- `auto` (default) — use the keyed HTTP API when `AUTOBOT_WEB_API_KEY` is set (clean, current results); otherwise, or if an API call fails/returns nothing, **fall back to ddgs scraping** (no key).
+- `auto` (default) — use the keyed HTTP API when a `web_api_key` is in the Keychain (clean, current results); otherwise, or if an API call fails/returns nothing, **fall back to ddgs scraping** (no key).
 - `searchspace` forces the API; `ddgs` forces scraping.
 
-Point at any SearchSpace-compatible endpoint via `AUTOBOT_WEB_API_URL` (default `https://q.searchspace.io/v1/search`). The **API key is read only from the environment — never stored in the repo.** Startup prints `[web] web search ENABLED via API` (or `via ddgs scraping`); each search logs `web via=api/ddgs`. Leave `AUTOBOT_ALLOW_WEB` unset to stay fully on-device.
+Point at any SearchSpace-compatible endpoint via `web_api_url` (default `https://q.searchspace.io/v1/search`). Startup prints `[web] web search ENABLED via API` (or `via ddgs scraping`); each search logs `web via=api/ddgs`. Leave `allow_web` off to stay fully on-device.
 
 ---
 

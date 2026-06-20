@@ -104,10 +104,15 @@ make test       # pytest with coverage
 make run        # launch the assistant (Ollama must be running)
 ```
 
-The model is configurable without code changes, e.g.
-`AUTOBOT_LLM_MODEL=qwen3:4b make run`. All env vars live in `config.py`.
+Configuration is a single persisted JSON file `~/.autobot/settings.json` —
+**no environment variables**. `Settings.load()` overlays it on the dataclass
+defaults (`settings.json > defaults`); the Settings view (via the daemon) writes
+it. Secrets (API keys) are **never** in this file — they live in the macOS
+Keychain via `autobot.secrets` (`get_secret`/`set_secret`). To change a tunable,
+edit `settings.json` (or use the Settings view); to add one, add a dataclass
+field with a default in `config.py` (that's the single source).
 
-Input mode is `AUTOBOT_INPUT=wake` (default, hands-free) or `ptt` (push-to-talk).
+Input mode is the `input_mode` setting: `wake` (default, hands-free) or `ptt`.
 Hands-free needs the optional wake deps: `uv sync --extra wake` (openWakeWord +
 silero-vad; heavy, so kept out of the core install). Wake/VAD model wrappers and
 the mic are injected into `WakeWordVadRecorder`, and the endpointing/pre-roll

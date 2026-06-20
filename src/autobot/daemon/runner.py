@@ -60,7 +60,7 @@ def serve(settings: Settings | None = None) -> None:
     Building the orchestrator loads the STT model, the audit log, the sandbox,
     and connects to Ollama — same as a normal run, just with a UI-facing socket.
     """
-    settings = settings or Settings.from_env()
+    settings = settings or Settings.load()
     from autobot.app import build
 
     bus = EventBus()
@@ -82,7 +82,7 @@ def serve_demo(settings: Settings | None = None) -> None:
     amplitude envelope, so the orb can be wired to a live socket without a mic,
     a model, or Ollama running.
     """
-    settings = settings or Settings.from_env()
+    settings = settings or Settings.load()
     bus = EventBus()
 
     def cycle() -> None:

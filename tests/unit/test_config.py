@@ -1,82 +1,81 @@
-"""Tests for environment-driven settings."""
+"""Tests for the JSON-backed settings (settings.json > defaults; no env)."""
 
 from __future__ import annotations
 
+import json
+from pathlib import Path
+
 import pytest
 
-from autobot.config import Settings
+from autobot.config import Settings, write_settings
 
 
 def test_defaults_are_english_only_and_sensible() -> None:
     settings = Settings()
     assert settings.stt_model.endswith(".en")  # English-only build
     assert settings.llm_model == "qwen3:8b"
+    assert settings.llm_provider == "ollama"  # local by default
     assert settings.llm_max_tokens > 0
     assert settings.sample_rate == 16_000
     assert settings.channels == 1
 
 
-def test_load_env_file(monkeypatch: pytest.MonkeyPatch, tmp_path: object) -> None:
-    from pathlib import Path
+def test_load_missing_file_is_all_defaults(tmp_path: Path) -> None:
+    assert Settings.load(tmp_path / "nope.json") == Settings()
 
-    from autobot.config import load_env_file
 
-    env = Path(str(tmp_path)) / ".env"
-    env.write_text(
-        '# a comment\nexport AUTOBOT_WEB_API_KEY="sk-test-123"\nAUTOBOT_ALLOW_WEB=1\n\n',
-        encoding="utf-8",
+def test_load_overlays_only_present_keys(tmp_path: Path) -> None:
+    path = tmp_path / "settings.json"
+    write_settings({"llm_model": "qwen3:4b", "llm_temperature": 0.3, "allow_web": True}, path)
+    s = Settings.load(path)
+    assert s.llm_model == "qwen3:4b"
+    assert s.llm_temperature == 0.3
+    assert s.allow_web is True
+    assert s.stt_model == Settings().stt_model  # untouched -> default
+
+
+def test_load_ignores_unknown_keys_and_bad_types(tmp_path: Path) -> None:
+    path = tmp_path / "settings.json"
+    write_settings(
+        {"totally_unknown": 1, "llm_max_tokens": "not-a-number", "stt_beam_size": 7}, path
     )
-    monkeypatch.delenv("AUTOBOT_WEB_API_KEY", raising=False)
-    monkeypatch.delenv("AUTOBOT_ALLOW_WEB", raising=False)
-    load_env_file(env)
-    import os
-
-    assert os.environ["AUTOBOT_WEB_API_KEY"] == "sk-test-123"
-    assert os.environ["AUTOBOT_ALLOW_WEB"] == "1"
+    s = Settings.load(path)
+    assert not hasattr(s, "totally_unknown")
+    assert s.llm_max_tokens == Settings().llm_max_tokens  # bad value -> default
+    assert s.stt_beam_size == 7  # good value applied
 
 
-def test_load_env_file_does_not_override_real_env(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: object
-) -> None:
-    from pathlib import Path
-
-    from autobot.config import load_env_file
-
-    env = Path(str(tmp_path)) / ".env"
-    env.write_text("AUTOBOT_LLM_MODEL=from-dotenv\n", encoding="utf-8")
-    monkeypatch.setenv("AUTOBOT_LLM_MODEL", "from-real-env")
-    load_env_file(env)
-    import os
-
-    assert os.environ["AUTOBOT_LLM_MODEL"] == "from-real-env"  # real env wins
+def test_wake_phrase_is_lowercased(tmp_path: Path) -> None:
+    path = tmp_path / "settings.json"
+    write_settings({"wake_phrase": "Jack"}, path)
+    assert Settings.load(path).wake_phrase == "jack"
 
 
-def test_from_env_defaults_match_field_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
-    # With no env vars set, from_env() must equal the dataclass field defaults —
-    # guards against the two drifting (the bug where follow_up stayed 8s).
-    for key in list(__import__("os").environ):
-        if key.startswith("AUTOBOT_") or key == "OLLAMA_HOST":
-            monkeypatch.delenv(key, raising=False)
-    # Point at a non-existent .env so an ambient one doesn't taint the comparison.
-    monkeypatch.setenv("AUTOBOT_ENV_FILE", "/nonexistent/.env")
-    assert Settings.from_env() == Settings()
+def test_write_then_load_round_trips(tmp_path: Path) -> None:
+    path = tmp_path / "settings.json"
+    original = Settings(llm_provider="anthropic", anthropic_model="claude-x", allow_memory=False)
+    write_settings(original.to_dict(), path)
+    assert Settings.load(path) == original
 
 
-def test_from_env_overrides(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("AUTOBOT_LLM_MODEL", "qwen3:4b")
-    monkeypatch.setenv("AUTOBOT_STT_MODEL", "small.en")
-    monkeypatch.setenv("AUTOBOT_LLM_TEMPERATURE", "0.3")
-    settings = Settings.from_env()
-    assert settings.llm_model == "qwen3:4b"
-    assert settings.stt_model == "small.en"
-    assert settings.llm_temperature == 0.3
+def test_malformed_json_falls_back_to_defaults(tmp_path: Path) -> None:
+    path = tmp_path / "settings.json"
+    path.write_text("{ not valid json", encoding="utf-8")
+    assert Settings.load(path) == Settings()
 
 
-def test_from_env_bad_float_falls_back_to_default(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setenv("AUTOBOT_LLM_TEMPERATURE", "not-a-number")
-    assert Settings.from_env().llm_temperature == 0.0
+def test_no_secret_fields_are_stored() -> None:
+    # API keys belong in the Keychain, never in settings — there must be no key field.
+    data = Settings().to_dict()
+    assert "web_api_key" not in data
+    assert "anthropic_api_key" not in data
+
+
+def test_write_sets_restrictive_permissions(tmp_path: Path) -> None:
+    path = tmp_path / "settings.json"
+    write_settings({"llm_model": "x"}, path)
+    assert json.loads(path.read_text())["llm_model"] == "x"
+    assert (path.stat().st_mode & 0o777) == 0o600
 
 
 def test_settings_is_immutable() -> None:
