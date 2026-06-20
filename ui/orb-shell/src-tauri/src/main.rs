@@ -7,7 +7,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 use tauri::{
-    menu::{Menu, MenuItem, Submenu},
+    menu::{Menu, MenuItem, PredefinedMenuItem, Submenu},
     tray::TrayIconBuilder,
     LogicalSize, Manager, WebviewUrl, WebviewWindowBuilder,
 };
@@ -36,6 +36,12 @@ fn main() {
             // never appears in the ⌘-Tab switcher — it's a presence, not an app.
             #[cfg(target_os = "macos")]
             app.set_activation_policy(tauri::ActivationPolicy::Accessory);
+
+            // App menu with a standard Edit menu — REQUIRED for text editing in
+            // the Settings webview: macOS routes typing/Cut/Copy/Paste/Select-All
+            // (⌘X/C/V/A) through these items' key equivalents. Without it the
+            // fields can't be edited or pasted into.
+            install_edit_menu(app)?;
 
             if let Some(orb) = app.get_webview_window("orb") {
                 // macOS: become a non-activating panel so we sit over full-screen.
@@ -108,6 +114,29 @@ fn main() {
         .expect("error while running Jack orb");
 }
 
+/// Install a minimal app menu whose Edit items give text fields their standard
+/// keyboard editing (typing relies on the window being key; Cut/Copy/Paste/
+/// Select-All rely on these menu items' ⌘ key equivalents).
+fn install_edit_menu(app: &tauri::App) -> tauri::Result<()> {
+    let edit = Submenu::with_items(
+        app,
+        "Edit",
+        true,
+        &[
+            &PredefinedMenuItem::undo(app, None)?,
+            &PredefinedMenuItem::redo(app, None)?,
+            &PredefinedMenuItem::separator(app)?,
+            &PredefinedMenuItem::cut(app, None)?,
+            &PredefinedMenuItem::copy(app, None)?,
+            &PredefinedMenuItem::paste(app, None)?,
+            &PredefinedMenuItem::select_all(app, None)?,
+        ],
+    )?;
+    let menu = Menu::with_items(app, &[&edit])?;
+    app.set_menu(menu)?;
+    Ok(())
+}
+
 /// Open (or focus) the Settings window — a normal, focusable window.
 ///
 /// The app normally runs as a macOS *accessory* (no Dock icon, non-activating),
@@ -133,6 +162,7 @@ fn open_settings(app: &tauri::AppHandle) {
         .build()
     {
         Ok(win) => {
+            let _ = win.set_focus();
             // on_window_event lives on the built window (not the builder) in v2.
             win.on_window_event(move |event| {
                 if matches!(
