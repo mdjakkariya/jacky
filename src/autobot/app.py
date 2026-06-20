@@ -16,7 +16,7 @@ from autobot.core.interfaces import AudioSource, TextToSpeech
 from autobot.io.audio import PushToTalkRecorder
 from autobot.llm.ollama_llm import OllamaLanguageModel
 from autobot.logging_setup import get_logger, setup_logging
-from autobot.orchestrator.state_machine import Orchestrator
+from autobot.orchestrator.state_machine import Orchestrator, StateListener, _print_transition
 from autobot.orchestrator.wake_gate import PassThroughGate, SttWakeGate, WakeGate
 from autobot.session_log import FileTranscript, NullTranscript, Transcript
 from autobot.stt.faster_whisper_stt import FasterWhisperSTT
@@ -104,11 +104,16 @@ def _build_tts(settings: Settings) -> TextToSpeech:
         return NullTTS()
 
 
-def build(settings: Settings | None = None) -> Orchestrator:
+def build(
+    settings: Settings | None = None,
+    on_state: StateListener | None = None,
+) -> Orchestrator:
     """Compose a fully wired :class:`Orchestrator`.
 
     Args:
         settings: Configuration to use; defaults to :meth:`Settings.from_env`.
+        on_state: Optional state-transition listener. Defaults to the console
+            printer; the daemon passes one that also publishes to its event bus.
 
     Returns:
         A ready-to-run orchestrator. Constructing it loads the STT model, opens
@@ -157,6 +162,7 @@ def build(settings: Settings | None = None) -> Orchestrator:
         wake_gate=_build_wake_gate(settings),
         tts=_build_tts(settings),
         transcript=transcript,
+        on_state=on_state or _print_transition,
     )
 
 

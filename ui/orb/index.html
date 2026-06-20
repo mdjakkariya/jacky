@@ -1,0 +1,167 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Jack</title>
+<style>
+  :root { color-scheme: dark; }
+  html, body { margin: 0; height: 100%; overflow: hidden; }
+  /* Dark bg for the standalone/browser view. The Tauri shell sets the window
+     transparent and overrides this to `background: transparent`. */
+  body {
+    background: radial-gradient(120% 120% at 50% 45%, #0E0C18 0%, #05060C 100%);
+    display: flex; align-items: center; justify-content: center; min-height: 100vh;
+  }
+  .stage { position: relative; width: 100vmin; height: 100vmin; max-width: 420px; max-height: 420px; }
+  .stage canvas { position: absolute; inset: 0; width: 100%; height: 100%; }
+  /* Tiny dev-only connection hint; hidden in the Tauri build. */
+  #conn {
+    position: absolute; bottom: 6px; left: 50%; transform: translateX(-50%);
+    font: 11px ui-monospace, Menlo, monospace; letter-spacing: .12em;
+    color: rgba(157,184,255,.55); user-select: none; pointer-events: none;
+  }
+</style>
+</head>
+<body>
+  <div class="stage">
+    <canvas id="gl"></canvas>
+    <canvas id="ov"></canvas>
+    <div id="conn">connecting…</div>
+  </div>
+
+<script>
+/*
+  Jack — live orb client. Renders the locked four-state energy orb (WebGL plasma
+  core + 2D overlay cue) and is driven entirely by the daemon's WebSocket:
+    {"type":"state","value":"idle|listening|thinking|talking"}
+    {"type":"amplitude","value":0.0..1.0}
+  No logic lives here — it only reflects engine state. Reconnects automatically.
+  Override the socket URL with ?ws=ws://host:port/ws
+*/
+(function(){
+  var params = new URLSearchParams(location.search);
+  var WS_URL = params.get("ws") || "ws://127.0.0.1:8765/ws";
+
+  var c=document.getElementById("gl");
+  var gl=c.getContext("webgl",{alpha:true,premultipliedAlpha:false,antialias:true});
+  var ov=document.getElementById("ov"),o=ov.getContext("2d");
+  var conn=document.getElementById("conn");
+  if(!gl){conn.textContent="WebGL not available";return;}
+  var dpr=Math.min(window.devicePixelRatio||1,2);
+  function size(){
+    var s=Math.min(c.clientWidth,420);
+    c.width=ov.width=Math.round(s*dpr);c.height=ov.height=Math.round(s*dpr);
+    gl.viewport(0,0,c.width,c.height);o.setTransform(dpr,0,0,dpr,0,0);
+    CX=CY=s/2;orbR=s*0.347;
+  }
+  var CX,CY,orbR;
+
+  var vs="attribute vec2 p;void main(){gl_Position=vec4(p,0.0,1.0);}";
+  var fs=[
+  "precision highp float;",
+  "uniform float u_phase;uniform vec2 u_res;uniform vec3 u_col;uniform float u_rim;uniform float u_amp;uniform float u_energy;",
+  "float hash(vec2 p){p=fract(p*vec2(123.34,456.21));p+=dot(p,p+45.32);return fract(p.x*p.y);}",
+  "float noise(vec2 p){vec2 i=floor(p),f=fract(p);float a=hash(i),b=hash(i+vec2(1.,0.)),c=hash(i+vec2(0.,1.)),d=hash(i+vec2(1.,1.));vec2 u=f*f*(3.-2.*f);return mix(mix(a,b,u.x),mix(c,d,u.x),u.y);}",
+  "float fbm(vec2 p){float v=0.,a=.5;for(int i=0;i<6;i++){v+=a*noise(p);p*=2.02;a*=.5;}return v;}",
+  "void main(){",
+  " vec2 uv=(gl_FragCoord.xy*2.-u_res)/u_res.y;uv*=(1.44-0.04*u_amp);",
+  " float r=length(uv);float ang=atan(uv.y,uv.x);float t=u_phase;",
+  " float swirl=ang+(1.-r)*2.6+t*0.7;",
+  " vec2 q=vec2(swirl*1.1,r*3.2-t*0.9);",
+  " float plasma=fbm(q+fbm(q+t*0.25));",
+  " float veins=fbm(vec2(swirl*1.9,r*4.5-t*1.7));",
+  " veins=1.-abs(veins*2.-1.);veins=pow(veins,7.0);",
+  " float dark=smoothstep(0.08,0.5,r);float fall=smoothstep(1.04,0.5,r);",
+  " float body=(plasma*0.55+veins*0.9)*dark*fall*u_energy*(0.75+0.6*u_amp);",
+  " float rim=smoothstep(0.9,0.99,r)*smoothstep(1.1,0.99,r);",
+  " float outer=exp(-max(r-1.0,0.0)*5.0)*0.4;",
+  " vec3 col=u_col*(body*1.7+outer);",
+  " col+=u_col*(rim*2.6+rim)*u_rim;",
+  " col+=vec3(1.0)*veins*dark*fall*0.7;",
+  " col+=u_col*smoothstep(0.55,0.0,r)*u_amp*0.6;",
+  " float a=clamp(body*1.6+rim*2.2*u_rim+outer,0.0,1.0);",
+  " col=col/(col+0.6);col*=1.5;",
+  " gl_FragColor=vec4(col,a);",
+  "}"].join("\n");
+  function sh(ty,src){var s=gl.createShader(ty);gl.shaderSource(s,src);gl.compileShader(s);if(!gl.getShaderParameter(s,gl.COMPILE_STATUS))console.warn(gl.getShaderInfoLog(s));return s;}
+  var prog=gl.createProgram();gl.attachShader(prog,sh(gl.VERTEX_SHADER,vs));gl.attachShader(prog,sh(gl.FRAGMENT_SHADER,fs));gl.linkProgram(prog);gl.useProgram(prog);
+  var bf=gl.createBuffer();gl.bindBuffer(gl.ARRAY_BUFFER,bf);gl.bufferData(gl.ARRAY_BUFFER,new Float32Array([-1,-1,3,-1,-1,3]),gl.STATIC_DRAW);
+  var loc=gl.getAttribLocation(prog,"p");gl.enableVertexAttribArray(loc);gl.vertexAttribPointer(loc,2,gl.FLOAT,false,0,0);
+  var U={};["u_phase","u_res","u_col","u_rim","u_amp","u_energy"].forEach(function(n){U[n]=gl.getUniformLocation(prog,n);});
+  gl.enable(gl.BLEND);gl.blendFunc(gl.SRC_ALPHA,gl.ONE_MINUS_SRC_ALPHA);
+
+  var SC={idle:[0.22,0.50,1.0],listening:[0.15,0.85,1.0],thinking:[0.62,0.36,1.0],talking:[1.0,0.70,0.14]};
+  var SP={idle:{speed:0.45,energy:0.8},listening:{speed:0.9,energy:1.05},thinking:{speed:1.9,energy:1.05},talking:{speed:1.0,energy:1.2}};
+
+  // Driven by the daemon:
+  var state="idle";       // last state frame
+  var liveAmp=0.0;        // last amplitude frame (decays between frames)
+
+  function rgba(cc,a){return "rgba("+Math.round(cc[0]*255)+","+Math.round(cc[1]*255)+","+Math.round(cc[2]*255)+","+a+")";}
+  var cur={col:SC.idle.slice(),speed:0.45,energy:0.8,amp:0.0};
+  var rings=[],ringTimer=0,spin=0,rim=0.04,phase=0,last=performance.now(),start=performance.now();
+
+  function overlay(dt,t){
+    o.clearRect(0,0,ov.width/dpr,ov.height/dpr);var cc=cur.col;
+    if(state==="listening"){
+      ringTimer+=dt;if(ringTimer>0.55){ringTimer=0;rings.push({r:orbR-6});}
+      for(var i=rings.length-1;i>=0;i--){var R=rings[i];R.r+=dt*46;var pr=(R.r-(orbR-6))/64;if(pr>=1){rings.splice(i,1);continue;}
+        o.beginPath();o.arc(CX,CY,R.r,0,Math.PI*2);o.strokeStyle=rgba(cc,(1-pr)*0.5);o.lineWidth=2.2;o.stroke();}
+    }else if(state==="thinking"){
+      spin+=dt*3.2;var seg=26,base=orbR+13;
+      for(var k=0;k<seg;k++){var a=spin-k*0.12;var al=(1-k/seg)*0.7;
+        o.beginPath();o.arc(CX,CY,base,a,a+0.1);o.strokeStyle=rgba(cc,al);o.lineWidth=3.2;o.lineCap="round";o.stroke();}
+      o.beginPath();o.arc(CX+Math.cos(spin)*base,CY+Math.sin(spin)*base,3.4,0,Math.PI*2);o.fillStyle="rgba(255,255,255,0.95)";o.fill();
+    }else if(state==="talking"){
+      var n=64,base=orbR+6;
+      for(var j=0;j<n;j++){var ang=j/n*Math.PI*2;
+        var L=4+Math.abs(Math.sin(ang*5+t*9))*14*(0.4+cur.amp)+Math.abs(Math.sin(ang*11-t*6))*7*cur.amp;
+        var x1=CX+Math.cos(ang)*base,y1=CY+Math.sin(ang)*base,x2=CX+Math.cos(ang)*(base+L),y2=CY+Math.sin(ang)*(base+L);
+        o.beginPath();o.moveTo(x1,y1);o.lineTo(x2,y2);o.strokeStyle=rgba(cc,0.55);o.lineWidth=2.4;o.lineCap="round";o.stroke();}
+    }else{
+      var br=orbR+10+Math.sin(t*1.3)*4;o.beginPath();o.arc(CX,CY,br,0,Math.PI*2);o.strokeStyle=rgba(cc,0.12);o.lineWidth=1.4;o.stroke();
+    }
+  }
+  function frame(){
+    var now=performance.now(),dt=Math.min((now-last)/1000,0.05);last=now;var t=(now-start)/1000;
+    var tc=SC[state]||SC.idle,tp=SP[state]||SP.idle;
+    for(var i=0;i<3;i++)cur.col[i]+=(tc[i]-cur.col[i])*0.06;
+    cur.speed+=(tp.speed-cur.speed)*0.05;cur.energy+=(tp.energy-cur.energy)*0.05;
+    // Amplitude is only meaningful while listening/talking; decay it otherwise.
+    var reactive=(state==="listening"||state==="talking");
+    cur.amp+=((reactive?liveAmp:0.0)-cur.amp)*0.25;
+    liveAmp*=0.90; // fade if no fresh frame arrives
+    phase+=dt*cur.speed;
+    gl.uniform1f(U.u_phase,phase);gl.uniform2f(U.u_res,c.width,c.height);gl.uniform1f(U.u_rim,rim);
+    gl.uniform1f(U.u_amp,cur.amp);gl.uniform1f(U.u_energy,cur.energy);gl.uniform3f(U.u_col,cur.col[0],cur.col[1],cur.col[2]);
+    gl.clearColor(0,0,0,0);gl.clear(gl.COLOR_BUFFER_BIT);gl.drawArrays(gl.TRIANGLES,0,3);
+    overlay(dt,t);
+    requestAnimationFrame(frame);
+  }
+
+  // --- daemon connection -------------------------------------------------
+  var ws=null,retry=null;
+  function connect(){
+    conn.textContent="connecting…";
+    try{ws=new WebSocket(WS_URL);}catch(e){scheduleReconnect();return;}
+    ws.onopen=function(){conn.textContent="";};
+    ws.onmessage=function(ev){
+      var msg;try{msg=JSON.parse(ev.data);}catch(e){return;}
+      if(msg.type==="state"&&SC[msg.value]){state=msg.value;}
+      else if(msg.type==="amplitude"){liveAmp=Math.max(0,Math.min(1,+msg.value||0));}
+    };
+    ws.onclose=function(){scheduleReconnect();};
+    ws.onerror=function(){try{ws.close();}catch(e){}};
+  }
+  function scheduleReconnect(){
+    conn.textContent="reconnecting…";
+    clearTimeout(retry);retry=setTimeout(connect,1000);
+  }
+
+  window.addEventListener("resize",size);
+  size();connect();frame();
+})();
+</script>
+</body>
+</html>

@@ -63,8 +63,23 @@ A privacy-first, zero-cost, on-device personal assistant. Reference to follow du
 ## Phase 3 — Voice output + terminal UI
 
 - [x] TTS: Piper (CPU/fast tier), Kokoro (GPU quality tier) — behind the TTS interface — **Phase 3a done (2026-06-19):** `TextToSpeech` protocol + `tts/piper_tts.py` (Piper) + `NullTTS` fallback; orchestrator speaks replies; `AUTOBOT_TTS` / `AUTOBOT_TTS_VOICE`; optional `tts` extra.
-- [ ] Terminal client (Textual) connecting to the daemon API; add the animation here — **Phase 3b (next):** make the engine a headless daemon (FastAPI + localhost WebSocket) and build the Textual thin client.
-- [ ] **Done when:** the assistant speaks its replies and the terminal shows live state. (Speaks ✅; terminal UI pending.)
+- [~] Terminal client (Textual) connecting to the daemon API; add the animation here — **Phase 3b in progress:** the headless daemon exists — `daemon/server.py` (FastAPI + localhost-only WebSocket `/ws`, `/healthz`), `core/events.py` (`OrbState` + `orb_state_for` + thread-safe `EventBus`), wired via `app.build(on_state=…)` and `daemon/runner.py` (`serve` / `serve_demo`); run with `python -m autobot.daemon [--demo]`, optional `daemon` extra. State transitions stream live. **Still pending:** real mic/TTS amplitude sourcing, and the Textual thin client.
+- [ ] **Done when:** the assistant speaks its replies and the terminal shows live state. (Speaks ✅; daemon + state stream ✅; amplitude + terminal UI pending.)
+
+### Phase 3c — Floating orb desktop UI ("Jack") — PLANNED
+
+The product surface: an always-available, terminal-free **floating energy-orb**
+that lives over every app/Space and reacts to Jack's state. Pulled ahead of
+Phase 4 at the user's request. Depends on the Phase 3b daemon (the orb is a thin
+client of the same `{state, amplitude}` stream). Tech: **Tauri** (lightweight Rust
+shell + system webview rendering a WebGL orb).
+
+- Locked visual reference: `docs/ui/jack_orb_prototype.html`
+- Full plan: `docs/plans/autobot_floating_orb_ui_plan.md`
+- **Done when:** speaking to Jack drives the orb idle→listening→thinking→talking
+  with live mic/TTS-reactive motion, it stays visible across app switches /
+  Spaces / full-screen apps, never steals focus or shows a Dock icon, and the
+  terminal can be fully hidden.
 
 ---
 

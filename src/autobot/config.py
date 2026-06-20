@@ -201,6 +201,11 @@ class Settings:
     web_api_key: str = ""  # set via AUTOBOT_WEB_API_KEY only
     # Comma-delimited ddgs backends tried in order (the scraping fallback).
     web_backend: str = "duckduckgo,bing,brave,google"
+    # Phase 3c: headless daemon for UI clients (the floating orb / terminal).
+    # Localhost-only by design; it streams coarse {state, amplitude} frames and
+    # never audio or text. The bind is enforced to loopback in the server.
+    daemon_host: str = "127.0.0.1"
+    daemon_port: int = 8765
     # Debugging aids.
     session_log: bool = True
     session_dir: str = _DEFAULT_SESSION_DIR
@@ -257,6 +262,8 @@ class Settings:
             web_api_url=_env_str("AUTOBOT_WEB_API_URL", d.web_api_url),
             web_api_key=_env_str("AUTOBOT_WEB_API_KEY", d.web_api_key),
             web_backend=_env_str("AUTOBOT_WEB_BACKEND", d.web_backend),
+            daemon_host=_env_str("AUTOBOT_DAEMON_HOST", d.daemon_host),
+            daemon_port=_env_int("AUTOBOT_DAEMON_PORT", d.daemon_port),
             session_log=_env_bool("AUTOBOT_SESSION_LOG", d.session_log),
             session_dir=_env_str("AUTOBOT_SESSION_DIR", d.session_dir),
             show_debug=_env_bool("AUTOBOT_DEBUG", d.show_debug),

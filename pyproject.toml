@@ -37,6 +37,12 @@ all = [
 web = [
     "ddgs>=6.0",
 ]
+# Headless daemon (Phase 3c): a localhost WebSocket UI clients connect to.
+# Imported lazily, so only needed to run the daemon: `uv sync --extra daemon`.
+daemon = [
+    "fastapi>=0.110",
+    "uvicorn[standard]>=0.29",
+]
 dev = [
     "ruff>=0.6",
     "mypy>=1.11",
@@ -47,6 +53,7 @@ dev = [
 
 [project.scripts]
 autobot = "autobot.app:main"
+autobot-daemon = "autobot.daemon.__main__:main"
 
 [build-system]
 requires = ["hatchling"]
@@ -121,6 +128,8 @@ module = [
     "torch.*",
     "piper.*",
     "ddgs.*",
+    "fastapi.*",
+    "uvicorn.*",
 ]
 ignore_missing_imports = true
 
@@ -130,6 +139,11 @@ minversion = "8.0"
 testpaths = ["tests"]
 addopts = "-ra -q --strict-markers --cov=autobot --cov-report=term-missing"
 pythonpath = ["src"]
+# Silence a third-party deprecation from Starlette's TestClient (it nudges toward
+# 'httpx2'); it's emitted on import of fastapi.testclient and is out of our hands.
+filterwarnings = [
+    "ignore:Using `httpx` with `starlette.testclient` is deprecated:",
+]
 
 # --- coverage -------------------------------------------------------------
 [tool.coverage.run]
