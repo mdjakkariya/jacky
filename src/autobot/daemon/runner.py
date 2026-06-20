@@ -14,7 +14,7 @@ import threading
 import time
 
 from autobot.config import Settings
-from autobot.core.events import EventBus, OrbState, orb_state_for
+from autobot.core.events import AmplitudeSink, EventBus, OrbState, orb_state_for
 from autobot.core.types import State
 from autobot.daemon.server import run_daemon
 from autobot.logging_setup import get_logger
@@ -37,6 +37,23 @@ def make_state_listener(bus: EventBus) -> StateListener:
     return listener
 
 
+def make_amplitude_sink(bus: EventBus) -> AmplitudeSink:
+    """Publish loudness only while the orb is *talking*.
+
+    The mic emits a frame ~30 times a second the whole time the engine is listening
+    (which, hands-free, is almost always) — but that maps to the orb's idle state,
+    so forwarding it would be constant noise on the wire for no visible effect.
+    Gating on the current orb state keeps the stream quiet at rest and reactive
+    only when Jack is speaking (TTS amplitude).
+    """
+
+    def sink(level: float) -> None:
+        if bus.last_state is OrbState.TALKING:
+            bus.publish_amplitude(level)
+
+    return sink
+
+
 def serve(settings: Settings | None = None) -> None:
     """Run the real engine behind the daemon (blocking).
 
@@ -47,7 +64,11 @@ def serve(settings: Settings | None = None) -> None:
     from autobot.app import build
 
     bus = EventBus()
-    orchestrator = build(settings, on_state=make_state_listener(bus))
+    orchestrator = build(
+        settings,
+        on_state=make_state_listener(bus),
+        amplitude_sink=make_amplitude_sink(bus),
+    )
     thread = threading.Thread(target=orchestrator.run, name="engine", daemon=True)
     thread.start()
     print(f"[daemon] serving on ws://{settings.daemon_host}:{settings.daemon_port}/ws")

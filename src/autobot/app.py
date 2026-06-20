@@ -12,6 +12,7 @@ audit log and sandboxed filesystem tools) in front of the language model.
 from __future__ import annotations
 
 from autobot.config import Settings
+from autobot.core.events import AmplitudeSink
 from autobot.core.interfaces import AudioSource, TextToSpeech
 from autobot.io.audio import PushToTalkRecorder
 from autobot.llm.ollama_llm import OllamaLanguageModel
@@ -28,7 +29,7 @@ from autobot.tools.registry import ToolRegistry
 from autobot.tools.sandbox import Sandbox
 
 
-def _build_audio_source(settings: Settings) -> AudioSource:
+def _build_audio_source(settings: Settings, on_level: AmplitudeSink | None = None) -> AudioSource:
     """Pick the input recorder for the configured mode and wake detector.
 
     The hands-free path needs the optional ``wake`` dependencies (silero-vad, and
@@ -45,11 +46,15 @@ def _build_audio_source(settings: Settings) -> AudioSource:
         vad = SileroVad()  # imports the heavy runtime
         if settings.wake_detector == "openwakeword":
             return WakeWordVadRecorder(
-                settings=settings, source=source, wake=OpenWakeWord(settings.wake_model), vad=vad
+                settings=settings,
+                source=source,
+                wake=OpenWakeWord(settings.wake_model),
+                vad=vad,
+                on_level=on_level,
             )
         # Default: transcribe-then-match — VAD captures each phrase, the wake word
         # is matched on the transcript by the wake gate.
-        return VadRecorder(settings, source, vad)
+        return VadRecorder(settings, source, vad, on_level=on_level)
     except ImportError as exc:  # pragma: no cover - depends on optional extras
         raise SystemExit(
             "Hands-free mode needs the 'wake' extra: run `uv sync --extra wake` "
@@ -78,7 +83,7 @@ def _build_transcript(settings: Settings) -> Transcript:
     return transcript
 
 
-def _build_tts(settings: Settings) -> TextToSpeech:
+def _build_tts(settings: Settings, on_level: AmplitudeSink | None = None) -> TextToSpeech:
     """Build the voice output: Piper if enabled and available, else silent.
 
     Falls back to a no-op so a missing 'tts' extra or voice model degrades to a
@@ -93,7 +98,7 @@ def _build_tts(settings: Settings) -> TextToSpeech:
     try:
         from autobot.tts.piper_tts import PiperTTS
 
-        tts = PiperTTS(settings)
+        tts = PiperTTS(settings, on_level=on_level)
         log.info("voice output ready voice=%s", settings.tts_voice)
         print(f"[tts] voice output READY (voice: {settings.tts_voice})")
         return tts
@@ -107,6 +112,7 @@ def _build_tts(settings: Settings) -> TextToSpeech:
 def build(
     settings: Settings | None = None,
     on_state: StateListener | None = None,
+    amplitude_sink: AmplitudeSink | None = None,
 ) -> Orchestrator:
     """Compose a fully wired :class:`Orchestrator`.
 
@@ -114,6 +120,9 @@ def build(
         settings: Configuration to use; defaults to :meth:`Settings.from_env`.
         on_state: Optional state-transition listener. Defaults to the console
             printer; the daemon passes one that also publishes to its event bus.
+        amplitude_sink: Optional callback fed normalized loudness (0..1) while
+            capturing speech and while speaking; the daemon passes the bus's
+            ``publish_amplitude`` so the orb reacts to real audio.
 
     Returns:
         A ready-to-run orchestrator. Constructing it loads the STT model, opens
@@ -155,12 +164,12 @@ def build(
 
     return Orchestrator(
         settings=settings,
-        audio=_build_audio_source(settings),
+        audio=_build_audio_source(settings, amplitude_sink),
         stt=FasterWhisperSTT(settings),
         llm=OllamaLanguageModel(settings, registry, transcript),
         gate=gate,
         wake_gate=_build_wake_gate(settings),
-        tts=_build_tts(settings),
+        tts=_build_tts(settings, amplitude_sink),
         transcript=transcript,
         on_state=on_state or _print_transition,
     )

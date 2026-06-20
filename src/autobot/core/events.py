@@ -40,10 +40,19 @@ class OrbState(enum.Enum):
 
 # Every internal State maps onto exactly one OrbState. A dict (not a function
 # body) so the mapping is explicit and a test can assert it is exhaustive.
+#
+# Key UX decision: in hands-free mode the engine is almost always in LISTENING /
+# TRANSCRIBING (it keeps the mic open and transcribes every phrase, then decides
+# from the text whether it was addressed). Surfacing that as the orb's
+# "listening" makes the orb never rest. So passive capture/transcribe map to
+# IDLE — the orb only comes alive once the assistant is genuinely engaged with an
+# addressed turn (PLANNING/EXECUTING → thinking, RESPONDING → talking). The
+# OrbState.LISTENING cue is reserved for an explicit wake signal (e.g. an
+# acoustic wake word), which a detector can publish directly when added.
 _STATE_TO_ORB: dict[State, OrbState] = {
     State.IDLE: OrbState.IDLE,
-    State.LISTENING: OrbState.LISTENING,
-    State.TRANSCRIBING: OrbState.THINKING,
+    State.LISTENING: OrbState.IDLE,
+    State.TRANSCRIBING: OrbState.IDLE,
     State.PLANNING: OrbState.THINKING,
     State.EXECUTING: OrbState.THINKING,
     State.RESPONDING: OrbState.TALKING,
@@ -87,6 +96,10 @@ class AmplitudeEvent:
 
 Subscriber = Callable[[dict[str, object]], None]
 """Called with each event's wire message. Must not block (drop/queue instead)."""
+
+AmplitudeSink = Callable[[float], None]
+"""Receives a normalized loudness sample (0..1). ``EventBus.publish_amplitude``
+satisfies this; components (mic capture, TTS) call it so the orb reacts live."""
 
 
 class EventBus:

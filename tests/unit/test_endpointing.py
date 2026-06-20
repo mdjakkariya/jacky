@@ -8,7 +8,20 @@ from autobot.io.endpointing import (
     FramePrebuffer,
     TrailingSilenceEndpointer,
     float_to_int16,
+    rms_level,
 )
+
+
+def test_rms_level_is_zero_for_silence_and_empty() -> None:
+    assert rms_level(np.zeros(512, dtype=np.float32)) == 0.0
+    assert rms_level(np.zeros(0, dtype=np.float32)) == 0.0
+
+
+def test_rms_level_clamps_to_unit_range_and_scales() -> None:
+    loud = np.ones(256, dtype=np.float32)  # RMS 1.0, well above ref
+    assert rms_level(loud) == 1.0
+    quiet = np.full(256, 0.06, dtype=np.float32)  # RMS 0.06, half of ref 0.12
+    assert 0.4 < rms_level(quiet) < 0.6
 
 
 def test_float_to_int16_scales_and_clips() -> None:

@@ -33,6 +33,20 @@ def float_to_int16(frame: AudioClip) -> Int16Frame:
     return (clipped * 32767.0).astype(np.int16)
 
 
+def rms_level(frame: AudioClip, ref: float = 0.12) -> float:
+    """Normalized loudness (0..1) of a ``float32`` PCM frame, for UI reactivity.
+
+    Computes the RMS and scales it by ``ref`` (a typical speech RMS), clamped to
+    ``0..1``. Drives the orb's reactive motion; it is a coarse visual signal, not
+    a calibrated meter. Pure and side-effect-free, so it is unit-tested directly.
+    """
+    if frame.size == 0:
+        return 0.0
+    rms = float(np.sqrt(np.mean(np.square(frame.astype(np.float64)))))
+    level = rms / ref if ref > 0 else 0.0
+    return 0.0 if level < 0.0 else 1.0 if level > 1.0 else level
+
+
 class TrailingSilenceEndpointer:
     """Detect end-of-speech: start on sustained speech, stop on trailing silence.
 

@@ -29,8 +29,14 @@ from typing import Protocol, runtime_checkable
 import numpy as np
 
 from autobot.config import Settings
+from autobot.core.events import AmplitudeSink
 from autobot.core.types import AudioClip
-from autobot.io.endpointing import FramePrebuffer, TrailingSilenceEndpointer, float_to_int16
+from autobot.io.endpointing import (
+    FramePrebuffer,
+    TrailingSilenceEndpointer,
+    float_to_int16,
+    rms_level,
+)
 from autobot.io.wake_vad import VoiceActivity, WakeDetector
 from autobot.logging_setup import get_logger
 
@@ -114,6 +120,7 @@ def capture_utterance(
     max_frames: int,
     wait_frames: int | None,
     seed: Sequence[AudioClip] = (),
+    on_level: AmplitudeSink | None = None,
 ) -> AudioClip | None:
     """Capture one VAD-delimited utterance from a frame stream.
 
@@ -122,6 +129,9 @@ def capture_utterance(
     endpoint or ``max_frames``. Waits up to ``wait_frames`` for speech to start
     (``None`` = wait indefinitely). Returns the clip, or ``None`` if no speech
     started — so STT is never fed silence (Whisper hallucinates on it).
+
+    If ``on_level`` is given, each processed frame's normalized loudness is
+    reported to it (drives the orb while listening); it must not block.
     """
     endpointer = TrailingSilenceEndpointer(
         speech_threshold=vad_threshold,
@@ -141,6 +151,8 @@ def capture_utterance(
             yield frame
 
     for frame in stream():
+        if on_level is not None:
+            on_level(rms_level(frame))
         endpointer.update(vad.speech_prob(frame))
         if collected is None:
             # Still waiting for speech to begin: keep a rolling pre-roll.
@@ -170,11 +182,13 @@ class WakeWordVadRecorder:
         source: FrameSource,
         wake: WakeDetector,
         vad: VoiceActivity,
+        on_level: AmplitudeSink | None = None,
     ) -> None:
         self._settings = settings
         self._source = source
         self._wake = wake
         self._vad = vad
+        self._on_level = on_level
         self._frames: Iterator[AudioClip] | None = None
         self._end_silence_frames = max(1, round(settings.end_silence_ms / _FRAME_MS))
         self._max_frames = max(1, round(settings.max_utterance_s * 1000 / _FRAME_MS))
@@ -200,6 +214,7 @@ class WakeWordVadRecorder:
             max_frames=self._max_frames,
             wait_frames=wait_frames,
             seed=seed,
+            on_level=self._on_level,
         )
 
     def record_clip(self) -> AudioClip:
@@ -272,10 +287,17 @@ class VadRecorder:
     contract, so the orchestrator is unchanged.
     """
 
-    def __init__(self, settings: Settings, source: FrameSource, vad: VoiceActivity) -> None:
+    def __init__(
+        self,
+        settings: Settings,
+        source: FrameSource,
+        vad: VoiceActivity,
+        on_level: AmplitudeSink | None = None,
+    ) -> None:
         self._settings = settings
         self._source = source
         self._vad = vad
+        self._on_level = on_level
         self._frames: Iterator[AudioClip] | None = None
         self._end_silence_frames = max(1, round(settings.end_silence_ms / _FRAME_MS))
         self._max_frames = max(1, round(settings.max_utterance_s * 1000 / _FRAME_MS))
@@ -297,6 +319,7 @@ class VadRecorder:
             end_silence_frames=self._end_silence_frames,
             max_frames=self._max_frames,
             wait_frames=None,  # wait indefinitely for speech
+            on_level=self._on_level,
         )
         if clip is None:
             return np.zeros(0, dtype=np.float32)

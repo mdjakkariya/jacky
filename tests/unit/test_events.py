@@ -19,9 +19,11 @@ def test_every_internal_state_maps_to_an_orb_state() -> None:
 
 
 def test_state_collapsing_is_what_we_expect() -> None:
+    # Passive capture/transcribe read as IDLE so the orb rests until the
+    # assistant is genuinely engaged with an addressed turn.
     assert orb_state_for(State.IDLE) is OrbState.IDLE
-    assert orb_state_for(State.LISTENING) is OrbState.LISTENING
-    assert orb_state_for(State.TRANSCRIBING) is OrbState.THINKING
+    assert orb_state_for(State.LISTENING) is OrbState.IDLE
+    assert orb_state_for(State.TRANSCRIBING) is OrbState.IDLE
     assert orb_state_for(State.PLANNING) is OrbState.THINKING
     assert orb_state_for(State.EXECUTING) is OrbState.THINKING
     assert orb_state_for(State.RESPONDING) is OrbState.TALKING

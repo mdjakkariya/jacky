@@ -63,8 +63,8 @@ A privacy-first, zero-cost, on-device personal assistant. Reference to follow du
 ## Phase 3 — Voice output + terminal UI
 
 - [x] TTS: Piper (CPU/fast tier), Kokoro (GPU quality tier) — behind the TTS interface — **Phase 3a done (2026-06-19):** `TextToSpeech` protocol + `tts/piper_tts.py` (Piper) + `NullTTS` fallback; orchestrator speaks replies; `AUTOBOT_TTS` / `AUTOBOT_TTS_VOICE`; optional `tts` extra.
-- [~] Terminal client (Textual) connecting to the daemon API; add the animation here — **Phase 3b in progress:** the headless daemon exists — `daemon/server.py` (FastAPI + localhost-only WebSocket `/ws`, `/healthz`), `core/events.py` (`OrbState` + `orb_state_for` + thread-safe `EventBus`), wired via `app.build(on_state=…)` and `daemon/runner.py` (`serve` / `serve_demo`); run with `python -m autobot.daemon [--demo]`, optional `daemon` extra. State transitions stream live. **Still pending:** real mic/TTS amplitude sourcing, and the Textual thin client.
-- [ ] **Done when:** the assistant speaks its replies and the terminal shows live state. (Speaks ✅; daemon + state stream ✅; amplitude + terminal UI pending.)
+- [~] Terminal client (Textual) connecting to the daemon API; add the animation here — **Phase 3b in progress:** the headless daemon exists — `daemon/server.py` (FastAPI + localhost-only WebSocket `/ws`, `/healthz`), `core/events.py` (`OrbState` + `orb_state_for` + thread-safe `EventBus`), wired via `app.build(on_state=…, amplitude_sink=…)` and `daemon/runner.py` (`serve` / `serve_demo`); run with `python -m autobot.daemon [--demo]`, optional `daemon` extra. State transitions AND live amplitude stream: mic RMS while listening (`io/listening.capture_utterance` → `rms_level`), TTS RMS while talking (`tts/piper_tts` block playback). **Still pending:** the Textual terminal thin client (the `ui/orb/index.html` web client already consumes the stream).
+- [ ] **Done when:** the assistant speaks its replies and the terminal shows live state. (Speaks ✅; daemon + state + amplitude stream ✅; Textual terminal UI pending.)
 
 ### Phase 3c — Floating orb desktop UI ("Jack") — PLANNED
 
