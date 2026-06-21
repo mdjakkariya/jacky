@@ -22,12 +22,30 @@ def test_extract_command_wake_word_only_returns_empty_string() -> None:
 
 def test_extract_command_no_wake_word_returns_none() -> None:
     assert extract_command("turn on the lights", "jarvis") is None
-    # Too far into the sentence to be an address.
-    assert extract_command("so anyway i told jarvis to wait", "jarvis") is None
+    # Whole-token match: "jacket" must not trigger the "jack" wake word.
+    assert extract_command("hang up my jacket", "jack") is None
 
 
 def test_extract_command_matches_last_token_of_multiword_phrase() -> None:
     assert extract_command("hey jarvis play music", "hey jarvis") == "play music"
+
+
+def test_extract_command_strips_trailing_wake_phrase() -> None:
+    # People address the assistant at the end too: "open spotify, jack".
+    assert extract_command("can you open spotify jack", "jack") == "can you open spotify"
+    assert extract_command("turn on the kitchen lights jarvis", "jarvis") == (
+        "turn on the kitchen lights"
+    )
+
+
+def test_extract_command_handles_mid_sentence_wake_word_with_two_actions() -> None:
+    # Wake word in the middle, addressed, two commands in one breath: keep both.
+    assert extract_command("open spotify jack and also close the vscode", "jack") == (
+        "open spotify and also close the vscode"
+    )
+    assert extract_command("jarvis open mail and then check the weather", "jarvis") == (
+        "open mail and then check the weather"
+    )
 
 
 def test_passthrough_gate_treats_everything_as_command() -> None:

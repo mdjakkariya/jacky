@@ -5,10 +5,11 @@ Two strategies behind one :class:`WakeGate` protocol:
 * :class:`PassThroughGate` — every utterance is a command (used when the wake
   word was already handled upstream, e.g. openWakeWord or push-to-talk).
 * :class:`SttWakeGate` — the "transcribe-then-match" detector: a transcript is a
-  command only if it starts with the wake phrase (which is then stripped), or if
-  we're inside the follow-up window after a recent turn. This is what makes a
-  wake word work even when spoken continuously ("hey jarvis what's the time"),
-  because matching happens on Whisper's text rather than the raw audio.
+  command if the wake phrase appears anywhere in it (and is stripped out), or if
+  we're inside the follow-up window after a recent turn. Matching on Whisper's text
+  (not the raw audio) is what lets the wake word work spoken continuously and in any
+  position — "hey jarvis what's the time", "open spotify jarvis", or mid-sentence
+  with several actions ("open spotify jarvis and also close vscode").
 
 The matching logic (:func:`extract_command`) is a pure function, easy to test.
 """
@@ -23,6 +24,10 @@ from dataclasses import dataclass
 from typing import Protocol, runtime_checkable
 
 _TOKEN = re.compile(r"[a-z0-9']+")
+
+# Filler that may precede the wake word in a *leading* address ("hey jack…",
+# "ok jarvis…"). Anything else before the wake word means it's not a lead-in.
+_LEAD_FILLER = frozenset({"hey", "hi", "hello", "ok", "okay", "um", "uh", "yo", "so", "well"})
 
 
 class Address(enum.Enum):
@@ -42,27 +47,31 @@ class WakeResult:
     detail: str = ""  # debug context, e.g. follow-up window timing
 
 
-def extract_command(text: str, phrase: str, max_lead_words: int = 4) -> str | None:
-    """Strip a leading wake phrase and return the command that follows.
+def extract_command(text: str, phrase: str) -> str | None:
+    """Detect the wake word anywhere in the transcript and return the command.
 
-    The wake word matches if the phrase's salient token (its last word, e.g.
-    ``"jarvis"``) appears within the first ``max_lead_words`` tokens — tolerant of
-    Whisper's leading filler ("hey", "hi", "ok", punctuation).
+    People address the assistant in every position — "Jack, open Spotify", "open
+    Spotify, jack", and even mid-sentence with several actions ("open spotify jack
+    and also close vscode"). So if the salient token (the phrase's last word, e.g.
+    ``"jack"``) appears *anywhere*, the utterance is addressed; the command is the
+    transcript with the wake word removed and any leading filler ("hey", "ok")
+    trimmed. Matching is whole-token, so "jacket"/"hijack" don't trigger it.
 
     Returns:
-        The command text after the wake word; ``""`` if only the wake word was
-        said; or ``None`` if the wake word isn't present near the start.
+        The command text (wake word removed); ``""`` if only the wake word (± filler)
+        was said; or ``None`` if the wake word isn't present at all.
     """
     tokens = _TOKEN.findall(text.lower())
     phrase_tokens = _TOKEN.findall(phrase.lower())
     if not phrase_tokens:
         return None
     key = phrase_tokens[-1]
-    lead = tokens[:max_lead_words]
-    if key not in lead:
+    if key not in tokens:
         return None
-    idx = lead.index(key)
-    return " ".join(tokens[idx + 1 :])
+    command = [t for t in tokens if t != key]
+    while command and command[0] in _LEAD_FILLER:
+        command.pop(0)  # drop a leftover "hey"/"ok" lead-in
+    return " ".join(command)
 
 
 @runtime_checkable
