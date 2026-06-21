@@ -78,8 +78,15 @@ def _build_transcript(settings: Settings) -> Transcript:
     """Open a per-session transcript file (or a no-op if disabled)."""
     if not settings.session_log:
         return NullTranscript()
+    # Reflect the *active* brain so the log is truthful: cloud turns must not be
+    # labelled with the local model name (and vice-versa).
+    llm_label = (
+        f"claude/{settings.anthropic_model}"
+        if settings.llm_provider == "anthropic"
+        else settings.llm_model
+    )
     header = (
-        f"model: {settings.llm_model} · stt: {settings.stt_model} · "
+        f"model: {llm_label} · stt: {settings.stt_model} · "
         f"input: {settings.input_mode}/{settings.wake_detector}"
     )
     transcript = FileTranscript(settings.session_dir, header)

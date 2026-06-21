@@ -116,7 +116,7 @@
         <div class="card" style="margin-top:14px">
           <div class="stack"><label for="anthropicModel">Claude model</label>
             <select id="anthropicModel"></select>
-            <input type="text" id="anthropicModelCustom" class="hidden" placeholder="model id, e.g. claude-3-5-haiku-latest" style="margin-top:8px" /></div>
+            <input type="text" id="anthropicModelCustom" class="hidden" placeholder="model id, e.g. claude-haiku-4-5" style="margin-top:8px" /></div>
           <div class="stack"><label for="anthropicKey">API key <span id="keyState" class="hint" style="font-weight:400"></span></label>
             <input type="password" id="anthropicKey" placeholder="sk-ant-…" autocomplete="off" />
             <div class="hint">Stored securely in your macOS Keychain.</div></div>
@@ -189,9 +189,9 @@
   // Suggested Claude models (fast, tool-capable). Plus a "Custom…" escape hatch
   // so newer model names aren't locked out.
   var CLAUDE_SUGGESTIONS = [
-    "claude-3-5-haiku-latest",
-    "claude-3-5-sonnet-latest",
-    "claude-3-7-sonnet-latest",
+    "claude-haiku-4-5",
+    "claude-sonnet-4-6",
+    "claude-opus-4-8",
   ];
 
   function setProviderUI(p){

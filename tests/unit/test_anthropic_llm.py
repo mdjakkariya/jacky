@@ -13,6 +13,7 @@ from autobot.config import Settings
 from autobot.core.types import ToolCall, ToolResult
 from autobot.llm.anthropic_llm import (
     AnthropicLanguageModel,
+    cloud_error_reply,
     parse_tool_uses,
     text_from_content,
     to_anthropic_tools,
@@ -113,6 +114,42 @@ def test_run_turn_no_tools_returns_text() -> None:
     responses = [SimpleNamespace(content=[_block(type="text", text="Hello there.")])]
     model = AnthropicLanguageModel(Settings(), _registry(), client=FakeClient(responses))
     assert model.run_turn("hi", lambda c: ToolResult(name=c.name, content="")) == "Hello there."
+
+
+class BoomMessages:
+    """A messages client whose create() always raises an API-style error."""
+
+    def __init__(self, exc: Exception) -> None:
+        self._exc = exc
+
+    def create(self, **_kwargs: Any) -> Any:
+        raise self._exc
+
+
+class BoomClient:
+    def __init__(self, exc: Exception) -> None:
+        self.messages = BoomMessages(exc)
+
+
+def test_cloud_error_reply_is_calm_and_never_speaks_raw_api_text() -> None:
+    # A noisy 404/limit body must NOT be read aloud — just a short, calm reply.
+    err = RuntimeError("Error code: 404")
+    err.body = {"error": {"message": "model: claude-3-5-haiku-latest"}}  # type: ignore[attr-defined]
+    reply = cloud_error_reply(err)
+    assert "isn't responding" in reply
+    assert "try again" in reply and "Settings" in reply
+    assert "404" not in reply and "claude-3-5-haiku" not in reply  # nothing raw spoken
+
+
+def test_run_turn_returns_calm_reply_on_api_error() -> None:
+    err = RuntimeError("Error code: 404")
+    err.body = {"error": {"message": "model: claude-3-5-haiku-latest"}}  # type: ignore[attr-defined]
+    model = AnthropicLanguageModel(
+        Settings(llm_provider="anthropic"), _registry(), client=BoomClient(err)
+    )
+    reply = model.run_turn("how are you", lambda c: ToolResult(name=c.name, content=""))
+    assert "isn't responding" in reply
+    assert "404" not in reply
 
 
 def test_system_prompt_includes_memory_when_present() -> None:

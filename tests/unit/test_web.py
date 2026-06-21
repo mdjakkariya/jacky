@@ -15,6 +15,9 @@ def _fake_results(_query: str, _max: int) -> list[dict[str, str]]:
 
 
 def _tool(primary: object = None, fallback: object = None, **overrides: object) -> WebSearchTool:
+    # Default to the keyless "ddgs" provider so the default-primary path never
+    # reads the real Keychain / hits the network during tests (isolation).
+    overrides.setdefault("web_provider", "ddgs")
     return WebSearchTool(
         Settings(**overrides),  # type: ignore[arg-type]
         primary=primary,  # type: ignore[arg-type]

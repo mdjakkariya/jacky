@@ -78,6 +78,19 @@ def text_from_content(content: Any) -> str:
     return " ".join(p.strip() for p in parts if p.strip()).strip()
 
 
+def cloud_error_reply(_exc: Exception) -> str:
+    """A short, calm spoken reply when the cloud model can't be reached.
+
+    The real cause (usage limit, bad key, outage) is logged by the caller; we
+    deliberately do **not** speak the raw API error — read aloud it's long, noisy,
+    and unhelpful. The user just needs to know it's temporary and what to do now.
+    """
+    return (
+        "The cloud model isn't responding right now. You can try again in a little "
+        "while, or switch to the local model in Settings for an immediate response."
+    )
+
+
 def _block_to_dict(block: Any) -> dict[str, Any]:
     """Reconstruct an assistant content block as a dict to send back to the API."""
     kind = _get(block, "type")
@@ -134,14 +147,18 @@ class AnthropicLanguageModel:
 
         reply = ""
         for _ in range(_MAX_TOOL_ROUNDS):
-            resp = self._client.messages.create(
-                model=self._settings.anthropic_model,
-                max_tokens=self._settings.anthropic_max_tokens,
-                temperature=self._settings.llm_temperature,
-                system=self._system(),
-                messages=messages,
-                tools=tools,
-            )
+            try:
+                resp = self._client.messages.create(
+                    model=self._settings.anthropic_model,
+                    max_tokens=self._settings.anthropic_max_tokens,
+                    temperature=self._settings.llm_temperature,
+                    system=self._system(),
+                    messages=messages,
+                    tools=tools,
+                )
+            except Exception as exc:  # cloud rejected/unreachable — stay useful
+                _log.warning("cloud request failed: %s", exc)
+                return cloud_error_reply(exc)
             content = _get(resp, "content") or []
             calls = parse_tool_uses(content)
             if not calls:

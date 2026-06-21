@@ -31,7 +31,7 @@ _DEFAULT_OLLAMA_HOST = "http://127.0.0.1:11434"
 _DEFAULT_LLM_MAX_TOKENS = 120
 # A fast, strong tool-calling Claude (NOT a coding model). Model names change, so
 # this is just a sensible default the user can change in the Settings view.
-_DEFAULT_ANTHROPIC_MODEL = "claude-3-5-haiku-latest"
+_DEFAULT_ANTHROPIC_MODEL = "claude-haiku-4-5"
 _DEFAULT_STT_MODEL = "small.en"
 _DEFAULT_STT_DEVICE = "cpu"
 _DEFAULT_STT_COMPUTE_TYPE = "int8"
