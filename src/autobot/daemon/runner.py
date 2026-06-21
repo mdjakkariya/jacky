@@ -78,7 +78,7 @@ def serve(settings: Settings | None = None) -> None:
         bus,
         settings.daemon_host,
         settings.daemon_port,
-        on_change=orchestrator.mark_llm_dirty,
+        on_change=orchestrator.mark_settings_changed,
     )
 
 

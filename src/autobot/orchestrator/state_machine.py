@@ -122,6 +122,7 @@ class Orchestrator:
         self._memory = memory
         self._sm = StateMachine(on_change=on_state)
         self._acknowledged = False  # spoke a filler this turn?
+        self._dismissed = False  # did this turn call the dismiss tool ("go away")?
 
     def _greeting(self) -> str:
         """The reply to a bare wake word — name-aware, and a first hello if new."""
@@ -150,9 +151,24 @@ class Orchestrator:
         if callable(reload_fn):
             reload_fn()
 
+    def mark_stt_dirty(self) -> None:
+        """Ask the STT engine to reload its model before the next transcription."""
+        reload_fn = getattr(self._stt, "mark_dirty", None)
+        if callable(reload_fn):
+            reload_fn()
+
+    def mark_settings_changed(self) -> None:
+        """Reload everything a settings change can affect (LLM + STT), no restart."""
+        self.mark_llm_dirty()
+        self.mark_stt_dirty()
+
     def _execute(self, call: ToolCall) -> ToolResult:
         """Executor handed to the LLM: mark EXECUTING and run through the gate."""
         self._sm.transition(State.EXECUTING)
+        if call.name == "dismiss":
+            # The user asked Jack to go away: don't keep a follow-up window open —
+            # require the wake word to come back (handled after the turn).
+            self._dismissed = True
         # Acknowledge once per turn so a slow tool call isn't silent.
         if self._settings.speak_acknowledgements and not self._acknowledged:
             self._acknowledged = True
@@ -210,6 +226,7 @@ class Orchestrator:
 
         self._sm.transition(State.PLANNING)
         self._acknowledged = False  # reset per turn; _execute may speak a filler
+        self._dismissed = False  # reset per turn; set if the dismiss tool runs
         started = time.perf_counter()
         reply = self._llm.run_turn(command, self._execute)
         elapsed_ms = int((time.perf_counter() - started) * 1000)
@@ -219,7 +236,11 @@ class Orchestrator:
         print(f"[autobot] {reply}\n")
         self._transcript.assistant(reply)
         self._tts.speak(reply)
-        self._wake_gate.mark_turn_complete()
+        if self._dismissed:
+            # Dismissed: close the follow-up window so only the wake word returns.
+            self._wake_gate.end_follow_up()
+        else:
+            self._wake_gate.mark_turn_complete()
         self._sm.transition(State.IDLE)
 
     def run(self) -> None:

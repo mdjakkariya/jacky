@@ -256,10 +256,16 @@ def build(
 
     llm = ReloadableLanguageModel(lambda: _build_llm(Settings.load(), registry, transcript, memory))
 
+    # Reloadable STT: rebuilt (new model loaded) when the Settings view changes
+    # the speech model — no restart needed (applies on the next transcription).
+    from autobot.stt.reloadable import ReloadableSTT
+
+    stt = ReloadableSTT(lambda: FasterWhisperSTT(Settings.load()))
+
     return Orchestrator(
         settings=settings,
         audio=_build_audio_source(settings, amplitude_sink),
-        stt=FasterWhisperSTT(settings),
+        stt=stt,
         llm=llm,
         gate=gate,
         wake_gate=_build_wake_gate(settings),

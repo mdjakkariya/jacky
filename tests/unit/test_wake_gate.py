@@ -66,3 +66,17 @@ def test_stt_gate_follow_up_window_lapses() -> None:
 
     now["t"] = 20.0  # well past the window
     assert gate.process("turn on the lights").address is Address.IGNORED
+
+
+def test_stt_gate_end_follow_up_requires_wake_word_again() -> None:
+    # After a dismiss, end_follow_up() must close the window so the very next
+    # utterance (even if immediate) is ignored unless it has the wake word.
+    now = {"t": 0.0}
+    gate = SttWakeGate("jarvis", follow_up_window_s=30.0, clock=lambda: now["t"])
+    gate.process("jarvis go away")
+    gate.end_follow_up()  # dismissed — don't keep listening
+
+    now["t"] = 2.0  # well within what would have been the follow-up window
+    assert gate.process("actually do this").address is Address.IGNORED
+    # The wake word still brings it back.
+    assert gate.process("jarvis what time is it").address is Address.COMMAND

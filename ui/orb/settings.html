@@ -161,6 +161,10 @@
           <input type="text" id="wake_phrase" style="width:140px" /></div>
         <div class="row"><span class="grow"><span class="label">Follow-up window</span><div class="desc">Seconds to keep listening (0 = always need wake word)</div></span>
           <input type="number" id="follow_up_window_s" min="0" max="120" step="1" /></div>
+        <div class="stack" style="margin-top:4px"><label for="sttModel">Speech model (accuracy)</label>
+          <select id="sttModel"></select>
+          <input type="text" id="sttModelCustom" class="hidden" placeholder="whisper model id, e.g. medium.en" style="margin-top:8px" />
+          <div class="hint">Bigger = more accurate but more CPU per phrase. Applies on your next phrase (no restart); the first use downloads the model.</div></div>
       </div>
     </section>
   </main>
@@ -192,6 +196,18 @@
     "claude-haiku-4-5",
     "claude-sonnet-4-6",
     "claude-opus-4-8",
+  ];
+
+  // Suggested speech (faster-whisper) models, smallest/fastest → largest/most
+  // accurate. English-only `.en` builds preferred; distil-large-v3 is the best
+  // accuracy-per-second. "Custom…" lets a newer model id through.
+  var STT_SUGGESTIONS = [
+    "tiny.en",
+    "base.en",
+    "small.en",
+    "medium.en",
+    "distil-large-v3",
+    "large-v3",
   ];
 
   function setProviderUI(p){
@@ -226,6 +242,29 @@
     return v === "__custom__" ? $("anthropicModelCustom").value.trim() : v;
   }
 
+  function populateSttModels(current){
+    var sel = $("sttModel"); sel.innerHTML = "";
+    STT_SUGGESTIONS.forEach(function(m){
+      var o = document.createElement("option"); o.value = m; o.textContent = m; sel.appendChild(o);
+    });
+    var custom = document.createElement("option"); custom.value = "__custom__"; custom.textContent = "Custom…";
+    sel.appendChild(custom);
+    if(current && STT_SUGGESTIONS.indexOf(current) === -1){
+      sel.value = "__custom__"; $("sttModelCustom").value = current;
+      $("sttModelCustom").classList.remove("hidden");
+    } else {
+      sel.value = current || "small.en";
+      $("sttModelCustom").classList.add("hidden");
+    }
+  }
+  $("sttModel").addEventListener("change", function(){
+    $("sttModelCustom").classList.toggle("hidden", $("sttModel").value !== "__custom__");
+  });
+  function selectedSttModel(){
+    var v = $("sttModel").value;
+    return v === "__custom__" ? $("sttModelCustom").value.trim() : v;
+  }
+
   function setEnabled(on){ ["save"].forEach(function(id){ $(id).disabled = !on; }); }
 
   function updateWebUI(){
@@ -249,6 +288,7 @@
     populateClaudeModels(s.anthropic_model || "");
     $("wake_phrase").value = s.wake_phrase || "";
     $("follow_up_window_s").value = s.follow_up_window_s != null ? s.follow_up_window_s : 30;
+    populateSttModels(s.stt_model || "");
     CHECKS.forEach(function(k){ $(k).checked = !!s[k]; });
     $("web_provider").value = s.web_provider || "auto";
     updateWebUI();
@@ -290,7 +330,8 @@
       anthropic_model: selectedClaudeModel(),
       web_provider: $("web_provider").value,
       wake_phrase: $("wake_phrase").value.trim(),
-      follow_up_window_s: Number($("follow_up_window_s").value)
+      follow_up_window_s: Number($("follow_up_window_s").value),
+      stt_model: selectedSttModel()
     };
     CHECKS.forEach(function(k){ body[k] = $(k).checked; });
     try {

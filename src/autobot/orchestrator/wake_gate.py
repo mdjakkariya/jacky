@@ -77,6 +77,10 @@ class WakeGate(Protocol):
         """Signal that a turn finished, so a follow-up window can (re)open."""
         ...
 
+    def end_follow_up(self) -> None:
+        """Close any follow-up window so the next utterance needs the wake word."""
+        ...
+
 
 class PassThroughGate:
     """Treats every (non-empty) transcript as a command."""
@@ -85,6 +89,9 @@ class PassThroughGate:
         return WakeResult(Address.COMMAND, text.strip())
 
     def mark_turn_complete(self) -> None:  # noqa: D102 - no follow-up state to keep
+        pass
+
+    def end_follow_up(self) -> None:  # noqa: D102 - no follow-up state to keep
         pass
 
 
@@ -140,3 +147,11 @@ class SttWakeGate:
     def mark_turn_complete(self) -> None:
         """Open/refresh the follow-up window from now."""
         self._last_turn_at = self._clock()
+
+    def end_follow_up(self) -> None:
+        """Forget the last turn so the follow-up window won't accept the next one.
+
+        Used when the user dismisses the assistant ("go away"): coming back should
+        require the wake word, not a lingering follow-up window.
+        """
+        self._last_turn_at = None
