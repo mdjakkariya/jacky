@@ -7,6 +7,7 @@ from autobot.core.events import (
     EventBus,
     OrbState,
     StateEvent,
+    VisibilityEvent,
     orb_state_for,
 )
 from autobot.core.types import State
@@ -34,6 +35,21 @@ def test_state_collapsing_is_what_we_expect() -> None:
 def test_event_messages_have_the_wire_shape() -> None:
     assert StateEvent(OrbState.LISTENING).message() == {"type": "state", "value": "listening"}
     assert AmplitudeEvent(0.5).message() == {"type": "amplitude", "value": 0.5}
+    assert VisibilityEvent(visible=False).message() == {"type": "visibility", "value": "hide"}
+    assert VisibilityEvent(visible=True).message() == {"type": "visibility", "value": "show"}
+
+
+def test_publish_visibility_broadcasts_without_changing_last_state() -> None:
+    bus = EventBus()
+    seen: list[dict[str, object]] = []
+    bus.subscribe(seen.append)
+
+    bus.publish_state(OrbState.TALKING)
+    bus.publish_visibility(visible=False)
+
+    assert seen[-1] == {"type": "visibility", "value": "hide"}
+    # A visibility request is not a state — last_state is unaffected.
+    assert bus.last_state is OrbState.TALKING
 
 
 def test_bus_broadcasts_state_to_subscribers_and_records_last() -> None:

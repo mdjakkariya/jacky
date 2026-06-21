@@ -35,6 +35,15 @@ def test_ws_replays_current_state_then_streams_events() -> None:
         assert ws.receive_json() == {"type": "amplitude", "value": 0.42}
 
 
+def test_ws_forwards_visibility_frames() -> None:
+    bus = EventBus()
+    client = TestClient(create_app(bus))
+    with client.websocket_connect("/ws") as ws:
+        assert ws.receive_json() == {"type": "state", "value": "idle"}  # replay
+        bus.publish_visibility(visible=False)
+        assert ws.receive_json() == {"type": "visibility", "value": "hide"}
+
+
 def test_run_daemon_refuses_non_loopback_bind() -> None:
     bus = EventBus()
     with pytest.raises(ValueError, match="loopback"):

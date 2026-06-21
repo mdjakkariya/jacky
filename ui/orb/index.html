@@ -150,6 +150,7 @@
       var msg;try{msg=JSON.parse(ev.data);}catch(e){return;}
       if(msg.type==="state"&&SC[msg.value]){var prev=state;state=msg.value;if(prev!==state)onStateChange(prev,state);}
       else if(msg.type==="amplitude"){liveAmp=Math.max(0,Math.min(1,+msg.value||0));}
+      else if(msg.type==="visibility"){ if(msg.value==="hide") requestHide(); else showOrb(); }
     };
     ws.onclose=function(){scheduleReconnect();};
     ws.onerror=function(){try{ws.close();}catch(e){}};
@@ -168,10 +169,49 @@
   var ENGAGED={listening:1,thinking:1,talking:1};
   function comeForwardEnabled(){ try{return localStorage.getItem("jackComeForward")!=="0";}catch(e){return true;} }
   function onStateChange(prev,next){
-    if(!tauriWin||!comeForwardEnabled()) return;
-    var was=ENGAGED[prev],now=ENGAGED[next];
-    if(!was&&now) comeForward();
-    else if(was&&!now) goBack();
+    if(!tauriWin) return;
+    // Presence: any engaged state shows the orb (this is how the wake word brings
+    // it back); returning to idle either honors a pending dismiss or restarts the
+    // idle auto-hide countdown.
+    if(next!=="idle") showOrb();
+    else if(pendingHide) hideOrb();
+    else scheduleIdleHide();
+    // Come-to-me glide (independent feature, separately toggleable).
+    if(comeForwardEnabled()){
+      var was=ENGAGED[prev],now=ENGAGED[next];
+      if(!was&&now) comeForward();
+      else if(was&&!now) goBack();
+    }
+  }
+
+  // --- auto-hide on idle + dismiss-by-voice (Tauri only) -----------------
+  // The orb tucks itself away after a spell of inactivity and reappears the
+  // moment Jack is engaged again (the wake word). Saying "go away" hides it too,
+  // but only after Jack finishes the goodbye — so we defer the hide until idle.
+  var IDLE_HIDE_MS=30000, idleTimer=null, orbHidden=false, pendingHide=false;
+  function autoHideEnabled(){ try{return localStorage.getItem("jackAutoHide")!=="0";}catch(e){return true;} }
+  function hideOrb(){
+    pendingHide=false; clearTimeout(idleTimer); idleTimer=null;
+    if(!tauriWin||orbHidden) return;
+    orbHidden=true; if(tauriWin.hide) tauriWin.hide();
+  }
+  function showOrb(){
+    clearTimeout(idleTimer); idleTimer=null;
+    if(!tauriWin||!orbHidden) return;
+    orbHidden=false;
+    if(tauriWin.show) tauriWin.show();
+    // Re-assert floating behavior in case show() reset it.
+    if(tauriWin.setAlwaysOnTop) tauriWin.setAlwaysOnTop(true);
+    if(tauriWin.setVisibleOnAllWorkspaces) tauriWin.setVisibleOnAllWorkspaces(true);
+  }
+  function scheduleIdleHide(){
+    clearTimeout(idleTimer); idleTimer=null;
+    if(!tauriWin||!autoHideEnabled()) return;
+    idleTimer=setTimeout(hideOrb,IDLE_HIDE_MS);
+  }
+  function requestHide(){
+    if(!tauriWin) return;
+    if(state==="idle") hideOrb(); else pendingHide=true;  // wait for the goodbye
   }
   function glideTo(tx,ty){
     if(!tauriWin||!tauriApi||!tauriApi.PhysicalPosition) return;
@@ -244,6 +284,10 @@
         var s=ev&&ev.payload?ev.payload:ev;
         if(s && typeof s.width==="number") localStorage.setItem(SIZE_KEY, JSON.stringify({w:s.width,h:s.height}));
       });
+
+      // Fresh launch starts idle — begin the auto-hide countdown so an untouched
+      // orb tucks itself away (it returns on the wake word).
+      scheduleIdleHide();
     }catch(e){ console.warn("tauri init failed",e); }
   }
 })();

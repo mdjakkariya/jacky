@@ -68,6 +68,7 @@ def serve(settings: Settings | None = None) -> None:
         settings,
         on_state=make_state_listener(bus),
         amplitude_sink=make_amplitude_sink(bus),
+        on_visibility=bus.publish_visibility,
     )
     thread = threading.Thread(target=orchestrator.run, name="engine", daemon=True)
     thread.start()

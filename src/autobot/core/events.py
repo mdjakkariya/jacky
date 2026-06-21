@@ -80,6 +80,22 @@ class StateEvent:
 
 
 @dataclass(frozen=True, slots=True)
+class VisibilityEvent:
+    """A request for the UI to show or hide itself (e.g. a voice 'go away').
+
+    Distinct from a state: it doesn't describe what the assistant is *doing*, it
+    asks the orb to tuck away or come back. Showing again is normally automatic
+    (the wake word re-engages the assistant), so this is mostly used to hide.
+    """
+
+    visible: bool
+
+    def message(self) -> dict[str, object]:
+        """Serialize to the wire shape clients consume."""
+        return {"type": "visibility", "value": "show" if self.visible else "hide"}
+
+
+@dataclass(frozen=True, slots=True)
 class AmplitudeEvent:
     """A normalized loudness sample (0..1), meaningful while listening/talking.
 
@@ -100,6 +116,10 @@ Subscriber = Callable[[dict[str, object]], None]
 AmplitudeSink = Callable[[float], None]
 """Receives a normalized loudness sample (0..1). ``EventBus.publish_amplitude``
 satisfies this; components (mic capture, TTS) call it so the orb reacts live."""
+
+VisibilitySink = Callable[[bool], None]
+"""Receives a UI show/hide request (True=show, False=hide). The orb's ``dismiss``
+tool calls it with ``False``; ``EventBus.publish_visibility`` satisfies it."""
 
 
 class EventBus:
@@ -146,6 +166,10 @@ class EventBus:
         """Broadcast a loudness sample, clamped to ``0.0..1.0``."""
         clamped = 0.0 if value < 0.0 else 1.0 if value > 1.0 else value
         self._emit(AmplitudeEvent(clamped).message())
+
+    def publish_visibility(self, visible: bool) -> None:
+        """Broadcast a UI show/hide request (does not change ``last_state``)."""
+        self._emit(VisibilityEvent(visible).message())
 
     def _emit(self, message: dict[str, object]) -> None:
         with self._lock:

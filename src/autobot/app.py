@@ -14,7 +14,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from autobot.config import Settings
-from autobot.core.events import AmplitudeSink
+from autobot.core.events import AmplitudeSink, VisibilitySink
 from autobot.core.interfaces import AudioSource, LanguageModel, TextToSpeech
 from autobot.io.audio import PushToTalkRecorder
 from autobot.llm.ollama_llm import OllamaLanguageModel
@@ -160,6 +160,7 @@ def build(
     settings: Settings | None = None,
     on_state: StateListener | None = None,
     amplitude_sink: AmplitudeSink | None = None,
+    on_visibility: VisibilitySink | None = None,
 ) -> Orchestrator:
     """Compose a fully wired :class:`Orchestrator`.
 
@@ -170,6 +171,9 @@ def build(
         amplitude_sink: Optional callback fed normalized loudness (0..1) while
             capturing speech and while speaking; the daemon passes the bus's
             ``publish_amplitude`` so the orb reacts to real audio.
+        on_visibility: Optional show/hide sink for the UI. When given, the
+            voice ``dismiss`` tool is registered and wired to hide the orb; the
+            daemon passes the bus's ``publish_visibility``.
 
     Returns:
         A ready-to-run orchestrator. Constructing it loads the STT model, opens
@@ -230,6 +234,14 @@ def build(
         provider = "API" if using_api else "ddgs scraping"
         log.info("web search ENABLED provider=%s (queries leave the device)", provider)
         print(f"[web] web search ENABLED via {provider} — queries leave the device.")
+
+    if on_visibility is not None:
+        # A UI is attached: let the user dismiss the orb by voice ("go away").
+        from autobot.tools.orb import register_orb_tools
+
+        visibility = on_visibility
+        register_orb_tools(registry, lambda: visibility(False))
+        log.info("orb dismiss tool ENABLED")
 
     # Permission gate: audit everything, confirm destructive actions only.
     audit = AuditLog(settings.audit_db)
