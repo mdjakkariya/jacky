@@ -33,6 +33,21 @@ _log = get_logger("llm")
 _MAX_TOOL_ROUNDS = 6  # cap the plan→tool→result loop so it can't spin forever
 _HARD_MAX_MESSAGES = 100
 
+# Approximate list prices in USD per million tokens (input, output), for a *cost
+# estimate* in the log — this is debugging signal, not billing. Add/adjust entries
+# as Anthropic's pricing changes; unknown models simply log tokens without a cost.
+_PRICING_USD_PER_MTOK: dict[str, tuple[float, float]] = {
+    "claude-haiku-4-5": (1.0, 5.0),
+}
+
+
+def estimate_cost_usd(model: str, in_tokens: int, out_tokens: int) -> float | None:
+    """Rough USD cost for a call, or None if the model's price isn't known here."""
+    price = _PRICING_USD_PER_MTOK.get(model)
+    if price is None:
+        return None
+    return in_tokens / 1_000_000 * price[0] + out_tokens / 1_000_000 * price[1]
+
 
 def _get(obj: Any, key: str) -> Any:
     """Read ``key`` from a dict or as an attribute (SDK blocks are objects)."""
@@ -121,6 +136,10 @@ class AnthropicLanguageModel:
         self._transcript = transcript or NullTranscript()
         self._memory = memory
         self._history: list[dict[str, Any]] = []
+        # Running token/cost tally for the process, surfaced in the log each turn.
+        self._session_in = 0
+        self._session_out = 0
+        self._session_cost = 0.0
         if client is not None:  # injected (tests)
             self._client = client
         else:
@@ -129,6 +148,36 @@ class AnthropicLanguageModel:
             key = api_key or _require_key()
             self._client = anthropic.Anthropic(api_key=key)
         _log.info("cloud LLM ready model=%s", settings.anthropic_model)
+
+    def _log_usage(self, turn_in: int, turn_out: int) -> None:
+        """Log this turn's context size and an estimated cost, plus a session total."""
+        if turn_in == 0 and turn_out == 0:
+            return  # no usage reported (e.g. the request failed before any response)
+        model = self._settings.anthropic_model
+        self._session_in += turn_in
+        self._session_out += turn_out
+        cost = estimate_cost_usd(model, turn_in, turn_out)
+        if cost is not None:
+            self._session_cost += cost
+            _log.info(
+                "cloud usage model=%s context_tokens=%d output_tokens=%d "
+                "est_cost_usd=%.5f session_tokens=%d session_cost_usd=%.5f",
+                model,
+                turn_in,
+                turn_out,
+                cost,
+                self._session_in + self._session_out,
+                self._session_cost,
+            )
+        else:
+            _log.info(
+                "cloud usage model=%s context_tokens=%d output_tokens=%d "
+                "est_cost_usd=n/a session_tokens=%d",
+                model,
+                turn_in,
+                turn_out,
+                self._session_in + self._session_out,
+            )
 
     def _system(self) -> str:
         """System prompt + the injected memory profile (same as the local model)."""
@@ -146,6 +195,7 @@ class AnthropicLanguageModel:
         messages.append({"role": "user", "content": user_text})
 
         reply = ""
+        turn_in = turn_out = 0
         for _ in range(_MAX_TOOL_ROUNDS):
             try:
                 resp = self._client.messages.create(
@@ -159,6 +209,10 @@ class AnthropicLanguageModel:
             except Exception as exc:  # cloud rejected/unreachable — stay useful
                 _log.warning("cloud request failed: %s", exc)
                 return cloud_error_reply(exc)
+            usage = _get(resp, "usage")
+            # input_tokens is the size of the context we sent on this call.
+            turn_in += int(_get(usage, "input_tokens") or 0)
+            turn_out += int(_get(usage, "output_tokens") or 0)
             content = _get(resp, "content") or []
             calls = parse_tool_uses(content)
             if not calls:
@@ -188,6 +242,7 @@ class AnthropicLanguageModel:
         else:
             reply = reply or "Sorry, that took too many steps."
 
+        self._log_usage(turn_in, turn_out)
         self._history.append({"role": "user", "content": user_text})
         self._history.append({"role": "assistant", "content": reply})
         self._history = self._history[-_HARD_MAX_MESSAGES:]

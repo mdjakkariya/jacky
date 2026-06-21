@@ -14,6 +14,7 @@ from autobot.core.types import ToolCall, ToolResult
 from autobot.llm.anthropic_llm import (
     AnthropicLanguageModel,
     cloud_error_reply,
+    estimate_cost_usd,
     parse_tool_uses,
     text_from_content,
     to_anthropic_tools,
@@ -150,6 +151,28 @@ def test_run_turn_returns_calm_reply_on_api_error() -> None:
     reply = model.run_turn("how are you", lambda c: ToolResult(name=c.name, content=""))
     assert "isn't responding" in reply
     assert "404" not in reply
+
+
+def test_estimate_cost_usd_known_model() -> None:
+    # Haiku 4.5 is $1/$5 per MTok: 1M in + 1M out = $1 + $5 = $6.
+    assert estimate_cost_usd("claude-haiku-4-5", 1_000_000, 1_000_000) == 6.0
+
+
+def test_estimate_cost_usd_unknown_model_returns_none() -> None:
+    assert estimate_cost_usd("some-future-model", 100, 100) is None
+
+
+def test_run_turn_accumulates_token_usage() -> None:
+    resp = SimpleNamespace(
+        content=[_block(type="text", text="Hi.")],
+        usage=SimpleNamespace(input_tokens=120, output_tokens=8),
+    )
+    model = AnthropicLanguageModel(
+        Settings(llm_provider="anthropic"), _registry(), client=FakeClient([resp])
+    )
+    model.run_turn("hi", lambda c: ToolResult(name=c.name, content=""))
+    assert model._session_in == 120
+    assert model._session_out == 8
 
 
 def test_system_prompt_includes_memory_when_present() -> None:
