@@ -96,6 +96,26 @@ class VisibilityEvent:
 
 
 @dataclass(frozen=True, slots=True)
+class ConfirmEvent:
+    """The assistant needs the user to approve a risky action (shows a card)."""
+
+    prompt: str
+
+    def message(self) -> dict[str, object]:
+        """Serialize to the wire shape clients consume."""
+        return {"type": "confirm", "text": self.prompt}
+
+
+@dataclass(frozen=True, slots=True)
+class ConfirmClearEvent:
+    """A pending confirmation was resolved/cancelled (hide the card)."""
+
+    def message(self) -> dict[str, object]:
+        """Serialize to the wire shape clients consume."""
+        return {"type": "confirm_clear"}
+
+
+@dataclass(frozen=True, slots=True)
 class AmplitudeEvent:
     """A normalized loudness sample (0..1), meaningful while listening/talking.
 
@@ -170,6 +190,14 @@ class EventBus:
     def publish_visibility(self, visible: bool) -> None:
         """Broadcast a UI show/hide request (does not change ``last_state``)."""
         self._emit(VisibilityEvent(visible).message())
+
+    def publish_confirm(self, prompt: str) -> None:
+        """Broadcast that a confirmation is pending (the orb shows a card)."""
+        self._emit(ConfirmEvent(prompt).message())
+
+    def publish_confirm_clear(self) -> None:
+        """Broadcast that the pending confirmation was resolved (hide the card)."""
+        self._emit(ConfirmClearEvent().message())
 
     def _emit(self, message: dict[str, object]) -> None:
         with self._lock:

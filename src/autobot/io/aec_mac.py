@@ -20,6 +20,7 @@ optional ``aec`` extra (``uv sync --extra aec``: pyobjc AVFoundation/CoreAudio).
 from __future__ import annotations
 
 import queue
+import time
 from collections.abc import Iterator
 
 import numpy as np
@@ -80,10 +81,24 @@ class VoiceProcessingMicSource:
                     _log.exception("AEC tap conversion failed; dropping frames")
 
         input_node.installTapOnBus_bufferSize_format_block_(0, 1024, in_format, tap)
+        engine.prepare()
         ok, err = engine.startAndReturnError_(None)
         if not ok:
             raise RuntimeError(f"audio engine failed to start: {err}")
         self._engine = engine
+        # Verify the tap actually delivers audio. Some setups start the engine but
+        # never pull from the input (the tap never fires) — that would block capture
+        # forever. If no frame arrives quickly, fail so the caller falls back to the
+        # plain mic instead of going deaf.
+        deadline = time.monotonic() + 2.0
+        while time.monotonic() < deadline and self._queue.empty():
+            time.sleep(0.05)
+        if self._queue.empty():
+            raise RuntimeError(
+                "voice-processing mic produced no audio within 2s — likely the process "
+                "lacks Microphone permission (System Settings → Privacy & Security → "
+                "Microphone) or another app holds the input"
+            )
         self._started = True
         _log.info("voice-processing mic started (AEC on) src_rate=%.0f", src_rate)
 

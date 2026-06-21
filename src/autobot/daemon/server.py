@@ -58,6 +58,7 @@ def create_app(
     bus: EventBus,
     settings_path: str | Path | None = None,
     on_change: Any | None = None,
+    on_confirm_answer: Any | None = None,
 ) -> Any:
     """Build the FastAPI app: the event stream plus the Settings-view API.
 
@@ -67,10 +68,12 @@ def create_app(
             standard ``~/.autobot/settings.json``.
         on_change: Optional callback invoked after a settings/secret change so the
             engine can reload live (the orchestrator's ``mark_llm_dirty``).
+        on_confirm_answer: Optional callback (bool) invoked when the user clicks
+            Yes/No on a confirmation card, delivering the answer to the engine.
 
     Returns:
-        A FastAPI app: ``/healthz``, WebSocket ``/ws``, and the settings API
-        (``GET/POST /settings``, ``GET /models``, ``POST /secret``).
+        A FastAPI app: ``/healthz``, WebSocket ``/ws``, the settings API, and
+        ``POST /confirm`` (a clicked confirmation answer).
     """
     from fastapi.middleware.cors import CORSMiddleware
 
@@ -162,6 +165,15 @@ def create_app(
             on_change()  # a new key takes effect on the next turn, no restart
         return {"ok": ok}
 
+    async def post_confirm(request: Request) -> dict[str, Any]:
+        """Deliver a clicked Yes/No answer for a pending confirmation to the engine."""
+        payload = await request.json()
+        if not isinstance(payload, dict) or "answer" not in payload:
+            return {"ok": False, "error": "expected {answer: bool}"}
+        if on_confirm_answer is not None:
+            on_confirm_answer(bool(payload["answer"]))
+        return {"ok": True}
+
     # Register routes explicitly (rather than via decorators) so the handlers
     # stay statically typed under mypy strict — FastAPI ships no type info here.
     app.add_api_route("/healthz", healthz, methods=["GET"])
@@ -170,16 +182,23 @@ def create_app(
     app.add_api_route("/settings", post_settings, methods=["POST"])
     app.add_api_route("/models", get_models, methods=["GET"])
     app.add_api_route("/secret", post_secret, methods=["POST"])
+    app.add_api_route("/confirm", post_confirm, methods=["POST"])
     return app
 
 
-def run_daemon(bus: EventBus, host: str, port: int, on_change: Any | None = None) -> None:
+def run_daemon(
+    bus: EventBus,
+    host: str,
+    port: int,
+    on_change: Any | None = None,
+    on_confirm_answer: Any | None = None,
+) -> None:
     """Run the daemon server (blocking) on ``host:port``.
 
     Refuses to bind anything other than loopback — the daemon is local-only by
     design, and a non-loopback bind would expose the engine on the network.
     ``on_change`` is invoked after a settings/secret update so the engine can pick
-    it up live.
+    it up live; ``on_confirm_answer`` delivers a clicked Yes/No to the engine.
     """
     if host not in {"127.0.0.1", "localhost", "::1"}:
         raise ValueError(f"daemon must bind loopback only, got host={host!r}")
@@ -189,7 +208,7 @@ def run_daemon(bus: EventBus, host: str, port: int, on_change: Any | None = None
     # lifespan="off": we use no startup/shutdown events, and leaving it on emits a
     # noisy CancelledError traceback on Ctrl-C. KeyboardInterrupt is swallowed for
     # a clean exit.
-    app = create_app(bus, on_change=on_change)
+    app = create_app(bus, on_change=on_change, on_confirm_answer=on_confirm_answer)
     with contextlib.suppress(KeyboardInterrupt):
         uvicorn.run(app, host=host, port=port, log_level="warning", lifespan="off")
     print("\n[daemon] stopped.")

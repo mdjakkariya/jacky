@@ -50,6 +50,9 @@ _FRAME_MS = FRAME_SAMPLES / 16_000 * 1000  # 32.0
 _PREROLL_FRAMES = 10  # ~320 ms of audio kept before the wake word fires
 _START_FRAMES = 2  # frames of speech needed to consider the utterance started
 _MAX_WAIT_FOR_SPEECH_S = 4.0  # give up if no speech follows the wake word
+# With echo cancellation the mic is already noise-suppressed and quieter, so a high
+# VAD threshold starves detection (speech never crosses it). Cap it for AEC inputs.
+_AEC_VAD_CEILING = 0.5
 
 
 @runtime_checkable
@@ -260,12 +263,24 @@ class WakeWordVadRecorder:
         if self._awake and self._on_voice is not None:
             self._on_voice(active)
 
+    def _vad_threshold(self) -> float:
+        """Speech threshold, capped for AEC mics (else a high value never triggers)."""
+        t = self._settings.vad_threshold
+        if t > _AEC_VAD_CEILING and bool(getattr(self._source, "aec_active", False)):
+            return _AEC_VAD_CEILING
+        return t
+
+    def flush(self) -> None:
+        """Drop buffered audio and reset VAD — so a fresh capture starts clean."""
+        self._source.flush()
+        self._vad.reset()
+
     def _capture(self, wait_frames: int, seed: Sequence[AudioClip] = ()) -> AudioClip | None:
         """Capture one utterance via the shared helper (see :func:`capture_utterance`)."""
         return capture_utterance(
             self._next_frame,
             self._vad,
-            vad_threshold=self._settings.vad_threshold,
+            vad_threshold=self._vad_threshold(),
             end_silence_frames=self._end_silence_frames,
             max_frames=self._max_frames,
             wait_frames=wait_frames,
@@ -374,7 +389,7 @@ class WakeWordVadRecorder:
         return capture_utterance(
             self._next_frame,
             self._vad,
-            vad_threshold=self._settings.vad_threshold,
+            vad_threshold=self._vad_threshold(),
             end_silence_frames=self._end_silence_frames,
             max_frames=self._max_frames,
             wait_frames=None,
@@ -440,6 +455,22 @@ class VadRecorder:
         if self._awake and self._on_voice is not None:
             self._on_voice(active)
 
+    def _vad_threshold(self) -> float:
+        """Speech threshold, capped for AEC mics (else a high value never triggers)."""
+        t = self._settings.vad_threshold
+        if t > _AEC_VAD_CEILING and bool(getattr(self._source, "aec_active", False)):
+            return _AEC_VAD_CEILING
+        return t
+
+    def flush(self) -> None:
+        """Drop buffered audio and reset VAD — so a fresh capture starts clean.
+
+        Used before listening for a confirmation answer, so audio from before the
+        question (a command tail, speech during planning) can't be misread as a yes.
+        """
+        self._source.flush()
+        self._vad.reset()
+
     def _next_frame(self) -> AudioClip | None:
         if self._frames is None:
             self._frames = iter(self._source.frames())
@@ -454,7 +485,7 @@ class VadRecorder:
         clip = capture_utterance(
             self._next_frame,
             self._vad,
-            vad_threshold=self._settings.vad_threshold,
+            vad_threshold=self._vad_threshold(),
             end_silence_frames=self._end_silence_frames,
             max_frames=self._max_frames,
             wait_frames=None,  # wait indefinitely for speech
@@ -480,7 +511,7 @@ class VadRecorder:
         clip = capture_utterance(
             self._next_frame,
             self._vad,
-            vad_threshold=self._settings.vad_threshold,
+            vad_threshold=self._vad_threshold(),
             end_silence_frames=self._end_silence_frames,
             max_frames=self._max_frames,
             wait_frames=wait_frames,
@@ -516,7 +547,7 @@ class VadRecorder:
         return capture_utterance(
             self._next_frame,
             self._vad,
-            vad_threshold=self._settings.vad_threshold,
+            vad_threshold=self._vad_threshold(),
             end_silence_frames=self._end_silence_frames,
             max_frames=self._max_frames,
             wait_frames=None,

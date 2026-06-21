@@ -99,7 +99,9 @@ class PermissionGate:
             return ToolResult(name=call.name, content=f"unknown tool: {call.name!r}", ok=False)
 
         if spec.risk >= self._threshold:
-            prompt = self._format_prompt(spec.name, spec.risk, call.arguments)
+            prompt = spec.confirm_prompt or self._format_prompt(
+                spec.name, spec.risk, call.arguments
+            )
             if not self._confirmer.confirm(prompt):
                 _log.info("denied tool=%s risk=%s reason=user_declined", call.name, spec.risk.name)
                 self._audit.log(
@@ -110,7 +112,16 @@ class PermissionGate:
                     ok=None,
                     detail="declined by user",
                 )
-                return ToolResult(name=call.name, content="cancelled — not confirmed", ok=False)
+                # Tell the model plainly the user said no — so it acknowledges briefly
+                # and does NOT re-ask or retry (that caused a nagging loop).
+                return ToolResult(
+                    name=call.name,
+                    content=(
+                        "The user declined this action, so it was not performed. "
+                        "Acknowledge in one short sentence; do not ask again or retry."
+                    ),
+                    ok=False,
+                )
 
         result = self._registry.dispatch(call.name, call.arguments)
         _log.info(

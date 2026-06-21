@@ -89,6 +89,21 @@ def test_post_secret_rejects_unknown_name(tmp_path: object) -> None:
     assert resp["ok"] is False
 
 
+def test_post_confirm_delivers_clicked_answer() -> None:
+    answers: list[bool] = []
+    app = create_app(EventBus(), on_confirm_answer=answers.append)
+    client = TestClient(app)
+    assert client.post("/confirm", json={"answer": True}).json() == {"ok": True}
+    assert client.post("/confirm", json={"answer": False}).json() == {"ok": True}
+    assert answers == [True, False]
+
+
+def test_post_confirm_rejects_missing_answer() -> None:
+    app = create_app(EventBus(), on_confirm_answer=lambda _a: None)
+    body = TestClient(app).post("/confirm", json={}).json()
+    assert body["ok"] is False
+
+
 def test_on_change_fires_on_settings_save(tmp_path: object) -> None:
     from pathlib import Path
 

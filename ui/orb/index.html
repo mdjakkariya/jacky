@@ -21,6 +21,33 @@
     font: 11px ui-monospace, Menlo, monospace; letter-spacing: .12em;
     color: rgba(157,184,255,.55); user-select: none; pointer-events: none;
   }
+  /* Confirmation cards — a macOS-notification-style stack under the orb. */
+  #cards {
+    position: absolute; left: 50%; bottom: 8px; transform: translateX(-50%);
+    width: 92%; max-width: 380px; display: flex; flex-direction: column; gap: 8px;
+    z-index: 10; pointer-events: none;
+  }
+  .card {
+    pointer-events: auto;
+    background: rgba(28,28,32,.72); -webkit-backdrop-filter: blur(22px); backdrop-filter: blur(22px);
+    border: .5px solid rgba(255,255,255,.14); border-radius: 14px;
+    box-shadow: 0 8px 30px rgba(0,0,0,.45);
+    padding: 11px 13px; color: #fff;
+    font: 13px -apple-system, BlinkMacSystemFont, "SF Pro Text", system-ui, sans-serif;
+    animation: cardIn .18s ease-out;
+  }
+  @keyframes cardIn { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+  .card .ttl { font-weight: 600; margin-bottom: 2px; }
+  .card .msg { opacity: .92; line-height: 1.3; }
+  .card .row { display: flex; gap: 8px; margin-top: 9px; }
+  .card .btn {
+    flex: 1; border: none; border-radius: 9px; padding: 6px 0; cursor: pointer;
+    font: 600 12px -apple-system, system-ui, sans-serif; color: #fff;
+  }
+  .card .btn.no  { background: rgba(255,255,255,.14); }
+  .card .btn.yes { background: #2f6fff; }
+  .card .btn:active { transform: scale(.97); }
+  .card .hint { margin-top: 6px; font-size: 11px; opacity: .5; }
 </style>
 </head>
 <body>
@@ -29,6 +56,7 @@
     <canvas id="ov"></canvas>
     <div id="conn">connecting…</div>
   </div>
+  <div id="cards"></div>
 
 <script>
 /*
@@ -151,6 +179,8 @@
       if(msg.type==="state"&&SC[msg.value]){var prev=state;state=msg.value;if(prev!==state)onStateChange(prev,state);}
       else if(msg.type==="amplitude"){liveAmp=Math.max(0,Math.min(1,+msg.value||0));}
       else if(msg.type==="visibility"){ if(msg.value==="hide") requestHide(); else showOrb(); }
+      else if(msg.type==="confirm"){ showCard(msg.text); }
+      else if(msg.type==="confirm_clear"){ clearCards(); }
     };
     ws.onclose=function(){scheduleReconnect();};
     ws.onerror=function(){try{ws.close();}catch(e){}};
@@ -158,6 +188,54 @@
   function scheduleReconnect(){
     conn.textContent="reconnecting…";
     clearTimeout(retry);retry=setTimeout(connect,1000);
+  }
+
+  // --- confirmation cards (macOS-notification style) ----------------------
+  // A persistent card stack under the orb. Answer by voice ("proceed"/"cancel")
+  // OR by clicking — the click POSTs to the daemon, which hands it to the engine.
+  var API_BASE = WS_URL.replace(/^ws/,"http").replace(/\/ws$/,"");
+  function showCard(text){
+    try{ showOrb(); }catch(e){}   // make sure the orb is visible so the card shows
+    var cards=document.getElementById("cards"); if(!cards) return;
+    var el=document.createElement("div"); el.className="card";
+    el.innerHTML='<div class="ttl">Confirm</div><div class="msg"></div>'
+      + '<div class="row"><button class="btn no">Cancel</button>'
+      + '<button class="btn yes">Proceed</button></div>'
+      + '<div class="hint">…or say “proceed” / “cancel”.</div>';
+    el.querySelector(".msg").textContent = text || "Are you sure?";
+    el.querySelector(".yes").addEventListener("click",function(){ sendConfirm(true); });
+    el.querySelector(".no").addEventListener("click",function(){ sendConfirm(false); });
+    cards.appendChild(el);
+    growForCards();
+  }
+  function sendConfirm(answer){
+    try{
+      fetch(API_BASE+"/confirm",{method:"POST",
+        headers:{"content-type":"application/json"},
+        body:JSON.stringify({answer:answer})});
+    }catch(e){}
+    clearCards();   // optimistic; the engine also sends confirm_clear
+  }
+  function clearCards(){
+    var cards=document.getElementById("cards"); if(cards) cards.innerHTML="";
+    restoreSize();
+  }
+
+  // Grow the orb window so the card isn't clipped, restore when cleared (Tauri).
+  var _baseSize=null;
+  function growForCards(){
+    if(!tauriWin||!tauriApi||!tauriApi.PhysicalSize) return;
+    var cards=document.getElementById("cards"); if(!cards) return;
+    tauriWin.outerSize().then(function(sz){
+      if(!_baseSize) _baseSize={w:sz.width,h:sz.height};
+      var extra=Math.round((cards.offsetHeight+24)*(window.devicePixelRatio||1));
+      tauriWin.setSize(new tauriApi.PhysicalSize(_baseSize.w, _baseSize.h+extra));
+    }).catch(function(){});
+  }
+  function restoreSize(){
+    if(!tauriWin||!tauriApi||!tauriApi.PhysicalSize||!_baseSize) return;
+    tauriWin.setSize(new tauriApi.PhysicalSize(_baseSize.w,_baseSize.h));
+    _baseSize=null;
   }
 
   // --- "come to me": glide to the active screen when engaged (Tauri only) ----

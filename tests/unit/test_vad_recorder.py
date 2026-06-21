@@ -70,6 +70,26 @@ def _speech_frames() -> list[AudioClip]:
     ]
 
 
+class _AecSource(_ScriptedSource):
+    aec_active = True
+
+
+def test_vad_threshold_capped_for_aec_input() -> None:
+    # AEC pre-cleans noise, so a high threshold must be capped or it never triggers.
+    plain = VadRecorder(
+        Settings(input_mode="wake", vad_threshold=0.8), _ScriptedSource([]), _VadFromSign()
+    )
+    assert plain._vad_threshold() == 0.8  # raw mic keeps the user's value
+    aec = VadRecorder(
+        Settings(input_mode="wake", vad_threshold=0.8), _AecSource([]), _VadFromSign()
+    )
+    assert aec._vad_threshold() == 0.5  # AEC mic capped at the ceiling
+    low = VadRecorder(
+        Settings(input_mode="wake", vad_threshold=0.4), _AecSource([]), _VadFromSign()
+    )
+    assert low._vad_threshold() == 0.4  # below the ceiling, AEC keeps it
+
+
 def test_on_voice_signals_listening_while_awake() -> None:
     # The orb's "listening" animation is driven by this VAD signal — but only when
     # engaged: True when the user starts speaking, False when capture ends.

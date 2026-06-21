@@ -27,6 +27,10 @@ class ToolSpec:
     parameters: dict[str, Any]
     handler: ToolHandler
     risk: Risk = Risk.READ_ONLY
+    # A plain, human-friendly question shown/spoken when confirming this action
+    # (e.g. "Empty the Trash? This permanently deletes everything in it."). Falls
+    # back to a generic prompt when unset.
+    confirm_prompt: str | None = None
 
     def to_schema(self) -> dict[str, Any]:
         """Render the OpenAI/Ollama-style ``function`` schema for this tool."""

@@ -59,7 +59,7 @@ def test_destructive_denied_does_not_run_and_is_audited() -> None:
     result = gate.execute(ToolCall(name="delete_file", arguments={"path": "a"}))
     assert tool.ran is False
     assert result.ok is False
-    assert "not confirmed" in result.content
+    assert "declined" in result.content
     entry = audit.recent()[0]
     assert entry.decision is Decision.DENIED
     assert entry.ok is None

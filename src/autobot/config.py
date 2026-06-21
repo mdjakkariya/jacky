@@ -93,6 +93,9 @@ class Settings:
     # --- tools / sandbox ---
     sandbox_dir: str = _DEFAULT_SANDBOX_DIR
     audit_db: str = _DEFAULT_AUDIT_DB
+    # Seconds to wait for a spoken yes/no before auto-cancelling a destructive
+    # action (silence/timeout cancels — nothing destructive runs without a clear yes).
+    confirm_timeout_s: float = 30.0
     # --- listening (Phase 2) ---
     input_mode: str = _DEFAULT_INPUT_MODE
     wake_detector: str = _DEFAULT_WAKE_DETECTOR

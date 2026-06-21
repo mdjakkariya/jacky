@@ -27,7 +27,7 @@ from autobot.stt.faster_whisper_stt import FasterWhisperSTT
 from autobot.tools.audit import AuditLog
 from autobot.tools.builtin import register_builtins
 from autobot.tools.filesystem import register_filesystem_tools
-from autobot.tools.permission import PermissionGate, TerminalConfirmer
+from autobot.tools.permission import PermissionGate
 from autobot.tools.registry import ToolRegistry
 from autobot.tools.sandbox import Sandbox
 
@@ -177,6 +177,46 @@ def _build_stt(settings: Settings) -> SpeechToText:
     return FasterWhisperSTT(settings)
 
 
+def _build_confirmer(
+    settings: Settings,
+    tts: TextToSpeech,
+    audio: AudioSource,
+    stt: SpeechToText,
+    on_confirm: Callable[[str], None] | None,
+    on_confirm_clear: Callable[[], None] | None,
+    poll_click: Callable[[], bool | None] | None,
+) -> object:
+    """Pick how destructive actions are confirmed: by voice (hands-free) or terminal.
+
+    Hands-free (the mic supports bounded capture) gets the spoken yes/no flow with a
+    card on the orb; push-to-talk / no-VAD falls back to a terminal ``[y/N]`` prompt.
+    """
+    rec_cont = getattr(audio, "record_continuation", None)
+    if not callable(rec_cont):
+        from autobot.tools.permission import TerminalConfirmer
+
+        return TerminalConfirmer()
+
+    from autobot.tools.confirm import VoiceConfirmer
+
+    def listen(timeout_s: float) -> str:
+        clip = rec_cont(timeout_s)
+        if clip is None or clip.size == 0:
+            return ""
+        return stt.transcribe(clip).text
+
+    flush = getattr(audio, "flush", None)
+    return VoiceConfirmer(
+        speak=tts.speak,
+        listen=listen,
+        on_show=on_confirm,
+        on_clear=on_confirm_clear,
+        poll_click=poll_click,
+        flush=flush if callable(flush) else None,
+        timeout_s=settings.confirm_timeout_s,
+    )
+
+
 def _build_llm(
     settings: Settings,
     registry: ToolRegistry,
@@ -218,6 +258,9 @@ def build(
     amplitude_sink: AmplitudeSink | None = None,
     on_visibility: VisibilitySink | None = None,
     on_voice: Callable[[bool], None] | None = None,
+    on_confirm: Callable[[str], None] | None = None,
+    on_confirm_clear: Callable[[], None] | None = None,
+    poll_click: Callable[[], bool | None] | None = None,
 ) -> Orchestrator:
     """Compose a fully wired :class:`Orchestrator`.
 
@@ -234,6 +277,14 @@ def build(
         on_voice: Optional voice-activity sink (``True`` while the user is
             speaking, ``False`` when they stop), so the orb shows a "listening"
             animation only during real speech; the daemon wires it to the bus.
+        on_confirm: Optional sink (prompt -> None) shown when a destructive action
+            needs confirmation; the daemon wires it to the bus so the orb shows a
+            card. When given (and the mic supports it), confirmations are by voice.
+        on_confirm_clear: Optional sink invoked when a confirmation resolves, so the
+            orb hides the card.
+        poll_click: Optional source returning a clicked Yes/No (``True``/``False``)
+            for a pending confirmation, or ``None``; lets a card click answer
+            alongside voice. The daemon wires it to the confirmation inbox.
 
     Returns:
         A ready-to-run orchestrator. Constructing it loads the STT model, opens
@@ -303,18 +354,18 @@ def build(
         register_orb_tools(registry, lambda: visibility(False))
         log.info("orb dismiss tool ENABLED")
 
-    # Permission gate: audit everything, confirm destructive actions only.
-    audit = AuditLog(settings.audit_db)
-    gate = PermissionGate(registry, audit, TerminalConfirmer())
+    # Empty-the-Trash: a destructive action, so the gate confirms it (by voice).
+    from autobot.tools.trash import register_trash_tools
+
+    register_trash_tools(registry)
 
     # Per-session transcript (readable conversation + debug notes).
     transcript = _build_transcript(settings)
 
-    # Reloadable LLM: rebuilt from fresh settings + Keychain when the Settings
-    # view changes the provider/model/key — no restart needed (applies next turn).
-    from autobot.llm.reloadable import ReloadableLanguageModel
-
-    llm = ReloadableLanguageModel(lambda: _build_llm(Settings.load(), registry, transcript, memory))
+    # Voice I/O is built before the gate so the confirmer can speak the prompt and
+    # listen for the spoken yes/no.
+    tts = _build_tts(settings, amplitude_sink)
+    audio = _build_audio_source(settings, amplitude_sink, on_voice)
 
     # Reloadable STT: rebuilt (new model loaded) when the Settings view changes
     # the speech model — no restart needed (applies on the next transcription).
@@ -322,7 +373,20 @@ def build(
 
     stt = ReloadableSTT(lambda: _build_stt(Settings.load()))
 
-    audio = _build_audio_source(settings, amplitude_sink, on_voice)
+    # Permission gate: audit everything, confirm destructive actions only. The
+    # confirmer asks by voice (with a card on the orb) when hands-free.
+    audit = AuditLog(settings.audit_db)
+    confirmer = _build_confirmer(
+        settings, tts, audio, stt, on_confirm, on_confirm_clear, poll_click
+    )
+    gate = PermissionGate(registry, audit, confirmer)  # type: ignore[arg-type]
+
+    # Reloadable LLM: rebuilt from fresh settings + Keychain when the Settings
+    # view changes the provider/model/key — no restart needed (applies next turn).
+    from autobot.llm.reloadable import ReloadableLanguageModel
+
+    llm = ReloadableLanguageModel(lambda: _build_llm(Settings.load(), registry, transcript, memory))
+
     # Make barge-in readiness obvious at startup: it engages only when the user
     # wants it AND the mic is echo-cancelled (so Jack can't interrupt itself).
     aec_on = bool(getattr(audio, "aec_active", False))
@@ -343,7 +407,7 @@ def build(
         llm=llm,
         gate=gate,
         wake_gate=_build_wake_gate(settings),
-        tts=_build_tts(settings, amplitude_sink),
+        tts=tts,
         transcript=transcript,
         on_state=on_state or _print_transition,
         memory=memory,

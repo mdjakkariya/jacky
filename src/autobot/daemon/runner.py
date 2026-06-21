@@ -78,14 +78,20 @@ def serve(settings: Settings | None = None) -> None:
     """
     settings = settings or Settings.load()
     from autobot.app import build
+    from autobot.tools.confirm import ConfirmInbox
 
     bus = EventBus()
+    # Bridge clicked Yes/No on a confirmation card (daemon thread) to the engine.
+    inbox = ConfirmInbox()
     orchestrator = build(
         settings,
         on_state=make_state_listener(bus),
         amplitude_sink=make_amplitude_sink(bus),
         on_visibility=bus.publish_visibility,
         on_voice=make_voice_sink(bus),
+        on_confirm=bus.publish_confirm,
+        on_confirm_clear=bus.publish_confirm_clear,
+        poll_click=inbox.take,
     )
     thread = threading.Thread(target=orchestrator.run, name="engine", daemon=True)
     thread.start()
@@ -96,6 +102,7 @@ def serve(settings: Settings | None = None) -> None:
         settings.daemon_host,
         settings.daemon_port,
         on_change=orchestrator.mark_settings_changed,
+        on_confirm_answer=inbox.submit,
     )
 
 
