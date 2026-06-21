@@ -157,6 +157,8 @@ class AnthropicLanguageModel:
         self._session_in += turn_in
         self._session_out += turn_out
         cost = estimate_cost_usd(model, turn_in, turn_out)
+        # Surface usage in the readable session transcript too (cloud only).
+        self._transcript.record_usage(turn_in, turn_out, cost)
         if cost is not None:
             self._session_cost += cost
             _log.info(
