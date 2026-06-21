@@ -11,12 +11,15 @@ injected executor (the permission gate), so the gate sits exactly between
 from __future__ import annotations
 
 import random
+import re
 import time
 from collections.abc import Callable
 
+import numpy as np
+
 from autobot.config import Settings
 from autobot.core.interfaces import AudioSource, LanguageModel, SpeechToText, TextToSpeech
-from autobot.core.types import Risk, State, ToolCall, ToolResult
+from autobot.core.types import AudioClip, Risk, State, ToolCall, ToolResult, Transcription
 from autobot.logging_setup import get_logger
 from autobot.memory.store import MemoryStore
 from autobot.orchestrator.wake_gate import Address, WakeGate
@@ -110,6 +113,82 @@ _CONFIRMING_ACKS = (
     "Right away.",
     "Alright, let me see.",
 )
+
+
+# Words that, when an utterance ends on them with no terminal punctuation, strongly
+# suggest the speaker was mid-thought when the silence endpoint fired ("…message to").
+_CONTINUATION_WORDS = frozenset(
+    {
+        "and",
+        "or",
+        "but",
+        "so",
+        "to",
+        "the",
+        "a",
+        "an",
+        "of",
+        "for",
+        "with",
+        "my",
+        "your",
+        "is",
+        "are",
+        "was",
+        "were",
+        "because",
+        "that",
+        "this",
+        "then",
+        "about",
+        "on",
+        "in",
+        "at",
+        "i",
+        "we",
+        "they",
+        "he",
+        "she",
+        "it",
+        "like",
+        "if",
+        "when",
+        "while",
+        "as",
+        "into",
+        "from",
+        "over",
+        "under",
+        "than",
+        "which",
+        "who",
+        "what",
+        "where",
+        "how",
+        "let",
+        "can",
+        "could",
+        "would",
+        "should",
+    }
+)
+
+
+def _looks_incomplete(text: str) -> bool:
+    """Heuristic: does this transcript look cut off mid-thought?
+
+    Conservative on purpose — true only when there's no sentence-final punctuation
+    *and* the last word is a connective/function word, which together are a strong
+    sign the silence endpoint fired while the user was still talking. Whisper
+    punctuates finished sentences, so a complete thought won't match.
+    """
+    stripped = text.strip()
+    if not stripped or stripped[-1] in ".!?":
+        return False
+    tokens = re.findall(r"[a-z0-9']+", stripped.lower())
+    if len(tokens) < 2:
+        return False
+    return tokens[-1] in _CONTINUATION_WORDS
 
 
 def _ack_phrase(risk: Risk | None) -> str:
@@ -218,10 +297,34 @@ class Orchestrator:
         self._transcript.tool(call.name, call.arguments, result.ok, result.content)
         return result
 
+    def _reopen(
+        self, audio: AudioClip, transcription: Transcription
+    ) -> tuple[AudioClip, Transcription]:
+        """Capture a short continuation for a cut-off phrase and re-transcribe (once).
+
+        Returns the (possibly extended) audio and transcription. A no-op if the
+        recorder can't continue or the user was actually finished.
+        """
+        cont = getattr(self._audio, "record_continuation", None)
+        if not callable(cont):
+            return audio, transcription
+        _log.info("utterance looks cut off; re-opening text=%r", transcription.text)
+        self._transcript.note(f"re-opening (sounded incomplete): {transcription.text!r}")
+        extra = cont()
+        if extra is None or extra.size == 0:
+            return audio, transcription
+        combined = np.concatenate([audio, extra]).astype(np.float32)
+        new_transcription = self._stt.transcribe(combined)
+        _log.info("re-opened text=%r", new_transcription.text)
+        return combined, new_transcription
+
     def run_once(self) -> None:
         """Run a single turn: listen, transcribe, gate the wake word, plan, respond."""
         self._sm.transition(State.LISTENING)
         audio = self._audio.record_clip()
+        # When this utterance *began* — used to judge the follow-up window against
+        # speech start rather than end-of-capture, so a long phrase isn't dropped.
+        started_at = getattr(self._audio, "last_speech_started_at", None)
 
         self._sm.transition(State.TRANSCRIBING)
         transcription = self._stt.transcribe(audio)
@@ -236,7 +339,12 @@ class Orchestrator:
             self._sm.transition(State.IDLE)
             return
 
-        result = self._wake_gate.process(transcription.text)
+        # If we seem to have cut the user off mid-thought, re-open briefly and append
+        # rather than answer half a sentence (a safety net over the silence endpoint).
+        if self._settings.reopen_on_incomplete and _looks_incomplete(transcription.text):
+            audio, transcription = self._reopen(audio, transcription)
+
+        result = self._wake_gate.process(transcription.text, started_at)
         if result.address is Address.IGNORED:
             # Heard speech, but it wasn't addressed to us — stay quiet.
             _log.info("ignored reason=not_addressed text=%r %s", transcription.text, result.detail)

@@ -155,6 +155,74 @@ def test_empty_transcription_returns_to_idle_without_planning() -> None:
     assert orch.state is State.IDLE
 
 
+def test_looks_incomplete_detects_cut_off_phrases() -> None:
+    from autobot.orchestrator.state_machine import _looks_incomplete
+
+    # Cut off mid-thought: no terminal punctuation, ends on a connective word.
+    assert _looks_incomplete("send a message to") is True
+    assert _looks_incomplete("search on google about got where how and") is True
+    assert _looks_incomplete("tell me about the") is True
+    # Complete: terminal punctuation, or ends on a content word.
+    assert _looks_incomplete("what time is it?") is False
+    assert _looks_incomplete("open spotify") is False
+    assert _looks_incomplete("turn off the lights.") is False
+    # Too short / empty -> not treated as incomplete.
+    assert _looks_incomplete("and") is False
+    assert _looks_incomplete("   ") is False
+
+
+class _ContinuingAudio:
+    """Fake audio that returns a first clip, then a continuation on re-open."""
+
+    def __init__(self) -> None:
+        self.continued = False
+        self.last_speech_started_at = 1.0
+
+    def record_clip(self) -> AudioClip:
+        return np.ones(4, dtype=np.float32)
+
+    def record_continuation(self, max_wait_s: float = 2.0) -> AudioClip:
+        self.continued = True
+        return np.ones(4, dtype=np.float32)
+
+
+class _GrowingSTT:
+    """Returns an incomplete transcript first, then a complete one after re-open."""
+
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def transcribe(self, _audio: AudioClip) -> Transcription:
+        self.calls += 1
+        text = "remind me to" if self.calls == 1 else "remind me to call mom"
+        return Transcription(text=text, confidence=0.9)
+
+
+def test_incomplete_utterance_triggers_reopen_and_retranscribe() -> None:
+    from autobot.orchestrator.wake_gate import PassThroughGate
+    from autobot.tts.null_tts import NullTTS
+
+    audio = _ContinuingAudio()
+    stt = _GrowingSTT()
+    orch = Orchestrator(
+        settings=Settings(reopen_on_incomplete=True),
+        audio=audio,  # type: ignore[arg-type]
+        stt=stt,  # type: ignore[arg-type]
+        llm=_EchoLLM(),
+        gate=_RecordingGate(),
+        wake_gate=PassThroughGate(),
+        tts=NullTTS(),
+    )
+    orch.run_once()
+    assert audio.continued is True  # re-opened because "remind me to" looked cut off
+    assert stt.calls == 2  # transcribed again on the combined audio
+
+
+class _EchoLLM:
+    def run_turn(self, user_text: str, execute) -> str:  # type: ignore[no-untyped-def]
+        return user_text
+
+
 def test_ack_phrase_maps_risk_to_the_right_pool() -> None:
     from autobot.orchestrator.state_machine import (
         _CONFIRMING_ACKS,

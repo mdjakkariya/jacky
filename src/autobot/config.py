@@ -110,6 +110,10 @@ class Settings:
     max_utterance_s: float = 30.0
     wake_preroll_ms: int = 400
     follow_up_window_s: float = 30.0
+    # If a captured phrase looks cut off mid-thought (no terminal punctuation, ends
+    # on a connective word), briefly re-open the mic and append rather than answer a
+    # half-sentence. A safety net on top of end_silence_ms.
+    reopen_on_incomplete: bool = True
     # --- voice output (Phase 3) ---
     tts_enabled: bool = True
     tts_voice: str = _DEFAULT_TTS_VOICE

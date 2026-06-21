@@ -23,6 +23,7 @@ are injected (see :class:`FrameSource`), so the loop is tested with fakes.
 from __future__ import annotations
 
 import queue
+import time
 from collections.abc import Callable, Iterator, Sequence
 from typing import Protocol, runtime_checkable
 
@@ -121,6 +122,7 @@ def capture_utterance(
     wait_frames: int | None,
     seed: Sequence[AudioClip] = (),
     on_level: AmplitudeSink | None = None,
+    on_speech_start: Callable[[], None] | None = None,
 ) -> AudioClip | None:
     """Capture one VAD-delimited utterance from a frame stream.
 
@@ -159,6 +161,8 @@ def capture_utterance(
             prebuffer.push(frame)
             if endpointer.started:
                 collected = prebuffer.drain()  # include the pre-roll lead-in
+                if on_speech_start is not None:
+                    on_speech_start()  # stamp when the user actually began speaking
             else:
                 waited += 1
                 if wait_frames is not None and waited >= wait_frames:
@@ -196,6 +200,13 @@ class WakeWordVadRecorder:
         self._refresh_tunables()
         # After a turn we stay "open" for a follow-up without the wake word.
         self._follow_up_active = False
+        # Monotonic time the most recent capture's speech began (for follow-up timing).
+        self._last_speech_started_at: float | None = None
+
+    @property
+    def last_speech_started_at(self) -> float | None:
+        """When the most recently captured speech began (``time.monotonic``)."""
+        return self._last_speech_started_at
 
     def _refresh_tunables(self) -> None:
         """Recompute frame thresholds from settings; re-read live if a reloader is set.
@@ -217,6 +228,9 @@ class WakeWordVadRecorder:
             self._frames = iter(self._source.frames())
         return next(self._frames, None)
 
+    def _mark_speech_start(self) -> None:
+        self._last_speech_started_at = time.monotonic()
+
     def _capture(self, wait_frames: int, seed: Sequence[AudioClip] = ()) -> AudioClip | None:
         """Capture one utterance via the shared helper (see :func:`capture_utterance`)."""
         return capture_utterance(
@@ -228,6 +242,7 @@ class WakeWordVadRecorder:
             wait_frames=wait_frames,
             seed=seed,
             on_level=self._on_level,
+            on_speech_start=self._mark_speech_start,
         )
 
     def record_clip(self) -> AudioClip:
@@ -292,6 +307,18 @@ class WakeWordVadRecorder:
         print(f"[mic] Captured {seconds:.1f}s of audio.")
         return clip
 
+    def record_continuation(self, max_wait_s: float = 2.0) -> AudioClip:
+        """Capture a brief continuation if the user resumes speaking soon (else empty).
+
+        Used to recover a cut-off phrase: waits ``max_wait_s`` for resumed speech
+        (no flush, so audio from while we transcribed isn't lost) and returns it,
+        or an empty clip if the user was actually done.
+        """
+        self._vad.reset()
+        wait_frames = max(1, round(max_wait_s * 1000 / _FRAME_MS))
+        clip = self._capture(wait_frames)
+        return clip if clip is not None else np.zeros(0, dtype=np.float32)
+
 
 class VadRecorder:
     """Captures each spoken utterance with VAD only — no wake word.
@@ -316,7 +343,13 @@ class VadRecorder:
         self._on_level = on_level
         self._reload = reload
         self._frames: Iterator[AudioClip] | None = None
+        self._last_speech_started_at: float | None = None
         self._refresh_tunables()
+
+    @property
+    def last_speech_started_at(self) -> float | None:
+        """When the most recently captured speech began (``time.monotonic``)."""
+        return self._last_speech_started_at
 
     def _refresh_tunables(self) -> None:
         """Recompute frame thresholds from settings; re-read live if a reloader is set."""
@@ -325,6 +358,9 @@ class VadRecorder:
         s = self._settings
         self._end_silence_frames = max(1, round(s.end_silence_ms / _FRAME_MS))
         self._max_frames = max(1, round(s.max_utterance_s * 1000 / _FRAME_MS))
+
+    def _mark_speech_start(self) -> None:
+        self._last_speech_started_at = time.monotonic()
 
     def _next_frame(self) -> AudioClip | None:
         if self._frames is None:
@@ -345,9 +381,30 @@ class VadRecorder:
             max_frames=self._max_frames,
             wait_frames=None,  # wait indefinitely for speech
             on_level=self._on_level,
+            on_speech_start=self._mark_speech_start,
         )
         if clip is None:
             return np.zeros(0, dtype=np.float32)
         seconds = clip.size / self._settings.sample_rate
         _log.info("captured seconds=%.1f", seconds)
         return clip
+
+    def record_continuation(self, max_wait_s: float = 2.0) -> AudioClip:
+        """Capture a brief continuation if the user resumes speaking soon (else empty).
+
+        Recovers a cut-off phrase: waits ``max_wait_s`` for resumed speech (no flush,
+        so audio captured while we transcribed isn't lost) and returns it, or an
+        empty clip if the user was actually finished.
+        """
+        self._vad.reset()
+        wait_frames = max(1, round(max_wait_s * 1000 / _FRAME_MS))
+        clip = capture_utterance(
+            self._next_frame,
+            self._vad,
+            vad_threshold=self._settings.vad_threshold,
+            end_silence_frames=self._end_silence_frames,
+            max_frames=self._max_frames,
+            wait_frames=wait_frames,
+            on_level=self._on_level,
+        )
+        return clip if clip is not None else np.zeros(0, dtype=np.float32)

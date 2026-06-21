@@ -68,6 +68,22 @@ def test_stt_gate_follow_up_window_lapses() -> None:
     assert gate.process("turn on the lights").address is Address.IGNORED
 
 
+def test_follow_up_measured_from_speech_start_not_processing_time() -> None:
+    # The bug: a reply that *began* inside the window but finished after it (long
+    # phrase + slow STT) was dropped. With started_at we judge from speech start.
+    now = {"t": 0.0}
+    gate = SttWakeGate("jarvis", follow_up_window_s=30.0, clock=lambda: now["t"])
+    gate.process("jarvis hello")
+    gate.mark_turn_complete()  # window opens at t=0
+
+    now["t"] = 40.0  # it's now 40s later (capture + transcription took a while)
+    # Started speaking at t=20 (within the 30s window): accept it.
+    accepted = gate.process("tell me about the weather", started_at=20.0)
+    assert accepted.address is Address.COMMAND
+    # Without a speech-start time, "now" (40s) is past the window -> ignored.
+    assert gate.process("tell me about the weather").address is Address.IGNORED
+
+
 def test_stt_gate_end_follow_up_requires_wake_word_again() -> None:
     # After a dismiss, end_follow_up() must close the window so the very next
     # utterance (even if immediate) is ignored unless it has the wake word.

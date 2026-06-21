@@ -69,7 +69,7 @@ def extract_command(text: str, phrase: str, max_lead_words: int = 4) -> str | No
 class WakeGate(Protocol):
     """Decides whether a transcript is addressed to the assistant."""
 
-    def process(self, text: str) -> WakeResult:
+    def process(self, text: str, started_at: float | None = None) -> WakeResult:
         """Classify one transcript into a :class:`WakeResult`."""
         ...
 
@@ -85,7 +85,7 @@ class WakeGate(Protocol):
 class PassThroughGate:
     """Treats every (non-empty) transcript as a command."""
 
-    def process(self, text: str) -> WakeResult:  # noqa: D102 - see class docstring
+    def process(self, text: str, started_at: float | None = None) -> WakeResult:  # noqa: D102
         return WakeResult(Address.COMMAND, text.strip())
 
     def mark_turn_complete(self) -> None:  # noqa: D102 - no follow-up state to keep
@@ -109,28 +109,32 @@ class SttWakeGate:
         self._clock = clock
         self._last_turn_at: float | None = None
 
-    def _elapsed(self) -> float | None:
-        """Seconds since the last completed turn, or ``None`` if there was none."""
+    def _elapsed(self, started_at: float | None = None) -> float | None:
+        """Seconds from the last completed turn to when this utterance *began*.
+
+        Measured against ``started_at`` (the moment the user started speaking) when
+        available, not "now" — otherwise a long utterance or slow transcription
+        could push a turn that began inside the window past it, dropping the reply.
+        Falls back to the current time when no speech-start time is given.
+        """
         if self._last_turn_at is None:
             return None
-        return self._clock() - self._last_turn_at
+        reference = started_at if started_at is not None else self._clock()
+        return reference - self._last_turn_at
 
-    def _in_follow_up(self) -> bool:
-        elapsed = self._elapsed()
-        return self._window > 0 and elapsed is not None and elapsed <= self._window
-
-    def process(self, text: str) -> WakeResult:
+    def process(self, text: str, started_at: float | None = None) -> WakeResult:
         """Accept inside the follow-up window; otherwise require the wake phrase."""
         command = extract_command(text, self._phrase)
-        elapsed = self._elapsed()
+        elapsed = self._elapsed(started_at)
+        in_follow_up = self._window > 0 and elapsed is not None and elapsed <= self._window
         # Debug context so the transcript/log show why a turn was (not) accepted.
         detail = (
-            f"follow_up={'yes' if self._in_follow_up() else 'no'} "
+            f"follow_up={'yes' if in_follow_up else 'no'} "
             f"elapsed={elapsed:.0f}s window={self._window:.0f}s"
             if elapsed is not None
             else f"follow_up=no (first turn) window={self._window:.0f}s"
         )
-        if self._in_follow_up():
+        if in_follow_up:
             # No wake word needed; accept the whole utterance (or the stripped
             # command if the user said the wake word again).
             if command:
