@@ -56,10 +56,11 @@ def _build_audio_source(settings: Settings, on_level: AmplitudeSink | None = Non
                 wake=OpenWakeWord(settings.wake_model),
                 vad=vad,
                 on_level=on_level,
+                reload=Settings.load,  # live endpointing tunables (no restart)
             )
         # Default: transcribe-then-match — VAD captures each phrase, the wake word
         # is matched on the transcript by the wake gate.
-        return VadRecorder(settings, source, vad, on_level=on_level)
+        return VadRecorder(settings, source, vad, on_level=on_level, reload=Settings.load)
     except ImportError as exc:  # pragma: no cover - depends on optional extras
         raise SystemExit(
             "Hands-free mode needs the 'wake' extra: run `uv sync --extra wake` "

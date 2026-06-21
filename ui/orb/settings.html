@@ -161,6 +161,10 @@
           <input type="text" id="wake_phrase" style="width:140px" /></div>
         <div class="row"><span class="grow"><span class="label">Follow-up window</span><div class="desc">Seconds to keep listening (0 = always need wake word)</div></span>
           <input type="number" id="follow_up_window_s" min="0" max="120" step="1" /></div>
+        <div class="row"><span class="grow"><span class="label">End-of-speech pause</span><div class="desc">Milliseconds of silence before Jack treats you as done (higher = won't cut you off mid-sentence)</div></span>
+          <input type="number" id="end_silence_ms" min="300" max="4000" step="100" /></div>
+        <div class="row"><span class="grow"><span class="label">Max phrase length</span><div class="desc">Seconds before a single utterance is force-ended</div></span>
+          <input type="number" id="max_utterance_s" min="5" max="120" step="1" /></div>
         <div class="stack" style="margin-top:4px"><label for="stt_engine">Speech engine</label>
           <select id="stt_engine">
             <option value="faster_whisper">Faster-Whisper — CPU (default)</option>
@@ -294,6 +298,8 @@
     populateClaudeModels(s.anthropic_model || "");
     $("wake_phrase").value = s.wake_phrase || "";
     $("follow_up_window_s").value = s.follow_up_window_s != null ? s.follow_up_window_s : 30;
+    $("end_silence_ms").value = s.end_silence_ms != null ? s.end_silence_ms : 1400;
+    $("max_utterance_s").value = s.max_utterance_s != null ? s.max_utterance_s : 30;
     $("stt_engine").value = s.stt_engine || "faster_whisper";
     populateSttModels(s.stt_model || "");
     CHECKS.forEach(function(k){ $(k).checked = !!s[k]; });
@@ -338,6 +344,8 @@
       web_provider: $("web_provider").value,
       wake_phrase: $("wake_phrase").value.trim(),
       follow_up_window_s: Number($("follow_up_window_s").value),
+      end_silence_ms: Number($("end_silence_ms").value),
+      max_utterance_s: Number($("max_utterance_s").value),
       stt_engine: $("stt_engine").value,
       stt_model: selectedSttModel()
     };

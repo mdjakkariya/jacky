@@ -100,9 +100,14 @@ class Settings:
     wake_model: str = _DEFAULT_WAKE_MODEL
     wake_threshold: float = 0.3
     vad_threshold: float = 0.5
-    end_silence_ms: int = 1000
+    # How long a pause must last before we treat speech as finished. Generous on
+    # purpose: a shorter value cuts people off when they pause mid-thought. Tunable
+    # in the Settings view (applies live).
+    end_silence_ms: int = 1400
     save_audio: bool = False
-    max_utterance_s: float = 15.0
+    # Hard cap on a single utterance, so capture can't run forever. Generous so a
+    # long, deliberate request isn't truncated.
+    max_utterance_s: float = 30.0
     wake_preroll_ms: int = 400
     follow_up_window_s: float = 30.0
     # --- voice output (Phase 3) ---

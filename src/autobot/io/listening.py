@@ -183,20 +183,33 @@ class WakeWordVadRecorder:
         wake: WakeDetector,
         vad: VoiceActivity,
         on_level: AmplitudeSink | None = None,
+        reload: Callable[[], Settings] | None = None,
     ) -> None:
         self._settings = settings
         self._source = source
         self._wake = wake
         self._vad = vad
         self._on_level = on_level
+        self._reload = reload
         self._frames: Iterator[AudioClip] | None = None
-        self._end_silence_frames = max(1, round(settings.end_silence_ms / _FRAME_MS))
-        self._max_frames = max(1, round(settings.max_utterance_s * 1000 / _FRAME_MS))
         self._max_wait_frames = max(1, round(_MAX_WAIT_FOR_SPEECH_S * 1000 / _FRAME_MS))
-        self._follow_up_frames = max(0, round(settings.follow_up_window_s * 1000 / _FRAME_MS))
-        self._wake_preroll_frames = max(0, round(settings.wake_preroll_ms / _FRAME_MS))
+        self._refresh_tunables()
         # After a turn we stay "open" for a follow-up without the wake word.
         self._follow_up_active = False
+
+    def _refresh_tunables(self) -> None:
+        """Recompute frame thresholds from settings; re-read live if a reloader is set.
+
+        Lets the Settings view tune the end-of-speech pause and max length without a
+        restart. Tests inject no reloader, so they keep their fixed settings.
+        """
+        if self._reload is not None:
+            self._settings = self._reload()
+        s = self._settings
+        self._end_silence_frames = max(1, round(s.end_silence_ms / _FRAME_MS))
+        self._max_frames = max(1, round(s.max_utterance_s * 1000 / _FRAME_MS))
+        self._follow_up_frames = max(0, round(s.follow_up_window_s * 1000 / _FRAME_MS))
+        self._wake_preroll_frames = max(0, round(s.wake_preroll_ms / _FRAME_MS))
 
     def _next_frame(self) -> AudioClip | None:
         """Pull the next frame from the (persistent) source, or ``None`` if ended."""
@@ -222,6 +235,8 @@ class WakeWordVadRecorder:
 
         See the module docstring for the full flow.
         """
+        # Pick up any Settings-view changes to the endpointing tunables (no restart).
+        self._refresh_tunables()
         # Start each turn live: drop audio buffered while we were responding, and
         # clear the stateful models so they don't carry over the previous turn.
         self._source.flush()
@@ -293,14 +308,23 @@ class VadRecorder:
         source: FrameSource,
         vad: VoiceActivity,
         on_level: AmplitudeSink | None = None,
+        reload: Callable[[], Settings] | None = None,
     ) -> None:
         self._settings = settings
         self._source = source
         self._vad = vad
         self._on_level = on_level
+        self._reload = reload
         self._frames: Iterator[AudioClip] | None = None
-        self._end_silence_frames = max(1, round(settings.end_silence_ms / _FRAME_MS))
-        self._max_frames = max(1, round(settings.max_utterance_s * 1000 / _FRAME_MS))
+        self._refresh_tunables()
+
+    def _refresh_tunables(self) -> None:
+        """Recompute frame thresholds from settings; re-read live if a reloader is set."""
+        if self._reload is not None:
+            self._settings = self._reload()
+        s = self._settings
+        self._end_silence_frames = max(1, round(s.end_silence_ms / _FRAME_MS))
+        self._max_frames = max(1, round(s.max_utterance_s * 1000 / _FRAME_MS))
 
     def _next_frame(self) -> AudioClip | None:
         if self._frames is None:
@@ -309,6 +333,7 @@ class VadRecorder:
 
     def record_clip(self) -> AudioClip:
         """Wait for the next spoken phrase and return it (VAD-delimited)."""
+        self._refresh_tunables()  # pick up Settings-view changes (no restart)
         self._source.flush()
         self._vad.reset()
         print("[mic] Listening…")

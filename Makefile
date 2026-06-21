@@ -33,8 +33,8 @@ check: ## Everything CI runs: lint + format check + types + tests
 	uv run mypy
 	uv run pytest
 
-run: ## Launch the assistant (Ollama must be running)
-	uv run autobot
+run: ## Launch the assistant daemon
+	uv run autobot-daemon
 
 LOG ?= $(HOME)/.autobot/logs/autobot.log
 logs: ## Tail the debug log (override path with LOG=…)
