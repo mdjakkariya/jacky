@@ -223,6 +223,55 @@ class _EchoLLM:
         return user_text
 
 
+def test_awake_true_after_addressed_turn_false_when_ignored() -> None:
+    from autobot.orchestrator.wake_gate import Address, PassThroughGate, WakeResult
+    from autobot.tts.null_tts import NullTTS
+
+    class _AwakeAudio:
+        def __init__(self) -> None:
+            self.awake: list[bool] = []
+            self.last_speech_started_at = None
+
+        def record_clip(self) -> AudioClip:
+            return np.ones(4, dtype=np.float32)
+
+        def set_awake(self, awake: bool) -> None:
+            self.awake.append(awake)
+
+    class _IgnoringGate:
+        def process(self, text: str, started_at: float | None = None) -> WakeResult:
+            return WakeResult(Address.IGNORED)
+
+        def mark_turn_complete(self) -> None: ...
+        def end_follow_up(self) -> None: ...
+
+    # Addressed turn (PassThrough -> COMMAND): we end up awake for the follow-up.
+    addressed = _AwakeAudio()
+    Orchestrator(
+        settings=Settings(),
+        audio=addressed,  # type: ignore[arg-type]
+        stt=_FakeSTT("open spotify"),
+        llm=_EchoLLM(),
+        gate=_RecordingGate(),
+        wake_gate=PassThroughGate(),
+        tts=NullTTS(),
+    ).run_once()
+    assert addressed.awake[-1] is True
+
+    # Ignored (not addressed): we are not awake, so the orb can rest.
+    ignored = _AwakeAudio()
+    Orchestrator(
+        settings=Settings(),
+        audio=ignored,  # type: ignore[arg-type]
+        stt=_FakeSTT("just chatting nearby"),
+        llm=_EchoLLM(),
+        gate=_RecordingGate(),
+        wake_gate=_IgnoringGate(),
+        tts=NullTTS(),
+    ).run_once()
+    assert ignored.awake[-1] is False
+
+
 def test_ack_phrase_maps_risk_to_the_right_pool() -> None:
     from autobot.orchestrator.state_machine import (
         _CONFIRMING_ACKS,

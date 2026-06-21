@@ -12,6 +12,7 @@ from __future__ import annotations
 import math
 import threading
 import time
+from collections.abc import Callable
 
 from autobot.config import Settings
 from autobot.core.events import AmplitudeSink, EventBus, OrbState, orb_state_for
@@ -38,18 +39,33 @@ def make_state_listener(bus: EventBus) -> StateListener:
 
 
 def make_amplitude_sink(bus: EventBus) -> AmplitudeSink:
-    """Publish loudness only while the orb is *talking*.
+    """Publish loudness only while the orb is *listening* or *talking*.
 
-    The mic emits a frame ~30 times a second the whole time the engine is listening
-    (which, hands-free, is almost always) — but that maps to the orb's idle state,
-    so forwarding it would be constant noise on the wire for no visible effect.
-    Gating on the current orb state keeps the stream quiet at rest and reactive
-    only when Jack is speaking (TTS amplitude).
+    The mic emits a frame ~30 times a second the whole time the engine is capturing
+    (which, hands-free, is almost always) — forwarding it unconditionally would be
+    constant noise on the wire. We gate on the orb state: amplitude flows while the
+    user is actually speaking (LISTENING, set by the voice sink on VAD) and while
+    Jack is speaking (TALKING), and stays quiet at rest.
     """
 
     def sink(level: float) -> None:
-        if bus.last_state is OrbState.TALKING:
+        if bus.last_state in (OrbState.LISTENING, OrbState.TALKING):
             bus.publish_amplitude(level)
+
+    return sink
+
+
+def make_voice_sink(bus: EventBus) -> Callable[[bool], None]:
+    """Reflect real voice activity on the orb: LISTENING while the user speaks.
+
+    Driven by the recorder's VAD (not the coarse engine state), so the orb only
+    animates "listening" when there's actual speech and rests when the user is
+    silent. When speech ends, the engine's own state transitions take the orb on
+    to thinking/talking; we drop back to IDLE here as a clean default.
+    """
+
+    def sink(active: bool) -> None:
+        bus.publish_state(OrbState.LISTENING if active else OrbState.IDLE)
 
     return sink
 
@@ -69,6 +85,7 @@ def serve(settings: Settings | None = None) -> None:
         on_state=make_state_listener(bus),
         amplitude_sink=make_amplitude_sink(bus),
         on_visibility=bus.publish_visibility,
+        on_voice=make_voice_sink(bus),
     )
     thread = threading.Thread(target=orchestrator.run, name="engine", daemon=True)
     thread.start()

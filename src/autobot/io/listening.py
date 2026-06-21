@@ -123,6 +123,7 @@ def capture_utterance(
     seed: Sequence[AudioClip] = (),
     on_level: AmplitudeSink | None = None,
     on_speech_start: Callable[[], None] | None = None,
+    on_voice: Callable[[bool], None] | None = None,
 ) -> AudioClip | None:
     """Capture one VAD-delimited utterance from a frame stream.
 
@@ -143,6 +144,7 @@ def capture_utterance(
     prebuffer = FramePrebuffer(_PREROLL_FRAMES)
     collected: list[AudioClip] | None = None
     waited = 0
+    voiced = False  # whether we've signalled "speech active" (so we reset it after)
 
     def stream() -> Iterator[AudioClip]:
         yield from seed
@@ -152,29 +154,38 @@ def capture_utterance(
                 return
             yield frame
 
-    for frame in stream():
-        if on_level is not None:
-            on_level(rms_level(frame))
-        endpointer.update(vad.speech_prob(frame))
-        if collected is None:
-            # Still waiting for speech to begin: keep a rolling pre-roll.
-            prebuffer.push(frame)
-            if endpointer.started:
-                collected = prebuffer.drain()  # include the pre-roll lead-in
-                if on_speech_start is not None:
-                    on_speech_start()  # stamp when the user actually began speaking
+    try:
+        for frame in stream():
+            if on_level is not None:
+                on_level(rms_level(frame))
+            endpointer.update(vad.speech_prob(frame))
+            if collected is None:
+                # Still waiting for speech to begin: keep a rolling pre-roll.
+                prebuffer.push(frame)
+                if endpointer.started:
+                    collected = prebuffer.drain()  # include the pre-roll lead-in
+                    if on_speech_start is not None:
+                        on_speech_start()  # stamp when the user actually began speaking
+                    if on_voice is not None:
+                        on_voice(True)  # the user is speaking -> orb shows "listening"
+                        voiced = True
+                else:
+                    waited += 1
+                    if wait_frames is not None and waited >= wait_frames:
+                        return None
             else:
-                waited += 1
-                if wait_frames is not None and waited >= wait_frames:
-                    return None
-        else:
-            collected.append(frame)
-            if endpointer.finished or len(collected) >= max_frames:
-                break
+                collected.append(frame)
+                if endpointer.finished or len(collected) >= max_frames:
+                    break
 
-    if collected is None or not endpointer.started:
-        return None
-    return np.concatenate(collected).astype(np.float32)
+        if collected is None or not endpointer.started:
+            return None
+        return np.concatenate(collected).astype(np.float32)
+    finally:
+        # Always drop the "listening" cue when capture ends (speech finished, hit the
+        # cap, or stream closed), so the orb doesn't stay stuck animating.
+        if voiced and on_voice is not None:
+            on_voice(False)
 
 
 class WakeWordVadRecorder:
@@ -188,12 +199,17 @@ class WakeWordVadRecorder:
         vad: VoiceActivity,
         on_level: AmplitudeSink | None = None,
         reload: Callable[[], Settings] | None = None,
+        on_voice: Callable[[bool], None] | None = None,
     ) -> None:
         self._settings = settings
         self._source = source
         self._wake = wake
         self._vad = vad
         self._on_level = on_level
+        self._on_voice = on_voice
+        # Only animate "listening" while engaged in a conversation; the orchestrator
+        # sets this so passive (non-addressed) capture doesn't light up the orb.
+        self._awake = False
         self._reload = reload
         self._frames: Iterator[AudioClip] | None = None
         self._max_wait_frames = max(1, round(_MAX_WAIT_FOR_SPEECH_S * 1000 / _FRAME_MS))
@@ -231,6 +247,14 @@ class WakeWordVadRecorder:
     def _mark_speech_start(self) -> None:
         self._last_speech_started_at = time.monotonic()
 
+    def set_awake(self, awake: bool) -> None:
+        """Whether to surface the 'listening' cue (engaged) for the next capture."""
+        self._awake = awake
+
+    def _voice(self, active: bool) -> None:
+        if self._awake and self._on_voice is not None:
+            self._on_voice(active)
+
     def _capture(self, wait_frames: int, seed: Sequence[AudioClip] = ()) -> AudioClip | None:
         """Capture one utterance via the shared helper (see :func:`capture_utterance`)."""
         return capture_utterance(
@@ -243,6 +267,7 @@ class WakeWordVadRecorder:
             seed=seed,
             on_level=self._on_level,
             on_speech_start=self._mark_speech_start,
+            on_voice=self._voice,
         )
 
     def record_clip(self) -> AudioClip:
@@ -336,11 +361,16 @@ class VadRecorder:
         vad: VoiceActivity,
         on_level: AmplitudeSink | None = None,
         reload: Callable[[], Settings] | None = None,
+        on_voice: Callable[[bool], None] | None = None,
     ) -> None:
         self._settings = settings
         self._source = source
         self._vad = vad
         self._on_level = on_level
+        self._on_voice = on_voice
+        # Only animate "listening" while engaged in a conversation; the orchestrator
+        # sets this so passive (non-addressed) capture doesn't light up the orb.
+        self._awake = False
         self._reload = reload
         self._frames: Iterator[AudioClip] | None = None
         self._last_speech_started_at: float | None = None
@@ -362,6 +392,14 @@ class VadRecorder:
     def _mark_speech_start(self) -> None:
         self._last_speech_started_at = time.monotonic()
 
+    def set_awake(self, awake: bool) -> None:
+        """Whether to surface the 'listening' cue (engaged) for the next capture."""
+        self._awake = awake
+
+    def _voice(self, active: bool) -> None:
+        if self._awake and self._on_voice is not None:
+            self._on_voice(active)
+
     def _next_frame(self) -> AudioClip | None:
         if self._frames is None:
             self._frames = iter(self._source.frames())
@@ -382,6 +420,7 @@ class VadRecorder:
             wait_frames=None,  # wait indefinitely for speech
             on_level=self._on_level,
             on_speech_start=self._mark_speech_start,
+            on_voice=self._voice,
         )
         if clip is None:
             return np.zeros(0, dtype=np.float32)
@@ -406,5 +445,6 @@ class VadRecorder:
             max_frames=self._max_frames,
             wait_frames=wait_frames,
             on_level=self._on_level,
+            on_voice=self._voice,
         )
         return clip if clip is not None else np.zeros(0, dtype=np.float32)

@@ -161,13 +161,12 @@
   }
 
   // --- "come to me": glide to the active screen when engaged (Tauri only) ----
-  // Idle, the orb rests wherever it's parked. The moment it's engaged (you've
-  // addressed Jack — thinking/talking), it glides to the centre-top of the screen
-  // you're working on, then slides back to its parked spot when done. So it feels
-  // like it comes over to help and tidies itself away after.
+  // OFF by default: the orb stays parked wherever you put it. Opt in by setting
+  // localStorage "jackComeForward" to "1" to have it glide to centre-top while
+  // engaged and slide back when done.
   var tauriApi=null,tauriWin=null,suppressSave=false,parkedPos=null,animTok=0;
   var ENGAGED={listening:1,thinking:1,talking:1};
-  function comeForwardEnabled(){ try{return localStorage.getItem("jackComeForward")!=="0";}catch(e){return true;} }
+  function comeForwardEnabled(){ try{return localStorage.getItem("jackComeForward")==="1";}catch(e){return false;} }
   function onStateChange(prev,next){
     if(!tauriWin) return;
     // Presence: any engaged state shows the orb (this is how the wake word brings

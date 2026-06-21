@@ -11,6 +11,7 @@ audit log and sandboxed filesystem tools) in front of the language model.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from typing import TYPE_CHECKING
 
 from autobot.config import Settings
@@ -34,7 +35,11 @@ if TYPE_CHECKING:
     from autobot.memory.store import MemoryStore
 
 
-def _build_audio_source(settings: Settings, on_level: AmplitudeSink | None = None) -> AudioSource:
+def _build_audio_source(
+    settings: Settings,
+    on_level: AmplitudeSink | None = None,
+    on_voice: Callable[[bool], None] | None = None,
+) -> AudioSource:
     """Pick the input recorder for the configured mode and wake detector.
 
     The hands-free path needs the optional ``wake`` dependencies (silero-vad, and
@@ -57,10 +62,13 @@ def _build_audio_source(settings: Settings, on_level: AmplitudeSink | None = Non
                 vad=vad,
                 on_level=on_level,
                 reload=Settings.load,  # live endpointing tunables (no restart)
+                on_voice=on_voice,
             )
         # Default: transcribe-then-match — VAD captures each phrase, the wake word
         # is matched on the transcript by the wake gate.
-        return VadRecorder(settings, source, vad, on_level=on_level, reload=Settings.load)
+        return VadRecorder(
+            settings, source, vad, on_level=on_level, reload=Settings.load, on_voice=on_voice
+        )
     except ImportError as exc:  # pragma: no cover - depends on optional extras
         raise SystemExit(
             "Hands-free mode needs the 'wake' extra: run `uv sync --extra wake` "
@@ -185,6 +193,7 @@ def build(
     on_state: StateListener | None = None,
     amplitude_sink: AmplitudeSink | None = None,
     on_visibility: VisibilitySink | None = None,
+    on_voice: Callable[[bool], None] | None = None,
 ) -> Orchestrator:
     """Compose a fully wired :class:`Orchestrator`.
 
@@ -198,6 +207,9 @@ def build(
         on_visibility: Optional show/hide sink for the UI. When given, the
             voice ``dismiss`` tool is registered and wired to hide the orb; the
             daemon passes the bus's ``publish_visibility``.
+        on_voice: Optional voice-activity sink (``True`` while the user is
+            speaking, ``False`` when they stop), so the orb shows a "listening"
+            animation only during real speech; the daemon wires it to the bus.
 
     Returns:
         A ready-to-run orchestrator. Constructing it loads the STT model, opens
@@ -288,7 +300,7 @@ def build(
 
     return Orchestrator(
         settings=settings,
-        audio=_build_audio_source(settings, amplitude_sink),
+        audio=_build_audio_source(settings, amplitude_sink, on_voice),
         stt=stt,
         llm=llm,
         gate=gate,

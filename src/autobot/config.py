@@ -106,8 +106,8 @@ class Settings:
     end_silence_ms: int = 1400
     save_audio: bool = False
     # Hard cap on a single utterance, so capture can't run forever. Generous so a
-    # long, deliberate request isn't truncated.
-    max_utterance_s: float = 30.0
+    # long, deliberate request isn't truncated mid-sentence.
+    max_utterance_s: float = 60.0
     wake_preroll_ms: int = 400
     follow_up_window_s: float = 30.0
     # If a captured phrase looks cut off mid-thought (no terminal punctuation, ends

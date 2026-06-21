@@ -240,6 +240,10 @@ class Orchestrator:
         self._sm = StateMachine(on_change=on_state)
         self._acknowledged = False  # spoke a filler this turn?
         self._dismissed = False  # did this turn call the dismiss tool ("go away")?
+        # Whether we're in an active conversation. Drives the orb's "listening"
+        # animation: only animate while engaged, not during passive always-on
+        # capture (otherwise ambient speech lights up the orb and it never rests).
+        self._awake = False
 
     def _greeting(self) -> str:
         """The reply to a bare wake word — name-aware, and a first hello if new."""
@@ -318,8 +322,17 @@ class Orchestrator:
         _log.info("re-opened text=%r", new_transcription.text)
         return combined, new_transcription
 
+    def _set_awake(self, awake: bool) -> None:
+        """Track conversation state and tell the recorder (drives the orb's listening)."""
+        self._awake = awake
+        set_awake = getattr(self._audio, "set_awake", None)
+        if callable(set_awake):
+            set_awake(awake)
+
     def run_once(self) -> None:
         """Run a single turn: listen, transcribe, gate the wake word, plan, respond."""
+        # Only show the "listening" cue if we're engaged; passive capture stays idle.
+        self._set_awake(self._awake)
         self._sm.transition(State.LISTENING)
         audio = self._audio.record_clip()
         # When this utterance *began* — used to judge the follow-up window against
@@ -346,7 +359,9 @@ class Orchestrator:
 
         result = self._wake_gate.process(transcription.text, started_at)
         if result.address is Address.IGNORED:
-            # Heard speech, but it wasn't addressed to us — stay quiet.
+            # Heard speech, but it wasn't addressed to us — stay quiet and not awake
+            # (so the orb rests and can auto-hide instead of animating on ambient talk).
+            self._set_awake(False)
             _log.info("ignored reason=not_addressed text=%r %s", transcription.text, result.detail)
             self._transcript.note(
                 f"ignored (not addressed): {transcription.text!r}  [{result.detail}]"
@@ -365,6 +380,7 @@ class Orchestrator:
             self._transcript.assistant(greeting)
             self._tts.speak(greeting)
             self._wake_gate.mark_turn_complete()
+            self._set_awake(True)  # in a conversation now — animate the next turn
             self._sm.transition(State.IDLE)
             return
 
@@ -386,10 +402,13 @@ class Orchestrator:
         self._transcript.assistant(reply)
         self._tts.speak(reply)
         if self._dismissed:
-            # Dismissed: close the follow-up window so only the wake word returns.
+            # Dismissed: close the follow-up window so only the wake word returns,
+            # and drop out of the conversation so the orb rests.
             self._wake_gate.end_follow_up()
+            self._set_awake(False)
         else:
             self._wake_gate.mark_turn_complete()
+            self._set_awake(True)  # stay engaged for the follow-up
         self._sm.transition(State.IDLE)
 
     def run(self) -> None:

@@ -60,6 +60,42 @@ def test_returns_empty_if_only_silence() -> None:
     assert _recorder(frames).record_clip().size == 0
 
 
+def _speech_frames() -> list[AudioClip]:
+    return [
+        _frame(_SILENCE),
+        _frame(_SPEECH),
+        _frame(_SPEECH),
+        _frame(_SILENCE),
+        _frame(_SILENCE),
+    ]
+
+
+def test_on_voice_signals_listening_while_awake() -> None:
+    # The orb's "listening" animation is driven by this VAD signal — but only when
+    # engaged: True when the user starts speaking, False when capture ends.
+    events: list[bool] = []
+    settings = Settings(input_mode="wake", vad_threshold=0.5, end_silence_ms=64)
+    rec = VadRecorder(
+        settings, _ScriptedSource(_speech_frames()), _VadFromSign(), on_voice=events.append
+    )
+    rec.set_awake(True)
+    rec.record_clip()
+    assert events == [True, False]
+
+
+def test_on_voice_suppressed_when_not_awake() -> None:
+    # Passive (not-addressed) capture must NOT light up the orb — otherwise ambient
+    # speech animates "listening" and the orb never rests.
+    events: list[bool] = []
+    settings = Settings(input_mode="wake", vad_threshold=0.5, end_silence_ms=64)
+    rec = VadRecorder(
+        settings, _ScriptedSource(_speech_frames()), _VadFromSign(), on_voice=events.append
+    )
+    # default: not awake
+    rec.record_clip()
+    assert events == []
+
+
 def test_reload_refreshes_endpointing_tunables_without_rebuild() -> None:
     # A reloader lets the Settings view tune the end-of-speech pause live.
     live = {"s": Settings(input_mode="wake", end_silence_ms=1600, max_utterance_s=40.0)}

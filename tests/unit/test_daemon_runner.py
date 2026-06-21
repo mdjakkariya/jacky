@@ -11,7 +11,7 @@ pytest.importorskip("fastapi")
 
 from autobot.core.events import EventBus, OrbState
 from autobot.core.types import State
-from autobot.daemon.runner import make_amplitude_sink, make_state_listener
+from autobot.daemon.runner import make_amplitude_sink, make_state_listener, make_voice_sink
 
 
 def test_state_listener_publishes_mapped_orb_state() -> None:
@@ -26,20 +26,40 @@ def test_state_listener_publishes_mapped_orb_state() -> None:
     assert bus.last_state is OrbState.THINKING
 
 
-def test_amplitude_sink_only_emits_while_talking() -> None:
+def test_amplitude_sink_emits_while_listening_or_talking() -> None:
     bus = EventBus()
     seen: list[dict[str, object]] = []
     bus.subscribe(seen.append)
     sink = make_amplitude_sink(bus)
 
-    # Passive listening maps to idle -> amplitude is suppressed (no wire noise).
+    # At rest (idle) -> amplitude is suppressed (no wire noise).
     bus.publish_state(OrbState.IDLE)
     seen.clear()
     sink(0.7)
     assert seen == []
 
-    # While talking, amplitude flows so the orb pulses with speech.
+    # While the user is speaking (listening) -> amplitude flows so the orb reacts.
+    bus.publish_state(OrbState.LISTENING)
+    seen.clear()
+    sink(0.5)
+    assert seen == [{"type": "amplitude", "value": 0.5}]
+
+    # While Jack is talking -> amplitude flows too.
     bus.publish_state(OrbState.TALKING)
     seen.clear()
     sink(0.7)
     assert seen == [{"type": "amplitude", "value": 0.7}]
+
+
+def test_voice_sink_publishes_listening_on_speech_and_idle_otherwise() -> None:
+    bus = EventBus()
+    seen: list[dict[str, object]] = []
+    bus.subscribe(seen.append)
+    sink = make_voice_sink(bus)
+
+    sink(True)  # the user started speaking
+    assert seen[-1] == {"type": "state", "value": "listening"}
+    assert bus.last_state is OrbState.LISTENING
+
+    sink(False)  # they stopped
+    assert seen[-1] == {"type": "state", "value": "idle"}
