@@ -15,7 +15,7 @@ from typing import TYPE_CHECKING
 
 from autobot.config import Settings
 from autobot.core.events import AmplitudeSink, VisibilitySink
-from autobot.core.interfaces import AudioSource, LanguageModel, TextToSpeech
+from autobot.core.interfaces import AudioSource, LanguageModel, SpeechToText, TextToSpeech
 from autobot.io.audio import PushToTalkRecorder
 from autobot.llm.ollama_llm import OllamaLanguageModel
 from autobot.logging_setup import get_logger, setup_logging
@@ -119,6 +119,29 @@ def _build_tts(settings: Settings, on_level: AmplitudeSink | None = None) -> Tex
         print(f"[tts] voice output OFF — {exc}")
         print("      Fix: `uv sync --extra tts` and download a voice (see README).")
         return NullTTS()
+
+
+def _build_stt(settings: Settings) -> SpeechToText:
+    """Pick the speech engine: faster-whisper (CPU, default) or whisper.cpp (Metal).
+
+    whisper.cpp degrades gracefully — a missing ``whispercpp`` extra falls back to
+    faster-whisper rather than failing startup.
+    """
+    log = get_logger("app")
+    if settings.stt_engine == "whisper_cpp":
+        try:
+            from autobot.stt.whisper_cpp_stt import WhisperCppSTT
+
+            stt = WhisperCppSTT(settings)
+            log.info("stt engine=whisper.cpp model=%s (Metal/GPU)", settings.stt_model)
+            return stt
+        except ImportError:
+            log.warning("whisper.cpp extra missing, falling back to faster-whisper")
+            print(
+                "[stt] whisper.cpp needs the 'whispercpp' extra — run "
+                "`uv sync --extra whispercpp`. Using faster-whisper for now."
+            )
+    return FasterWhisperSTT(settings)
 
 
 def _build_llm(
@@ -260,7 +283,7 @@ def build(
     # the speech model — no restart needed (applies on the next transcription).
     from autobot.stt.reloadable import ReloadableSTT
 
-    stt = ReloadableSTT(lambda: FasterWhisperSTT(Settings.load()))
+    stt = ReloadableSTT(lambda: _build_stt(Settings.load()))
 
     return Orchestrator(
         settings=settings,

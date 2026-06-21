@@ -161,6 +161,12 @@
           <input type="text" id="wake_phrase" style="width:140px" /></div>
         <div class="row"><span class="grow"><span class="label">Follow-up window</span><div class="desc">Seconds to keep listening (0 = always need wake word)</div></span>
           <input type="number" id="follow_up_window_s" min="0" max="120" step="1" /></div>
+        <div class="stack" style="margin-top:4px"><label for="stt_engine">Speech engine</label>
+          <select id="stt_engine">
+            <option value="faster_whisper">Faster-Whisper — CPU (default)</option>
+            <option value="whisper_cpp">whisper.cpp — GPU / Metal</option>
+          </select>
+          <div class="hint">whisper.cpp uses your Mac's GPU (Metal) — runs bigger models faster. Needs the whispercpp extra installed.</div></div>
         <div class="stack" style="margin-top:4px"><label for="sttModel">Speech model (accuracy)</label>
           <select id="sttModel"></select>
           <input type="text" id="sttModelCustom" class="hidden" placeholder="whisper model id, e.g. medium.en" style="margin-top:8px" />
@@ -288,6 +294,7 @@
     populateClaudeModels(s.anthropic_model || "");
     $("wake_phrase").value = s.wake_phrase || "";
     $("follow_up_window_s").value = s.follow_up_window_s != null ? s.follow_up_window_s : 30;
+    $("stt_engine").value = s.stt_engine || "faster_whisper";
     populateSttModels(s.stt_model || "");
     CHECKS.forEach(function(k){ $(k).checked = !!s[k]; });
     $("web_provider").value = s.web_provider || "auto";
@@ -331,6 +338,7 @@
       web_provider: $("web_provider").value,
       wake_phrase: $("wake_phrase").value.trim(),
       follow_up_window_s: Number($("follow_up_window_s").value),
+      stt_engine: $("stt_engine").value,
       stt_model: selectedSttModel()
     };
     CHECKS.forEach(function(k){ body[k] = $(k).checked; });

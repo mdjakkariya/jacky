@@ -32,6 +32,7 @@ _DEFAULT_LLM_MAX_TOKENS = 120
 # A fast, strong tool-calling Claude (NOT a coding model). Model names change, so
 # this is just a sensible default the user can change in the Settings view.
 _DEFAULT_ANTHROPIC_MODEL = "claude-haiku-4-5"
+_DEFAULT_STT_ENGINE = "faster_whisper"
 _DEFAULT_STT_MODEL = "small.en"
 _DEFAULT_STT_DEVICE = "cpu"
 _DEFAULT_STT_COMPUTE_TYPE = "int8"
@@ -82,6 +83,9 @@ class Settings:
     compact_at: float = 0.85
     keep_recent_messages: int = 6
     # --- speech-to-text ---
+    # Engine: "faster_whisper" (CPU/int8, default) or "whisper_cpp" (GPU via Metal
+    # on Apple Silicon — runs bigger models faster; needs the 'whispercpp' extra).
+    stt_engine: str = _DEFAULT_STT_ENGINE
     stt_model: str = _DEFAULT_STT_MODEL
     stt_device: str = _DEFAULT_STT_DEVICE
     stt_compute_type: str = _DEFAULT_STT_COMPUTE_TYPE

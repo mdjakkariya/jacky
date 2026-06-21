@@ -48,6 +48,11 @@ daemon = [
 cloud = [
     "anthropic>=0.40",
 ]
+# Optional GPU-accelerated STT (whisper.cpp, Metal on Apple Silicon). Lazy-imported;
+# only needed when stt_engine="whisper_cpp". `uv sync --extra whispercpp`.
+whispercpp = [
+    "pywhispercpp>=1.2",
+]
 dev = [
     "ruff>=0.6",
     "mypy>=1.11",
@@ -136,6 +141,7 @@ module = [
     "fastapi.*",
     "uvicorn.*",
     "anthropic.*",
+    "pywhispercpp.*",
 ]
 ignore_missing_imports = true
 

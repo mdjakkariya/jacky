@@ -156,4 +156,10 @@ runs the same checks once the repo is on GitHub.
 ## Target hardware (current dev machine)
 
 MacBook Air M2, 16 GB, macOS 15 → "Mid" tier. Defaults: `qwen3:8b` (LLM),
-`base.en` (STT, CPU/int8 — CTranslate2 has no Metal backend).
+`small.en` (STT). The default STT engine is faster-whisper (CTranslate2,
+CPU/int8 — no Metal backend). For GPU-accelerated STT on Apple Silicon, set
+`stt_engine="whisper_cpp"` (or pick it in the Settings view) — that path uses
+whisper.cpp with Metal and can run `medium.en`/`large-v3` far faster. It's an
+opt-in extra (`uv sync --extra whispercpp`), lazy-imported, and falls back to
+faster-whisper if the extra is missing. Both engines stay behind the
+`SpeechToText` protocol and are hot-swappable via the reloadable STT proxy.
