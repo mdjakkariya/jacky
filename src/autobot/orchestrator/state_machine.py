@@ -123,6 +123,7 @@ def _ack_phrase(risk: Risk | None) -> str:
         (``WRITE``/``DESTRUCTIVE``) gets a "confirming intent" line; an unknown
         tool falls back to a "thinking" line.
     """
+    pool: tuple[str, ...]
     if risk is None:
         pool = _THINKING_ACKS
     elif risk >= Risk.WRITE:
