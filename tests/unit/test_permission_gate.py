@@ -34,6 +34,13 @@ def _gate_with(tool: _SpyTool, name: str, confirmer: object) -> tuple[Permission
     return gate, audit
 
 
+def test_risk_of_returns_tool_risk_or_none() -> None:
+    tool = _SpyTool(Risk.WRITE)
+    gate, _ = _gate_with(tool, "create_file", AlwaysAllow())
+    assert gate.risk_of("create_file") is Risk.WRITE
+    assert gate.risk_of("nonexistent_tool") is None
+
+
 def test_write_runs_without_confirmation_and_is_audited() -> None:
     tool = _SpyTool(Risk.WRITE)
     # AlwaysDeny would block a confirmation; WRITE must not even ask.

@@ -6,7 +6,7 @@ import numpy as np
 import pytest
 
 from autobot.config import Settings
-from autobot.core.types import AudioClip, State, ToolCall, ToolResult, Transcription
+from autobot.core.types import AudioClip, Risk, State, ToolCall, ToolResult, Transcription
 from autobot.orchestrator.state_machine import (
     InvalidTransitionError,
     Orchestrator,
@@ -60,12 +60,16 @@ class _ToolingLLM:
 
 
 class _RecordingGate:
-    def __init__(self) -> None:
+    def __init__(self, risk: Risk = Risk.WRITE) -> None:
         self.calls: list[ToolCall] = []
+        self._risk = risk
 
     def execute(self, call: ToolCall) -> ToolResult:
         self.calls.append(call)
         return ToolResult(name=call.name, content="ok", ok=True)
+
+    def risk_of(self, _name: str) -> Risk:
+        return self._risk
 
 
 class _RecordingTTS:
@@ -120,15 +124,25 @@ def test_reply_is_spoken_via_tts() -> None:
     assert tts.spoken[-1] == "done: ok"
 
 
-def test_acknowledgement_spoken_before_tool_runs() -> None:
-    from autobot.orchestrator.state_machine import _GENERIC_ACKS, _WEB_ACKS
+def test_acknowledgement_matches_action_tool() -> None:
+    from autobot.orchestrator.state_machine import _CONFIRMING_ACKS
 
     tts = _RecordingTTS()
-    orch = _orchestrator("create a file", _RecordingGate(), tts)
+    # create_file is a WRITE -> a "confirming intent" ack, spoken before the reply.
+    orch = _orchestrator("create a file", _RecordingGate(risk=Risk.WRITE), tts)
     orch.run_once()
-    # First thing spoken is a filler, before the final reply.
-    assert tts.spoken[0] in (*_GENERIC_ACKS, *_WEB_ACKS)
+    assert tts.spoken[0] in _CONFIRMING_ACKS
     assert len(tts.spoken) == 2
+
+
+def test_acknowledgement_matches_lookup_tool() -> None:
+    from autobot.orchestrator.state_machine import _NEUTRAL_ACKS
+
+    tts = _RecordingTTS()
+    # A READ_ONLY tool -> a neutral "checking" ack.
+    orch = _orchestrator("look something up", _RecordingGate(risk=Risk.READ_ONLY), tts)
+    orch.run_once()
+    assert tts.spoken[0] in _NEUTRAL_ACKS
 
 
 def test_empty_transcription_returns_to_idle_without_planning() -> None:
@@ -139,3 +153,17 @@ def test_empty_transcription_returns_to_idle_without_planning() -> None:
     assert seen == [State.LISTENING, State.TRANSCRIBING, State.IDLE]
     assert not gate.calls
     assert orch.state is State.IDLE
+
+
+def test_ack_phrase_maps_risk_to_the_right_pool() -> None:
+    from autobot.orchestrator.state_machine import (
+        _CONFIRMING_ACKS,
+        _NEUTRAL_ACKS,
+        _THINKING_ACKS,
+        _ack_phrase,
+    )
+
+    assert _ack_phrase(Risk.READ_ONLY) in _NEUTRAL_ACKS
+    assert _ack_phrase(Risk.WRITE) in _CONFIRMING_ACKS
+    assert _ack_phrase(Risk.DESTRUCTIVE) in _CONFIRMING_ACKS
+    assert _ack_phrase(None) in _THINKING_ACKS  # unknown tool -> thinking

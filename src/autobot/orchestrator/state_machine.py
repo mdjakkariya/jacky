@@ -16,7 +16,7 @@ from collections.abc import Callable
 
 from autobot.config import Settings
 from autobot.core.interfaces import AudioSource, LanguageModel, SpeechToText, TextToSpeech
-from autobot.core.types import State, ToolCall, ToolResult
+from autobot.core.types import Risk, State, ToolCall, ToolResult
 from autobot.logging_setup import get_logger
 from autobot.memory.store import MemoryStore
 from autobot.orchestrator.wake_gate import Address, WakeGate
@@ -84,14 +84,51 @@ def _print_transition(_old: State, new: State) -> None:
     print(f"[state] {new.value}")
 
 
-# Short spoken acknowledgements so a slow tool call doesn't leave dead air.
-_GENERIC_ACKS = ("Okay, let me check.", "One moment.", "On it.", "Sure, give me a second.")
-_WEB_ACKS = ("Let me look that up.", "Searching now.", "Let me find that for you.")
+# Short spoken acknowledgements so a slow tool call doesn't leave dead air. The
+# pool is chosen to fit what the tool is about to do (see _ack_phrase):
+#   - looking something up (READ_ONLY): a neutral "checking" line
+#   - taking an action  (WRITE/DESTRUCTIVE): a "confirming intent" line
+#   - anything we can't classify: a "thinking" line
+_NEUTRAL_ACKS = (
+    "Let me look into that.",
+    "Checking now.",
+    "Let me pull that up.",
+    "Give me a sec.",
+    "Hang on a moment.",
+    "Looking that up.",
+    "Let me find out.",
+)
+_THINKING_ACKS = (
+    "Let me think.",
+    "Hmm, one sec.",
+    "Working on it.",
+    "Just a moment.",
+)
+_CONFIRMING_ACKS = (
+    "Got it, checking.",
+    "Sure thing.",
+    "Right away.",
+    "Alright, let me see.",
+)
 
 
-def _ack_phrase(tool_name: str) -> str:
-    """Pick a natural-sounding acknowledgement for the tool about to run."""
-    pool = _WEB_ACKS if tool_name == "web_search" else _GENERIC_ACKS
+def _ack_phrase(risk: Risk | None) -> str:
+    """Pick an acknowledgement that fits what the tool is about to do.
+
+    Args:
+        risk: The tool's risk level, or ``None`` if the tool is unknown.
+
+    Returns:
+        A lookup (``READ_ONLY``) gets a neutral "checking" line; an action
+        (``WRITE``/``DESTRUCTIVE``) gets a "confirming intent" line; an unknown
+        tool falls back to a "thinking" line.
+    """
+    if risk is None:
+        pool = _THINKING_ACKS
+    elif risk >= Risk.WRITE:
+        pool = _CONFIRMING_ACKS
+    else:
+        pool = _NEUTRAL_ACKS
     return random.choice(pool)
 
 
@@ -169,10 +206,13 @@ class Orchestrator:
             # The user asked Jack to go away: don't keep a follow-up window open —
             # require the wake word to come back (handled after the turn).
             self._dismissed = True
-        # Acknowledge once per turn so a slow tool call isn't silent.
+        # Acknowledge once per turn so a slow tool call isn't silent — phrased to
+        # match the tool's nature (lookup vs action), from its risk level.
         if self._settings.speak_acknowledgements and not self._acknowledged:
             self._acknowledged = True
-            self._tts.speak(_ack_phrase(call.name))
+            risk_of = getattr(self._gate, "risk_of", None)
+            risk = risk_of(call.name) if callable(risk_of) else None
+            self._tts.speak(_ack_phrase(risk))
         result = self._gate.execute(call)
         self._transcript.tool(call.name, call.arguments, result.ok, result.content)
         return result

@@ -73,6 +73,15 @@ class PermissionGate:
         self._confirmer = confirmer
         self._threshold = confirm_at_or_above
 
+    def risk_of(self, name: str) -> Risk | None:
+        """The risk level of a registered tool, or ``None`` if it's unknown.
+
+        Lets callers (e.g. the orchestrator's spoken acknowledgement) tailor
+        behavior to whether a tool merely reads or actually acts.
+        """
+        spec = self._registry.get(name)
+        return spec.risk if spec is not None else None
+
     def execute(self, call: ToolCall) -> ToolResult:
         """Run one tool call through the gate; see the module docstring for policy."""
         spec = self._registry.get(call.name)
