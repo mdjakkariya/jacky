@@ -75,9 +75,13 @@ class _RecordingGate:
 class _RecordingTTS:
     def __init__(self) -> None:
         self.spoken: list[str] = []
+        self.stopped = False
 
     def speak(self, text: str) -> None:
         self.spoken.append(text)
+
+    def stop(self) -> None:
+        self.stopped = True
 
 
 def _orchestrator(text: str, gate: object, tts: object | None = None) -> Orchestrator:
@@ -155,6 +159,22 @@ def test_empty_transcription_returns_to_idle_without_planning() -> None:
     assert orch.state is State.IDLE
 
 
+def test_is_nonspeech_rejects_noise_artifacts() -> None:
+    from autobot.orchestrator.state_machine import _is_nonspeech
+
+    # Whisper non-speech annotations from background noise -> not real speech.
+    assert _is_nonspeech("(water splashing)") is True
+    assert _is_nonspeech("[music playing]") is True
+    assert _is_nonspeech("*sigh*") is True
+    assert _is_nonspeech("   ") is True
+    assert _is_nonspeech("...") is True
+    assert _is_nonspeech("♪♪") is True
+    # Real speech (even short) is kept.
+    assert _is_nonspeech("open spotify") is False
+    assert _is_nonspeech("yes") is False
+    assert _is_nonspeech("what's the time?") is False
+
+
 def test_looks_incomplete_detects_cut_off_phrases() -> None:
     from autobot.orchestrator.state_machine import _looks_incomplete
 
@@ -206,10 +226,10 @@ def test_incomplete_utterance_triggers_reopen_and_retranscribe() -> None:
     stt = _GrowingSTT()
     orch = Orchestrator(
         settings=Settings(reopen_on_incomplete=True),
-        audio=audio,  # type: ignore[arg-type]
-        stt=stt,  # type: ignore[arg-type]
+        audio=audio,
+        stt=stt,
         llm=_EchoLLM(),
-        gate=_RecordingGate(),
+        gate=_RecordingGate(),  # type: ignore[arg-type]
         wake_gate=PassThroughGate(),
         tts=NullTTS(),
     )
@@ -249,10 +269,10 @@ def test_awake_true_after_addressed_turn_false_when_ignored() -> None:
     addressed = _AwakeAudio()
     Orchestrator(
         settings=Settings(),
-        audio=addressed,  # type: ignore[arg-type]
+        audio=addressed,
         stt=_FakeSTT("open spotify"),
         llm=_EchoLLM(),
-        gate=_RecordingGate(),
+        gate=_RecordingGate(),  # type: ignore[arg-type]
         wake_gate=PassThroughGate(),
         tts=NullTTS(),
     ).run_once()
@@ -262,14 +282,93 @@ def test_awake_true_after_addressed_turn_false_when_ignored() -> None:
     ignored = _AwakeAudio()
     Orchestrator(
         settings=Settings(),
-        audio=ignored,  # type: ignore[arg-type]
+        audio=ignored,
         stt=_FakeSTT("just chatting nearby"),
         llm=_EchoLLM(),
-        gate=_RecordingGate(),
+        gate=_RecordingGate(),  # type: ignore[arg-type]
         wake_gate=_IgnoringGate(),
         tts=NullTTS(),
     ).run_once()
     assert ignored.awake[-1] is False
+
+
+class _StoppableTTS:
+    def __init__(self) -> None:
+        self.spoke: list[str] = []
+        self.stopped = False
+
+    def speak(self, text: str) -> None:
+        self.spoke.append(text)
+
+    def stop(self) -> None:
+        self.stopped = True
+
+
+def test_barge_in_stops_reply_and_queues_the_interrupting_utterance() -> None:
+    from autobot.orchestrator.wake_gate import PassThroughGate
+
+    class _BargeAudio:
+        aec_active = True
+
+        def __init__(self) -> None:
+            self.last_speech_started_at = 2.0
+            self.awake: list[bool] = []
+
+        def record_clip(self) -> AudioClip:
+            return np.ones(4, dtype=np.float32)
+
+        def set_awake(self, awake: bool) -> None:
+            self.awake.append(awake)
+
+        def monitor_barge_in(
+            self, _should_continue: object, on_speech_start: object = None
+        ) -> AudioClip:
+            if callable(on_speech_start):
+                on_speech_start()  # the user started speaking -> stop playback now
+            return np.ones(8, dtype=np.float32)  # the user talked over the reply
+
+    audio, tts = _BargeAudio(), _StoppableTTS()
+    orch = Orchestrator(
+        settings=Settings(barge_in=True),
+        audio=audio,
+        stt=_FakeSTT("open spotify"),
+        llm=_EchoLLM(),
+        gate=_RecordingGate(),  # type: ignore[arg-type]
+        wake_gate=PassThroughGate(),
+        tts=tts,
+    )
+    orch.run_once()
+    assert tts.stopped is True
+    assert orch._pending_audio is not None  # queued for the next turn
+
+
+def test_no_barge_in_when_input_is_not_echo_cancelled() -> None:
+    from autobot.orchestrator.wake_gate import PassThroughGate
+
+    class _PlainAudio:
+        last_speech_started_at = None  # no aec_active attr -> barge-in disabled
+
+        def record_clip(self) -> AudioClip:
+            return np.ones(4, dtype=np.float32)
+
+        def monitor_barge_in(
+            self, _should_continue: object, on_speech_start: object = None
+        ) -> AudioClip:
+            raise AssertionError("must not monitor without AEC")
+
+    tts = _StoppableTTS()
+    orch = Orchestrator(
+        settings=Settings(barge_in=True),
+        audio=_PlainAudio(),
+        stt=_FakeSTT("open spotify"),
+        llm=_EchoLLM(),
+        gate=_RecordingGate(),  # type: ignore[arg-type]
+        wake_gate=PassThroughGate(),
+        tts=tts,
+    )
+    orch.run_once()
+    assert tts.spoke == ["open spotify"]  # spoken directly, never monitored
+    assert orch._pending_audio is None
 
 
 def test_ack_phrase_maps_risk_to_the_right_pool() -> None:

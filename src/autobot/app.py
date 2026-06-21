@@ -32,7 +32,31 @@ from autobot.tools.registry import ToolRegistry
 from autobot.tools.sandbox import Sandbox
 
 if TYPE_CHECKING:
+    from autobot.io.listening import FrameSource
     from autobot.memory.store import MemoryStore
+
+
+def _build_mic_source(settings: Settings) -> FrameSource:
+    """The microphone frame source: echo-cancelled (AEC) if enabled and available.
+
+    AEC needs the macOS Voice-Processing path; any failure (wrong platform, missing
+    pyobjc, runtime error) falls back to the plain mic, so barge-in just won't
+    engage rather than the app breaking.
+    """
+    from autobot.io.listening import MicFrameSource
+
+    if settings.aec:
+        try:
+            from autobot.io.aec_mac import VoiceProcessingMicSource
+
+            src = VoiceProcessingMicSource(settings)
+            get_logger("app").info("mic input: Voice-Processing (AEC on) — barge-in safe")
+            print("[mic] echo cancellation ON (Voice-Processing) — barge-in enabled.")
+            return src
+        except Exception as exc:  # any failure -> plain mic, barge-in stays off
+            get_logger("app").warning("AEC unavailable, using plain mic: %s", exc)
+            print(f"[mic] AEC unavailable ({exc}) — plain mic; barge-in disabled.")
+    return MicFrameSource(settings)
 
 
 def _build_audio_source(
@@ -48,10 +72,10 @@ def _build_audio_source(
     if settings.input_mode == "ptt":
         return PushToTalkRecorder(settings)
 
-    from autobot.io.listening import MicFrameSource, VadRecorder, WakeWordVadRecorder
+    from autobot.io.listening import VadRecorder, WakeWordVadRecorder
     from autobot.io.wake_vad import OpenWakeWord, SileroVad
 
-    source = MicFrameSource(settings)
+    source = _build_mic_source(settings)
     try:
         vad = SileroVad()  # imports the heavy runtime
         if settings.wake_detector == "openwakeword":
@@ -298,9 +322,23 @@ def build(
 
     stt = ReloadableSTT(lambda: _build_stt(Settings.load()))
 
+    audio = _build_audio_source(settings, amplitude_sink, on_voice)
+    # Make barge-in readiness obvious at startup: it engages only when the user
+    # wants it AND the mic is echo-cancelled (so Jack can't interrupt itself).
+    aec_on = bool(getattr(audio, "aec_active", False))
+    if settings.barge_in and aec_on:
+        log.info("barge-in READY (aec_active=True) — talk over Jack to interrupt")
+        print("[barge-in] READY — you can talk over Jack to interrupt it.")
+    elif settings.barge_in:
+        log.warning("barge-in requested but INACTIVE: aec_active=False (AEC off/failed)")
+        print(
+            "[barge-in] INACTIVE — echo cancellation isn't active, so barge-in is off "
+            "(enable AEC + restart; check the [mic] line above)."
+        )
+
     return Orchestrator(
         settings=settings,
-        audio=_build_audio_source(settings, amplitude_sink, on_voice),
+        audio=audio,
         stt=stt,
         llm=llm,
         gate=gate,

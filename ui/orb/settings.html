@@ -130,6 +130,10 @@
       <div class="card">
         <div class="row"><span class="grow"><span class="label">Speak replies</span><div class="desc">Voice output (TTS)</div></span>
           <label class="switch"><input type="checkbox" id="tts_enabled"><span class="slider"></span></label></div>
+        <div class="row"><span class="grow"><span class="label">Barge-in</span><div class="desc">Talk over Jack to interrupt it (needs echo cancellation on)</div></span>
+          <label class="switch"><input type="checkbox" id="barge_in"><span class="slider"></span></label></div>
+        <div class="row"><span class="grow"><span class="label">Echo cancellation</span><div class="desc">macOS Voice-Processing mic — makes barge-in safe on speakers</div></span>
+          <label class="switch"><input type="checkbox" id="aec"><span class="slider"></span></label></div>
         <div class="row"><span class="grow"><span class="label">App control</span><div class="desc">Open, switch, quit apps</div></span>
           <label class="switch"><input type="checkbox" id="allow_app_control"><span class="slider"></span></label></div>
         <div class="row"><span class="grow"><span class="label">System info</span><div class="desc">Battery, Wi-Fi, disk</div></span>
@@ -165,6 +169,8 @@
           <input type="number" id="end_silence_ms" min="300" max="4000" step="100" /></div>
         <div class="row"><span class="grow"><span class="label">Max phrase length</span><div class="desc">Seconds before a single utterance is force-ended</div></span>
           <input type="number" id="max_utterance_s" min="5" max="120" step="1" /></div>
+        <div class="row"><span class="grow"><span class="label">Voice detection threshold</span><div class="desc">Higher ignores more background noise — raise it (e.g. 0.7) in a noisy room (0.5 default)</div></span>
+          <input type="number" id="vad_threshold" min="0.1" max="0.95" step="0.05" /></div>
         <div class="stack" style="margin-top:4px"><label for="stt_engine">Speech engine</label>
           <select id="stt_engine">
             <option value="faster_whisper">Faster-Whisper — CPU (default)</option>
@@ -189,7 +195,7 @@
 (function(){
   var API = new URLSearchParams(location.search).get("api") || "http://127.0.0.1:8765";
   var $ = function(id){ return document.getElementById(id); };
-  var CHECKS = ["tts_enabled","allow_app_control","allow_system_info","allow_memory","allow_web"];
+  var CHECKS = ["tts_enabled","barge_in","aec","allow_app_control","allow_system_info","allow_memory","allow_web"];
 
   // tabs
   document.querySelectorAll(".tabs button").forEach(function(b){
@@ -300,6 +306,7 @@
     $("follow_up_window_s").value = s.follow_up_window_s != null ? s.follow_up_window_s : 30;
     $("end_silence_ms").value = s.end_silence_ms != null ? s.end_silence_ms : 1400;
     $("max_utterance_s").value = s.max_utterance_s != null ? s.max_utterance_s : 30;
+    $("vad_threshold").value = s.vad_threshold != null ? s.vad_threshold : 0.5;
     $("stt_engine").value = s.stt_engine || "faster_whisper";
     populateSttModels(s.stt_model || "");
     CHECKS.forEach(function(k){ $(k).checked = !!s[k]; });
@@ -346,6 +353,7 @@
       follow_up_window_s: Number($("follow_up_window_s").value),
       end_silence_ms: Number($("end_silence_ms").value),
       max_utterance_s: Number($("max_utterance_s").value),
+      vad_threshold: Number($("vad_threshold").value),
       stt_engine: $("stt_engine").value,
       stt_model: selectedSttModel()
     };

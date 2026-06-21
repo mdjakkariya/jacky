@@ -12,3 +12,6 @@ class NullTTS:
 
     def speak(self, text: str) -> None:  # noqa: D102 - see class docstring
         return
+
+    def stop(self) -> None:  # noqa: D102 - nothing ever plays
+        return

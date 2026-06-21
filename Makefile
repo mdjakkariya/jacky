@@ -11,8 +11,8 @@ help: ## Show this help
 setup: install hooks ## Create the env and install git hooks
 	@echo "Setup complete. Run 'make run' to start (needs Ollama running)."
 
-install: ## Sync the virtualenv with all deps (dev + wake + tts + daemon + cloud + whispercpp)
-	uv sync --extra dev --extra all --extra daemon --extra cloud --extra whispercpp
+install: ## Sync the virtualenv with all deps (dev + wake + tts + daemon + cloud + whispercpp + aec)
+	uv sync --extra dev --extra all --extra daemon --extra cloud --extra whispercpp --extra aec
 
 lint: ## Lint with ruff
 	uv run ruff check .

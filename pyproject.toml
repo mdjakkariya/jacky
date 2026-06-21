@@ -53,6 +53,11 @@ cloud = [
 whispercpp = [
     "pywhispercpp>=1.2",
 ]
+# Optional echo cancellation via macOS Voice-Processing (for barge-in). macOS only,
+# lazy-imported, falls back to the plain mic. `uv sync --extra aec`.
+aec = [
+    "pyobjc-framework-AVFoundation>=10.0; sys_platform == 'darwin'",
+]
 dev = [
     "ruff>=0.6",
     "mypy>=1.11",
@@ -142,6 +147,8 @@ module = [
     "uvicorn.*",
     "anthropic.*",
     "pywhispercpp.*",
+    "objc.*",
+    "AVFoundation.*",
 ]
 ignore_missing_imports = true
 

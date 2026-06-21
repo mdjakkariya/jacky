@@ -124,6 +124,7 @@ def capture_utterance(
     on_level: AmplitudeSink | None = None,
     on_speech_start: Callable[[], None] | None = None,
     on_voice: Callable[[bool], None] | None = None,
+    should_continue: Callable[[], bool] | None = None,
 ) -> AudioClip | None:
     """Capture one VAD-delimited utterance from a frame stream.
 
@@ -160,6 +161,10 @@ def capture_utterance(
                 on_level(rms_level(frame))
             endpointer.update(vad.speech_prob(frame))
             if collected is None:
+                # Give up waiting if a caller-supplied predicate says to stop (used
+                # for barge-in monitoring: stop once playback has finished).
+                if should_continue is not None and not should_continue():
+                    return None
                 # Still waiting for speech to begin: keep a rolling pre-roll.
                 prebuffer.push(frame)
                 if endpointer.started:
@@ -344,6 +349,41 @@ class WakeWordVadRecorder:
         clip = self._capture(wait_frames)
         return clip if clip is not None else np.zeros(0, dtype=np.float32)
 
+    @property
+    def aec_active(self) -> bool:
+        """Whether the mic input is echo-cancelled (needed for safe barge-in)."""
+        return bool(getattr(self._source, "aec_active", False))
+
+    def monitor_barge_in(
+        self,
+        should_continue: Callable[[], bool],
+        on_speech_start: Callable[[], None] | None = None,
+    ) -> AudioClip | None:
+        """Watch for a barge-in while ``should_continue()`` holds.
+
+        Fires ``on_speech_start`` the instant speech begins (to stop playback at
+        once); returns the captured utterance, or ``None`` if playback finished.
+        """
+        self._vad.reset()
+
+        def started() -> None:
+            self._mark_speech_start()
+            if on_speech_start is not None:
+                on_speech_start()
+
+        return capture_utterance(
+            self._next_frame,
+            self._vad,
+            vad_threshold=self._settings.vad_threshold,
+            end_silence_frames=self._end_silence_frames,
+            max_frames=self._max_frames,
+            wait_frames=None,
+            on_level=self._on_level,
+            on_speech_start=started,
+            on_voice=self._voice,
+            should_continue=should_continue,
+        )
+
 
 class VadRecorder:
     """Captures each spoken utterance with VAD only — no wake word.
@@ -448,3 +488,40 @@ class VadRecorder:
             on_voice=self._voice,
         )
         return clip if clip is not None else np.zeros(0, dtype=np.float32)
+
+    @property
+    def aec_active(self) -> bool:
+        """Whether the mic input is echo-cancelled (needed for safe barge-in)."""
+        return bool(getattr(self._source, "aec_active", False))
+
+    def monitor_barge_in(
+        self,
+        should_continue: Callable[[], bool],
+        on_speech_start: Callable[[], None] | None = None,
+    ) -> AudioClip | None:
+        """While ``should_continue()`` holds, watch for the user starting to speak.
+
+        ``on_speech_start`` fires the *instant* speech begins (used to stop playback
+        immediately, before the whole utterance is captured). Returns the captured
+        utterance the moment they barge in (through to its end), or ``None`` if
+        playback finished first.
+        """
+        self._vad.reset()
+
+        def started() -> None:
+            self._mark_speech_start()
+            if on_speech_start is not None:
+                on_speech_start()
+
+        return capture_utterance(
+            self._next_frame,
+            self._vad,
+            vad_threshold=self._settings.vad_threshold,
+            end_silence_frames=self._end_silence_frames,
+            max_frames=self._max_frames,
+            wait_frames=None,
+            on_level=self._on_level,
+            on_speech_start=started,
+            on_voice=self._voice,
+            should_continue=should_continue,
+        )

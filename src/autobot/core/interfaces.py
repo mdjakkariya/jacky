@@ -87,5 +87,15 @@ class TextToSpeech(Protocol):
 
         Implementations should no-op on empty text. A disabled or unavailable
         engine is represented by a null implementation, so callers never branch.
+        Playback must be interruptible: if :meth:`stop` is called from another
+        thread while speaking, return promptly instead of finishing the audio.
+        """
+        ...
+
+    def stop(self) -> None:
+        """Request that any in-progress playback stop as soon as possible.
+
+        Called from another thread (e.g. when the user barges in). Safe to call
+        when nothing is playing — it just clears the way for the next ``speak``.
         """
         ...

@@ -118,6 +118,14 @@ class Settings:
     tts_enabled: bool = True
     tts_voice: str = _DEFAULT_TTS_VOICE
     speak_acknowledgements: bool = True
+    # Barge-in: let the user talk over Jack to interrupt it. On by default, but it
+    # only engages when the mic input is echo-cancelled (AEC), so Jack never
+    # interrupts itself on its own voice through the speakers.
+    barge_in: bool = True
+    # Echo cancellation via macOS Voice-Processing I/O. Off by default until
+    # validated on the target Mac; when on, the mic input cancels Jack's own output
+    # so barge-in is safe on speakers. Falls back to the plain mic if unavailable.
+    aec: bool = False
     # --- web search (opt-in, off-device) ---
     allow_web: bool = False
     web_results: int = 5

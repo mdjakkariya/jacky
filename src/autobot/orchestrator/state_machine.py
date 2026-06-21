@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import random
 import re
+import threading
 import time
 from collections.abc import Callable
 
@@ -174,6 +175,28 @@ _CONTINUATION_WORDS = frozenset(
 )
 
 
+# Whisper emits non-speech annotations on noise/silence — "(water splashing)",
+# "[music]", "*sigh*", "♪" — and bare punctuation. These aren't real speech and
+# must never reach the wake gate or the LLM (otherwise a fan or a splash becomes a
+# "command", even running tools). Matches a whole transcript wrapped in (), [], or **.
+_BRACKETED = re.compile(r"^[(\[*][^)\]*]*[)\]*]$")
+
+
+def _is_nonspeech(text: str) -> bool:
+    """True if a transcript is a Whisper non-speech artifact rather than real words.
+
+    Catches empty/punctuation-only output and bracketed sound annotations like
+    ``(water splashing)`` or ``[music]`` — so ambient noise can't trigger a turn.
+    """
+    stripped = text.strip()
+    if not stripped:
+        return True
+    if _BRACKETED.match(stripped):
+        return True
+    # No letters or digits at all (e.g. ".", "...", "♪♪") -> not speech.
+    return re.search(r"[a-z0-9]", stripped.lower()) is None
+
+
 def _looks_incomplete(text: str) -> bool:
     """Heuristic: does this transcript look cut off mid-thought?
 
@@ -244,6 +267,10 @@ class Orchestrator:
         # animation: only animate while engaged, not during passive always-on
         # capture (otherwise ambient speech lights up the orb and it never rests).
         self._awake = False
+        # An utterance the user spoke while barging in over a reply — processed as
+        # the next turn instead of capturing fresh.
+        self._pending_audio: AudioClip | None = None
+        self._pending_started_at: float | None = None
 
     def _greeting(self) -> str:
         """The reply to a bare wake word — name-aware, and a first hello if new."""
@@ -329,17 +356,81 @@ class Orchestrator:
         if callable(set_awake):
             set_awake(awake)
 
+    def _barge_in_capable(self) -> bool:
+        """Barge-in only when enabled and the mic input is echo-cancelled (AEC).
+
+        Without AEC the monitor would hear Jack's own voice and interrupt itself, so
+        we require an AEC-active input before listening during playback.
+        """
+        return (
+            self._settings.barge_in
+            and callable(getattr(self._audio, "monitor_barge_in", None))
+            and bool(getattr(self._audio, "aec_active", False))
+        )
+
+    def _respond(self, reply: str) -> AudioClip | None:
+        """Speak ``reply``; if the user barges in, stop and return their utterance.
+
+        Plays on a background thread while monitoring the mic for the user starting
+        to speak. On barge-in we stop playback immediately and hand the captured
+        utterance back so the loop treats it as the next turn. Returns ``None`` when
+        the reply finished uninterrupted (or barge-in isn't available).
+        """
+        if not self._barge_in_capable():
+            _log.debug(
+                "barge-in off this reply: enabled=%s has_monitor=%s aec_active=%s",
+                self._settings.barge_in,
+                callable(getattr(self._audio, "monitor_barge_in", None)),
+                bool(getattr(self._audio, "aec_active", False)),
+            )
+            self._tts.speak(reply)
+            return None
+        _log.info("speaking with barge-in monitoring (talk to interrupt)")
+        done = threading.Event()
+
+        def _play() -> None:
+            try:
+                self._tts.speak(reply)
+            finally:
+                done.set()
+
+        thread = threading.Thread(target=_play, name="tts", daemon=True)
+        thread.start()
+        self._set_awake(True)  # animate "listening" if they cut in
+
+        def _on_user_starts() -> None:
+            # The instant the user speaks, cut the voice — don't wait for them to
+            # finish the sentence (otherwise Jack talks over them).
+            _log.info("barge-in: user started speaking — stopping playback now")
+            self._tts.stop()
+
+        # Presence + AEC checked in _barge_in_capable; not on the AudioSource protocol.
+        barge = self._audio.monitor_barge_in(  # type: ignore[attr-defined]
+            lambda: not done.is_set(), on_speech_start=_on_user_starts
+        )
+        self._tts.stop()  # safety: ensure stopped even if onset hook was missed
+        thread.join()
+        return barge if (barge is not None and barge.size) else None
+
     def run_once(self) -> None:
         """Run a single turn: listen, transcribe, gate the wake word, plan, respond."""
-        # Only show the "listening" cue if we're engaged; passive capture stays idle.
-        self._set_awake(self._awake)
-        self._sm.transition(State.LISTENING)
-        audio = self._audio.record_clip()
-        # When this utterance *began* — used to judge the follow-up window against
-        # speech start rather than end-of-capture, so a long phrase isn't dropped.
-        started_at = getattr(self._audio, "last_speech_started_at", None)
-
-        self._sm.transition(State.TRANSCRIBING)
+        if self._pending_audio is not None:
+            # The user barged in over the last reply — process what they said now,
+            # without capturing fresh. We're in a conversation, so stay awake.
+            audio, started_at = self._pending_audio, self._pending_started_at
+            self._pending_audio = self._pending_started_at = None
+            self._set_awake(True)
+            self._sm.transition(State.LISTENING)
+            self._sm.transition(State.TRANSCRIBING)
+        else:
+            # Only show the "listening" cue if we're engaged; passive capture is idle.
+            self._set_awake(self._awake)
+            self._sm.transition(State.LISTENING)
+            audio = self._audio.record_clip()
+            # When this utterance *began* — judge the follow-up window against speech
+            # start, not end-of-capture, so a long phrase isn't dropped.
+            started_at = getattr(self._audio, "last_speech_started_at", None)
+            self._sm.transition(State.TRANSCRIBING)
         transcription = self._stt.transcribe(audio)
         if self._settings.save_audio and audio.size:
             from autobot.io.audio import save_wav
@@ -347,8 +438,14 @@ class Orchestrator:
             clip = save_wav(self._settings.session_dir, audio, self._settings.sample_rate)
             _log.info("saved audio file=%s text=%r", clip, transcription.text)
             self._transcript.note(f"audio clip → {clip.name}  (heard: {transcription.text!r})")
-        if transcription.is_empty:
-            _log.debug("ignored reason=no_speech")
+        if transcription.is_empty or _is_nonspeech(transcription.text):
+            # Nothing said, or just noise Whisper turned into "(water splashing)" /
+            # bare punctuation. Drop it — and leave the conversation so background
+            # noise can't keep firing turns; the wake word re-engages.
+            _log.info("ignored reason=non_speech text=%r", transcription.text)
+            if transcription.text.strip():
+                self._transcript.note(f"ignored (not speech): {transcription.text!r}")
+            self._set_awake(False)
             self._sm.transition(State.IDLE)
             return
 
@@ -400,7 +497,8 @@ class Orchestrator:
         _log.info("replied chars=%d latency_ms=%d", len(reply), elapsed_ms)
         print(f"[autobot] {reply}\n")
         self._transcript.assistant(reply)
-        self._tts.speak(reply)
+        # Speak it — but if the user talks over Jack, stop and capture what they said.
+        barge = self._respond(reply)
         if self._dismissed:
             # Dismissed: close the follow-up window so only the wake word returns,
             # and drop out of the conversation so the orb rests.
@@ -409,6 +507,11 @@ class Orchestrator:
         else:
             self._wake_gate.mark_turn_complete()
             self._set_awake(True)  # stay engaged for the follow-up
+        if barge is not None:
+            # Process the interrupting utterance as the next turn.
+            self._transcript.note("barge-in: user interrupted the reply")
+            self._pending_audio = barge
+            self._pending_started_at = getattr(self._audio, "last_speech_started_at", None)
         self._sm.transition(State.IDLE)
 
     def run(self) -> None:
