@@ -1,4 +1,4 @@
-# Autobot — "Jack"
+# Assistent — "Jack"
 
 A privacy-first, **on-device** voice assistant for macOS. You talk to a floating
 orb ("Jack"); it listens, understands, and acts on your Mac — open and close apps
