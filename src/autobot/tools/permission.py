@@ -16,6 +16,7 @@ declined confirmation aborts without side effects. UI is injected via the
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from typing import Protocol, runtime_checkable
 
 from autobot.core.types import Decision, Risk, ToolCall, ToolResult
@@ -67,11 +68,18 @@ class PermissionGate:
         audit: AuditLog,
         confirmer: Confirmer,
         confirm_at_or_above: Risk = Risk.DESTRUCTIVE,
+        permission_status: Callable[[str], str] | None = None,
+        on_permission_needed: Callable[[str], object] | None = None,
     ) -> None:
         self._registry = registry
         self._audit = audit
         self._confirmer = confirmer
         self._threshold = confirm_at_or_above
+        # Injected so the gate stays headless/testable. ``permission_status`` returns
+        # "granted"/"needed"/"unknown" for a permission key; ``on_permission_needed``
+        # is called (e.g. to open the Settings pane) when a tool is blocked.
+        self._permission_status = permission_status
+        self._on_permission_needed = on_permission_needed
 
     def risk_of(self, name: str) -> Risk | None:
         """The risk level of a registered tool, or ``None`` if it's unknown.
@@ -97,6 +105,30 @@ class PermissionGate:
                 detail="unknown tool",
             )
             return ToolResult(name=call.name, content=f"unknown tool: {call.name!r}", ok=False)
+
+        # Permission gate: if this tool needs a macOS permission we know is missing,
+        # refuse before running and surface the right Settings pane — rather than
+        # letting it fail opaquely deep in AppleScript.
+        if spec.requires and self._permission_status is not None:
+            from autobot import permissions
+
+            if self._permission_status(spec.requires) == permissions.NEEDED:
+                _log.info(
+                    "denied tool=%s reason=permission_needed perm=%s", call.name, spec.requires
+                )
+                if self._on_permission_needed is not None:
+                    self._on_permission_needed(spec.requires)
+                self._audit.log(
+                    tool=call.name,
+                    arguments=call.arguments,
+                    risk=spec.risk.name,
+                    decision=Decision.DENIED,
+                    ok=None,
+                    detail=f"missing permission: {spec.requires}",
+                )
+                return ToolResult(
+                    name=call.name, content=permissions.needed_message(spec.requires), ok=False
+                )
 
         if spec.risk >= self._threshold:
             prompt = spec.confirm_prompt or self._format_prompt(
@@ -124,6 +156,16 @@ class PermissionGate:
                 )
 
         result = self._registry.dispatch(call.name, call.arguments)
+        # Learn from the outcome: a success means the permission is granted; a
+        # permission-style failure means it's missing. Refines the cached state when
+        # the native check couldn't determine it.
+        if spec.requires and self._permission_status is not None:
+            from autobot import permissions
+
+            if result.ok:
+                permissions.note_observed(spec.requires, True)
+            elif "permission" in result.content.lower():
+                permissions.note_observed(spec.requires, False)
         _log.info(
             "allowed tool=%s risk=%s ok=%s args=%s",
             call.name,

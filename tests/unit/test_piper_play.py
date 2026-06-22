@@ -48,7 +48,9 @@ class _FakePlayer:
     def __init__(self) -> None:
         self.calls: list[tuple[AudioClip, int]] = []
 
-    def play(self, audio: AudioClip, sample_rate: int, cancel: object, on_level: object = None) -> bool:
+    def play(
+        self, audio: AudioClip, sample_rate: int, cancel: object, on_level: object = None
+    ) -> bool:
         self.calls.append((audio, sample_rate))
         return True
 
@@ -71,16 +73,16 @@ def test_pipertts_routes_audio_to_injected_player() -> None:
     from autobot.tts.piper_tts import AudioPlayer, PiperTTS, SoundDevicePlayer
 
     tts = object.__new__(PiperTTS)  # bypass __init__ (no piper / no model file)
-    tts._voice = _FakeVoice(  # type: ignore[attr-defined]
+    tts._voice = _FakeVoice(  # type: ignore[assignment]
         [
             _Chunk(np.array([1, 2, 3], dtype=np.int16), 22_050),
             _Chunk(np.array([4, 5], dtype=np.int16), 22_050),
         ]
     )
     player = _FakePlayer()
-    tts._player = player  # type: ignore[attr-defined]
-    tts._on_level = None  # type: ignore[attr-defined]
-    tts._cancel = threading.Event()  # type: ignore[attr-defined]
+    tts._player = player  # type: ignore[assignment]
+    tts._on_level = None
+    tts._cancel = threading.Event()
 
     tts.speak("hello")
 

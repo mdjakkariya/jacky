@@ -107,6 +107,14 @@
   .report-actions .btn{padding:6px 12px}
   .report-actions .btn.ghost{padding:6px 8px}
   .chev{font-size:10px;opacity:.8;margin-left:5px}
+  /* Permissions list */
+  .perm-row{display:flex;align-items:center;justify-content:space-between;gap:10px;
+    padding:11px 14px;border-top:.5px solid var(--line)}
+  .perm-row:first-child{border-top:none}
+  .badge{font-size:11px;font-weight:600;padding:2px 9px;border-radius:10px;white-space:nowrap}
+  .badge.granted{background:rgba(40,180,90,.16);color:#2ea043}
+  .badge.needed{background:rgba(255,90,90,.16);color:#ff5a5a}
+  .badge.unknown{background:var(--seg-bg);color:var(--muted)}
   /* "Copied" tooltip that pops above the Copy button. */
   #copyReport{position:relative}
   .tip{position:absolute;bottom:calc(100% + 7px);left:50%;transform:translateX(-50%);
@@ -128,6 +136,7 @@
     <button data-tab="model" class="active">Model</button>
     <button data-tab="caps">Capabilities</button>
     <button data-tab="listen">Listening</button>
+    <button data-tab="perms">Permissions</button>
   </div>
 
   <main>
@@ -220,6 +229,12 @@
           <div class="hint">Bigger = more accurate but more CPU per phrase. Applies on your next phrase (no restart); the first use downloads the model.</div></div>
       </div>
     </section>
+
+    <!-- PERMISSIONS -->
+    <section class="panel" id="tab-perms">
+      <div class="card" id="permsList"></div>
+      <div class="hint">Jack only needs these to do what you ask. Grant them once in System Settings; "Open Settings" takes you straight to the right pane.</div>
+    </section>
   </main>
 
   <div id="reportBackdrop" class="report-backdrop"></div>
@@ -257,8 +272,36 @@
       document.querySelectorAll(".tabs button").forEach(function(x){x.classList.remove("active");});
       document.querySelectorAll(".panel").forEach(function(p){p.classList.remove("active");});
       b.classList.add("active"); $("tab-" + b.dataset.tab).classList.add("active");
+      if(b.dataset.tab === "perms") loadPermissions();
     });
   });
+
+  var _PERM_LABEL = {granted: "Granted", needed: "Needed", unknown: "Unknown"};
+  async function loadPermissions(){
+    var box = $("permsList");
+    box.textContent = "";
+    var rows = [];
+    try { rows = ((await (await fetch(API + "/permissions")).json()).permissions) || []; }
+    catch(e){ box.innerHTML = '<div class="perm-row"><span class="desc">Couldn\'t load — is Jack running?</span></div>'; return; }
+    rows.forEach(function(p){
+      var row = document.createElement("div"); row.className = "perm-row";
+      var info = document.createElement("span"); info.className = "grow";
+      info.innerHTML = '<span class="label"></span><div class="desc"></div>';
+      info.querySelector(".label").textContent = p.label;
+      info.querySelector(".desc").textContent = p.description;
+      var badge = document.createElement("span");
+      badge.className = "badge " + p.status;
+      badge.textContent = _PERM_LABEL[p.status] || p.status;
+      var btn = document.createElement("button"); btn.className = "btn ghost"; btn.textContent = "Open Settings";
+      btn.addEventListener("click", function(){ openPane(p.key); });
+      row.appendChild(info); row.appendChild(badge); row.appendChild(btn);
+      box.appendChild(row);
+    });
+  }
+  async function openPane(key){
+    try { await fetch(API + "/permissions/open", {method:"POST", headers:{"content-type":"application/json"}, body: JSON.stringify({key: key})}); }
+    catch(e){ /* ignore */ }
+  }
 
   // Suggested Claude models (fast, tool-capable). Plus a "Custom…" escape hatch
   // so newer model names aren't locked out.

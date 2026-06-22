@@ -25,6 +25,7 @@ from collections.abc import Callable
 
 from autobot.core.types import Risk
 from autobot.logging_setup import get_logger
+from autobot.permissions import ACCESSIBILITY, AUTOMATION
 from autobot.tools.registry import ToolRegistry, ToolSpec
 
 _log = get_logger("apps")
@@ -354,7 +355,7 @@ class AppTools:
                     "properties": {
                         "url": {
                             "type": "string",
-                            "description": "URL or domain, e.g. 'youtube.com' or 'https://youtube.com'.",
+                            "description": "URL or domain, e.g. 'youtube.com'.",
                         }
                     },
                     "required": ["url"],
@@ -383,6 +384,7 @@ class AppTools:
                 },
                 handler=self.close_website,
                 risk=Risk.WRITE,
+                requires=AUTOMATION,
             ),
             ToolSpec(
                 name="focus_app",
@@ -401,6 +403,7 @@ class AppTools:
                 parameters=name_param,
                 handler=self.hide_app,
                 risk=Risk.WRITE,
+                requires=ACCESSIBILITY,
             ),
             ToolSpec(
                 name="minimize_app",
@@ -408,6 +411,7 @@ class AppTools:
                 parameters=name_param,
                 handler=self.minimize_app,
                 risk=Risk.WRITE,
+                requires=ACCESSIBILITY,
             ),
             ToolSpec(
                 name="maximize_app",
@@ -415,6 +419,7 @@ class AppTools:
                 parameters=name_param,
                 handler=self.maximize_app,
                 risk=Risk.WRITE,
+                requires=ACCESSIBILITY,
             ),
             ToolSpec(
                 name="quit_app",
@@ -427,6 +432,7 @@ class AppTools:
                 parameters=name_param,
                 handler=self.quit_app,
                 risk=Risk.WRITE,
+                requires=AUTOMATION,
             ),
             ToolSpec(
                 name="list_apps",
@@ -434,6 +440,7 @@ class AppTools:
                 parameters={"type": "object", "properties": {}, "required": []},
                 handler=self.list_apps,
                 risk=Risk.READ_ONLY,
+                requires=ACCESSIBILITY,
             ),
             ToolSpec(
                 name="uninstall_app",
@@ -444,6 +451,7 @@ class AppTools:
                 parameters=name_param,
                 handler=self.uninstall_app,
                 risk=Risk.DESTRUCTIVE,
+                requires=AUTOMATION,
             ),
         ]
 
@@ -457,5 +465,7 @@ def register_app_tools(registry: ToolRegistry, runner: Runner | None = None) -> 
     tools = AppTools(runner)
     for spec in tools.specs():
         registry.register(spec)
-    _log.info("app-control tools registered (open/website/close-tab/focus/hide/quit/list/uninstall)")
+    _log.info(
+        "app-control tools registered (open/website/close-tab/focus/hide/quit/list/uninstall)"
+    )
     return tools

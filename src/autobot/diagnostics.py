@@ -222,8 +222,7 @@ def build_report(
 
     parts.append("## Summary")
     parts.append(
-        f"events {count_str} · states tracked {len(buf.states)} · "
-        f"since {buf.started:%H:%M:%S}\n"
+        f"events {count_str} · states tracked {len(buf.states)} · since {buf.started:%H:%M:%S}\n"
     )
 
     parts.append("## State sequence")
@@ -236,13 +235,13 @@ def build_report(
 
     parts.append("## Recent events")
     recent = [c.render() for c in buf.recent]
-    parts.append("<details><summary>last %d events</summary>\n" % len(recent))
+    parts.append(f"<details><summary>last {len(recent)} events</summary>\n")
     parts.append("```\n" + ("\n".join(recent) if recent else "(none)") + "\n```")
     parts.append("</details>\n")
 
     tail = _tail_lines(log_path, log_tail)
     parts.append("## Log tail")
-    parts.append("<details><summary>last %d log lines</summary>\n" % len(tail))
+    parts.append(f"<details><summary>last {len(tail)} log lines</summary>\n")
     parts.append("```\n" + ("\n".join(tail) if tail else "(no log file)") + "\n```")
     parts.append("</details>")
 

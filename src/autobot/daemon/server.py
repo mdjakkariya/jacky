@@ -195,6 +195,21 @@ def create_app(
         log_path = _Path(settings.log_dir).expanduser() / "autobot.log"
         return {"path": str(save_report(settings, log_path=log_path))}
 
+    async def get_permissions() -> dict[str, Any]:
+        """Current macOS permission statuses for the Settings view."""
+        from autobot import permissions
+
+        return {"permissions": permissions.snapshot()}
+
+    async def post_permission_open(request: Request) -> dict[str, Any]:
+        """Open the System Settings privacy pane for a permission key."""
+        from autobot import permissions
+
+        payload = await request.json()
+        key = payload.get("key") if isinstance(payload, dict) else None
+        ok = permissions.open_pane(str(key)) if key else False
+        return {"ok": ok}
+
     async def post_secret(request: Request) -> dict[str, Any]:
         """Store (or clear) an API key in the Keychain. Only known names allowed."""
         from autobot.secrets import delete_secret, set_secret
@@ -228,6 +243,8 @@ def create_app(
     app.add_api_route("/setup", get_setup, methods=["GET"])
     app.add_api_route("/report", get_report, methods=["GET"])
     app.add_api_route("/report/file", get_report_file, methods=["GET"])
+    app.add_api_route("/permissions", get_permissions, methods=["GET"])
+    app.add_api_route("/permissions/open", post_permission_open, methods=["POST"])
     app.add_api_route("/secret", post_secret, methods=["POST"])
     app.add_api_route("/confirm", post_confirm, methods=["POST"])
     return app

@@ -167,7 +167,9 @@ def _build_tts(
     try:
         from autobot.tts.piper_tts import AudioPlayer, PiperTTS
 
-        tts = PiperTTS(settings, on_level=on_level, player=player if isinstance(player, AudioPlayer) else None)
+        tts = PiperTTS(
+            settings, on_level=on_level, player=player if isinstance(player, AudioPlayer) else None
+        )
         routed = " (through AEC engine)" if isinstance(player, AudioPlayer) else ""
         log.info("voice output ready voice=%s%s", settings.tts_voice, routed)
         print(f"[tts] voice output READY (voice: {settings.tts_voice}){routed}")
@@ -418,7 +420,17 @@ def build(
     confirmer = _build_confirmer(
         settings, tts, audio, stt, on_confirm, on_confirm_clear, poll_click
     )
-    gate = PermissionGate(registry, audit, confirmer)  # type: ignore[arg-type]
+    # Permission-aware: refuse a tool whose macOS permission is missing (and open the
+    # right Settings pane) instead of letting it fail deep in AppleScript.
+    from autobot import permissions
+
+    gate = PermissionGate(
+        registry,
+        audit,
+        confirmer,  # type: ignore[arg-type]
+        permission_status=permissions.status_of,
+        on_permission_needed=permissions.open_pane,
+    )
 
     # Reloadable LLM: rebuilt from fresh settings + Keychain when the Settings
     # view changes the provider/model/key — no restart needed (applies next turn).

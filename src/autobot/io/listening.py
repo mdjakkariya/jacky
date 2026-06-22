@@ -248,7 +248,9 @@ class WakeWordVadRecorder:
         self._wake_preroll_frames = max(0, round(s.wake_preroll_ms / _FRAME_MS))
         # Barge-in needs *sustained* speech (not a 2-frame flicker) so residual echo
         # or a transient never falsely interrupts Jack mid-reply.
-        self._barge_in_start_frames = max(_START_FRAMES, round(s.barge_in_min_speech_ms / _FRAME_MS))
+        self._barge_in_start_frames = max(
+            _START_FRAMES, round(s.barge_in_min_speech_ms / _FRAME_MS)
+        )
 
     def _next_frame(self) -> AudioClip | None:
         """Pull the next frame from the (persistent) source, or ``None`` if ended."""
@@ -449,7 +451,9 @@ class VadRecorder:
         self._end_silence_frames = max(1, round(s.end_silence_ms / _FRAME_MS))
         self._max_frames = max(1, round(s.max_utterance_s * 1000 / _FRAME_MS))
         # Barge-in needs *sustained* speech so residual echo can't falsely interrupt.
-        self._barge_in_start_frames = max(_START_FRAMES, round(s.barge_in_min_speech_ms / _FRAME_MS))
+        self._barge_in_start_frames = max(
+            _START_FRAMES, round(s.barge_in_min_speech_ms / _FRAME_MS)
+        )
 
     def _mark_speech_start(self) -> None:
         self._last_speech_started_at = time.monotonic()

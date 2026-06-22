@@ -34,6 +34,55 @@ def _gate_with(tool: _SpyTool, name: str, confirmer: object) -> tuple[Permission
     return gate, audit
 
 
+def _gate_requiring(tool: _SpyTool, perm: str, status: str, opened: list[str]) -> PermissionGate:
+    registry = ToolRegistry()
+    registry.register(
+        ToolSpec(
+            name="needs_perm",
+            description="",
+            parameters={},
+            handler=tool,
+            risk=tool.risk,
+            requires=perm,
+        )
+    )
+    return PermissionGate(
+        registry,
+        AuditLog(":memory:"),
+        AlwaysAllow(),
+        permission_status=lambda _k: status,
+        on_permission_needed=opened.append,
+    )
+
+
+def test_tool_refused_when_required_permission_missing() -> None:
+    tool = _SpyTool(Risk.WRITE)
+    opened: list[str] = []
+    gate = _gate_requiring(tool, "automation", "needed", opened)
+    result = gate.execute(ToolCall(name="needs_perm", arguments={}))
+    assert tool.ran is False  # never executed
+    assert result.ok is False
+    assert "permission" in result.content.lower()
+    assert opened == ["automation"]  # opened the Settings pane
+
+
+def test_tool_runs_when_permission_granted() -> None:
+    tool = _SpyTool(Risk.WRITE)
+    opened: list[str] = []
+    gate = _gate_requiring(tool, "automation", "granted", opened)
+    result = gate.execute(ToolCall(name="needs_perm", arguments={}))
+    assert tool.ran is True and result.ok is True
+    assert opened == []
+
+
+def test_tool_runs_when_permission_unknown() -> None:
+    # Unknown status must not block — the tool tries and we learn from the outcome.
+    tool = _SpyTool(Risk.WRITE)
+    gate = _gate_requiring(tool, "automation", "unknown", [])
+    assert gate.execute(ToolCall(name="needs_perm", arguments={})).ok is True
+    assert tool.ran is True
+
+
 def test_risk_of_returns_tool_risk_or_none() -> None:
     tool = _SpyTool(Risk.WRITE)
     gate, _ = _gate_with(tool, "create_file", AlwaysAllow())

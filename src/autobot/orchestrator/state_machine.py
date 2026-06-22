@@ -447,11 +447,12 @@ class Orchestrator:
 
     def run_once(self) -> None:
         """Run a single turn: listen, transcribe, gate the wake word, plan, respond."""
-        from_barge = self._pending_audio is not None
-        if from_barge:
+        pending = self._pending_audio  # local so mypy narrows it past the None check
+        from_barge = pending is not None
+        if pending is not None:
             # The user barged in over the last reply — process what they said now,
             # without capturing fresh. We're in a conversation, so stay awake.
-            audio, started_at = self._pending_audio, self._pending_started_at
+            audio, started_at = pending, self._pending_started_at
             self._pending_audio = self._pending_started_at = None
             self._set_awake(True)
             self._sm.transition(State.LISTENING)

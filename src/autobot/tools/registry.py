@@ -31,6 +31,10 @@ class ToolSpec:
     # (e.g. "Empty the Trash? This permanently deletes everything in it."). Falls
     # back to a generic prompt when unset.
     confirm_prompt: str | None = None
+    # macOS permission this tool needs (see autobot.permissions): "automation",
+    # "accessibility", "microphone". The gate refuses (and opens Settings) when it's
+    # known to be missing, rather than letting the tool fail deep in AppleScript.
+    requires: str | None = None
 
     def to_schema(self) -> dict[str, Any]:
         """Render the OpenAI/Ollama-style ``function`` schema for this tool."""

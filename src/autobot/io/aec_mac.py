@@ -19,10 +19,12 @@ optional ``aec`` extra (``uv sync --extra aec``: pyobjc AVFoundation/CoreAudio).
 
 from __future__ import annotations
 
+import contextlib
 import queue
 import threading
 import time
 from collections.abc import Iterator
+from typing import Any
 
 import numpy as np
 
@@ -50,9 +52,9 @@ class VoiceProcessingMicSource:
         self._buf: AudioClip = np.zeros(0, dtype=np.float32)
         self._started = False
         self._warned = False  # so a per-frame tap error logs only once
-        self._engine: object | None = None
-        self._player_node: object | None = None
-        self._out_format: object | None = None
+        self._engine: Any = None
+        self._player_node: Any = None
+        self._out_format: Any = None
         self._out_rate = float(_TARGET_RATE)
         self._src_rate = 48_000.0
         self._play_lock = threading.Lock()
@@ -95,10 +97,8 @@ class VoiceProcessingMicSource:
 
         # Tear down any prior attempt and start from clean buffers.
         if self._engine is not None:
-            try:
-                self._engine.stop()  # type: ignore[attr-defined]
-            except Exception:
-                pass
+            with contextlib.suppress(Exception):
+                self._engine.stop()
         self._engine = None
         self._player_node = None
         self._queue = queue.Queue()

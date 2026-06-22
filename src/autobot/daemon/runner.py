@@ -30,7 +30,6 @@ def make_state_listener(bus: EventBus) -> StateListener:
     Keeps the existing console line (so terminal runs are unchanged) and also
     forwards the mapped :class:`OrbState` to every connected UI client.
     """
-
     from autobot.diagnostics import get_buffer
 
     buffer = get_buffer()
