@@ -78,6 +78,19 @@ def test_post_settings_persists_and_ignores_unknown_keys(tmp_path: object) -> No
     assert "bogus" not in body
 
 
+def test_setup_reports_needs_setup_until_settings_saved(tmp_path: object) -> None:
+    from pathlib import Path
+
+    path = Path(str(tmp_path)) / "settings.json"
+    client = TestClient(create_app(EventBus(), settings_path=path))
+    body = client.get("/setup").json()
+    assert body["needs_setup"] is True  # no settings file yet -> first run
+    assert "has_anthropic_key" in body and "voice_present" in body
+    # Saving any setting writes the file -> no longer a first run.
+    client.post("/settings", json={"llm_provider": "anthropic"})
+    assert client.get("/setup").json()["needs_setup"] is False
+
+
 def test_get_models_returns_a_list(tmp_path: object) -> None:
     # No Ollama running in the test env -> empty list, but the shape is stable.
     body = _settings_client(tmp_path).get("/models").json()

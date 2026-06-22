@@ -58,6 +58,11 @@ whispercpp = [
 aec = [
     "pyobjc-framework-AVFoundation>=10.0; sys_platform == 'darwin'",
 ]
+# Build the standalone engine binary for the orb's sidecar (see packaging/). Only
+# needed to produce a release bundle: `uv sync --extra freeze` then `make freeze`.
+freeze = [
+    "pyinstaller>=6.0",
+]
 dev = [
     "ruff>=0.6",
     "mypy>=1.11",
@@ -87,6 +92,9 @@ default-groups = []
 line-length = 100
 target-version = "py311"
 src = ["src", "tests"]
+# PyInstaller .spec files are exec'd with injected globals (Analysis, EXE, SPECPATH);
+# they're not normal modules, so don't lint them.
+extend-exclude = ["packaging"]
 
 [tool.ruff.lint]
 select = [

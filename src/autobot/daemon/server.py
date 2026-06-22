@@ -151,6 +151,26 @@ def create_app(
         """Installed local Ollama models, for the Settings view's model picker."""
         return {"models": _installed_ollama_models(Settings.load(path).ollama_host)}
 
+    async def get_setup() -> dict[str, Any]:
+        """First-run status the orb uses to decide whether to show the setup wizard.
+
+        ``needs_setup`` is true when there's no settings file yet (a fresh install);
+        the rest lets the wizard pre-fill (provider, whether a key/voice/Ollama exist).
+        """
+        from pathlib import Path as _Path
+
+        from autobot.secrets import has_secret
+
+        settings = Settings.load(path)
+        voice = _Path(settings.tts_voice).expanduser()
+        return {
+            "needs_setup": not _Path(path).expanduser().exists(),
+            "provider": settings.llm_provider,
+            "has_anthropic_key": has_secret("anthropic_api_key"),
+            "ollama_models": _installed_ollama_models(settings.ollama_host),
+            "voice_present": voice.exists(),
+        }
+
     async def post_secret(request: Request) -> dict[str, Any]:
         """Store (or clear) an API key in the Keychain. Only known names allowed."""
         from autobot.secrets import delete_secret, set_secret
@@ -181,6 +201,7 @@ def create_app(
     app.add_api_route("/settings", get_settings, methods=["GET"])
     app.add_api_route("/settings", post_settings, methods=["POST"])
     app.add_api_route("/models", get_models, methods=["GET"])
+    app.add_api_route("/setup", get_setup, methods=["GET"])
     app.add_api_route("/secret", post_secret, methods=["POST"])
     app.add_api_route("/confirm", post_confirm, methods=["POST"])
     return app

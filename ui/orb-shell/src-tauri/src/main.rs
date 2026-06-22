@@ -4,13 +4,58 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use tauri::{
     menu::{Menu, MenuItem, PredefinedMenuItem, Submenu},
     tray::TrayIconBuilder,
     LogicalSize, Manager, WebviewUrl, WebviewWindowBuilder,
 };
+use tauri_plugin_shell::process::CommandChild;
+use tauri_plugin_shell::ShellExt;
+
+/// Holds the spawned engine sidecar so we can stop it when the app quits.
+struct Engine(Mutex<Option<CommandChild>>);
+
+/// Start the bundled `autobot-daemon` sidecar; the orb connects to it over the
+/// local WebSocket. Logs (but doesn't crash) if it can't start.
+#[allow(dead_code)] // only called in release builds (see setup)
+fn start_engine(app: &tauri::AppHandle) {
+    app.manage(Engine(Mutex::new(None)));
+    let sidecar = app.shell().sidecar("autobot-daemon").map(|cmd| {
+        // Point the engine at the app's bundled voices, so a fresh install can
+        // seed a default Piper voice and speak immediately.
+        match app.path().resource_dir() {
+            Ok(dir) => cmd.env("AUTOBOT_VOICE_DIR", dir.join("voices")),
+            Err(_) => cmd,
+        }
+    });
+    match sidecar {
+        Ok(cmd) => match cmd.spawn() {
+            Ok((_rx, child)) => {
+                *app.state::<Engine>().0.lock().unwrap() = Some(child);
+                eprintln!("[jack] engine started (sidecar)");
+            }
+            Err(e) => eprintln!("[jack] failed to start engine: {e}"),
+        },
+        Err(e) => eprintln!("[jack] engine sidecar not found: {e}"),
+    }
+}
+
+/// Stop the engine sidecar on app exit so it doesn't linger.
+fn stop_engine(app: &tauri::AppHandle) {
+    if let Some(engine) = app.try_state::<Engine>() {
+        if let Some(child) = engine.0.lock().unwrap().take() {
+            let _ = child.kill();
+        }
+    }
+}
+
+/// Open the Settings window — callable from the orb (e.g. the first-run wizard).
+#[tauri::command]
+fn open_settings_window(app: tauri::AppHandle) {
+    open_settings(&app);
+}
 
 // Orb size presets (square, logical px). The web orb scales to fill the window.
 const SIZE_SMALL: f64 = 150.0;
@@ -24,14 +69,22 @@ const MOVABLE: &str = "Movable";
 const LOCKED: &str = "Locked";
 
 fn main() {
-    let builder = tauri::Builder::default();
+    // The shell plugin lets us launch the bundled engine sidecar.
+    let builder = tauri::Builder::default().plugin(tauri_plugin_shell::init());
 
     // The NSPanel plugin (macOS) lets us float over full-screen apps.
     #[cfg(target_os = "macos")]
     let builder = builder.plugin(tauri_nspanel::init());
 
     builder
+        .invoke_handler(tauri::generate_handler![open_settings_window])
         .setup(|app| {
+            // Bundled release: launch the embedded engine (the orb is its UI client).
+            // In dev (`cargo tauri dev`) run the engine separately with `make run`,
+            // so you can iterate on it and the orb won't double-spawn it on :8765.
+            #[cfg(not(debug_assertions))]
+            start_engine(app.handle());
+
             // On macOS, run as an "accessory" so the orb has no Dock icon and
             // never appears in the ⌘-Tab switcher — it's a presence, not an app.
             #[cfg(target_os = "macos")]
@@ -110,8 +163,14 @@ fn main() {
 
             Ok(())
         })
-        .run(tauri::generate_context!())
-        .expect("error while running Jack orb");
+        .build(tauri::generate_context!())
+        .expect("error while building Jack orb")
+        .run(|app, event| {
+            // Stop the engine sidecar when the app quits, so it doesn't linger.
+            if let tauri::RunEvent::Exit = event {
+                stop_engine(app);
+            }
+        });
 }
 
 /// Bring the app to the foreground so its windows can become key (and text

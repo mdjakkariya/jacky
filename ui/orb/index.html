@@ -173,7 +173,7 @@
   function connect(){
     conn.textContent="connecting…";
     try{ws=new WebSocket(WS_URL);}catch(e){scheduleReconnect();return;}
-    ws.onopen=function(){conn.textContent="";};
+    ws.onopen=function(){conn.textContent=""; checkSetup();};
     ws.onmessage=function(ev){
       var msg;try{msg=JSON.parse(ev.data);}catch(e){return;}
       if(msg.type==="state"&&SC[msg.value]){var prev=state;state=msg.value;if(prev!==state)onStateChange(prev,state);}
@@ -185,6 +185,18 @@
     ws.onclose=function(){scheduleReconnect();};
     ws.onerror=function(){try{ws.close();}catch(e){}};
   }
+  // First run: if the engine has no settings yet, open Settings so the user can
+  // pick a provider + paste a key. Runs once, the first time we connect.
+  var _setupChecked=false;
+  function checkSetup(){
+    if(_setupChecked) return; _setupChecked=true;
+    fetch(API_BASE+"/setup").then(function(r){return r.json();}).then(function(s){
+      if(s && s.needs_setup && window.__TAURI__ && window.__TAURI__.core){
+        try{ window.__TAURI__.core.invoke("open_settings_window"); }catch(e){}
+      }
+    }).catch(function(){});
+  }
+
   function scheduleReconnect(){
     conn.textContent="reconnecting…";
     clearTimeout(retry);retry=setTimeout(connect,1000);

@@ -122,7 +122,13 @@ def _build_transcript(settings: Settings) -> Transcript:
         f"model: {llm_label} · stt: {settings.stt_model} · "
         f"input: {settings.input_mode}/{settings.wake_detector}"
     )
-    transcript = FileTranscript(settings.session_dir, header)
+    try:
+        transcript = FileTranscript(settings.session_dir, header)
+    except OSError as exc:
+        # A transcript write/dir failure must never take down the engine — log it
+        # and run without a session file.
+        get_logger("app").warning("session transcript disabled (%s): %s", settings.session_dir, exc)
+        return NullTranscript()
     get_logger("app").info("session transcript file=%s", transcript.path)
     print(f"[session] transcript: {transcript.path}")
     return transcript
@@ -361,6 +367,14 @@ def build(
 
     # Per-session transcript (readable conversation + debug notes).
     transcript = _build_transcript(settings)
+
+    # Seed the bundled default voice on a fresh install (so TTS works out of the
+    # box); the orb app passes AUTOBOT_VOICE_DIR pointing at its bundled voices.
+    import os
+
+    from autobot.tts.voices import ensure_voice
+
+    ensure_voice(settings.tts_voice, os.environ.get("AUTOBOT_VOICE_DIR"))
 
     # Voice I/O is built before the gate so the confirmer can speak the prompt and
     # listen for the spoken yes/no.

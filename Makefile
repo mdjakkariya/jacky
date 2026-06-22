@@ -2,7 +2,7 @@
 # First time:  make setup
 
 .DEFAULT_GOAL := help
-.PHONY: help setup install lint format typecheck test check run hooks clean release release-check package-orb publish-orb
+.PHONY: help setup install lint format typecheck test check run hooks clean release release-check package-orb publish-orb freeze bundle voice
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) \
@@ -11,8 +11,12 @@ help: ## Show this help
 setup: install hooks ## Create the env and install git hooks
 	@echo "Setup complete. Run 'make run' to start (needs Ollama running)."
 
+# `uv sync` REPLACES the installed extra set, so always sync the whole set at once.
+EXTRAS := dev all daemon cloud whispercpp aec
+EXTRA_FLAGS := $(addprefix --extra ,$(EXTRAS))
+
 install: ## Sync the virtualenv with all deps (dev + wake + tts + daemon + cloud + whispercpp + aec)
-	uv sync --extra dev --extra all --extra daemon --extra cloud --extra whispercpp --extra aec
+	uv sync $(EXTRA_FLAGS)
 
 lint: ## Lint with ruff
 	uv run ruff check .
@@ -49,8 +53,34 @@ release: ## Bump version in all manifests: make release VERSION=0.2.0
 release-check: ## Verify all manifests agree: make release-check VERSION=0.2.0
 	uv run python scripts/bump_version.py --check $(VERSION)
 
+freeze: ## Freeze the engine into dist/autobot-daemon (bundles the daemon/cloud/tts/wake deps)
+	uv sync $(EXTRA_FLAGS) --extra freeze
+	uv run pyinstaller --noconfirm --clean packaging/autobot-daemon.spec
+	@echo "Built: dist/autobot-daemon"
+
 ORB_BUNDLE := ui/orb-shell/src-tauri/target/release/bundle
-package-orb: ## Build the macOS orb .dmg locally (needs cargo + tauri-cli)
+TARGET_TRIPLE := $(shell rustc -Vv 2>/dev/null | sed -n 's/host: //p')
+SIDECAR_DIR := ui/orb-shell/src-tauri/binaries
+
+# Default Piper voice bundled in the .app so a fresh install speaks out of the box.
+# Matches tts_voice's default (en_US-ryan-high). Downloaded once into the (gitignored)
+# resources dir; on first run the engine seeds it into ~/.autobot/voices.
+VOICE_DIR := ui/orb-shell/src-tauri/voices
+VOICE := en_US-ryan-high.onnx
+VOICE_URL := https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/ryan/high
+
+voice: ## Download the bundled default Piper voice into the orb resources dir
+	mkdir -p $(VOICE_DIR)
+	[ -f "$(VOICE_DIR)/$(VOICE)" ] || curl -fSL "$(VOICE_URL)/$(VOICE)" -o "$(VOICE_DIR)/$(VOICE)"
+	[ -f "$(VOICE_DIR)/$(VOICE).json" ] || curl -fSL "$(VOICE_URL)/$(VOICE).json" -o "$(VOICE_DIR)/$(VOICE).json"
+
+bundle: freeze voice ## Build the full single .dmg: freeze engine -> sidecar -> voice -> tauri build
+	mkdir -p $(SIDECAR_DIR)
+	cp dist/autobot-daemon "$(SIDECAR_DIR)/autobot-daemon-$(TARGET_TRIPLE)"
+	cd ui/orb-shell && cargo tauri build
+	@echo "Bundle (orb + engine + voice) at $(ORB_BUNDLE)/dmg/"
+
+package-orb: ## Build only the orb .dmg (assumes the sidecar is already in place)
 	cd ui/orb-shell && cargo tauri build
 	@echo "Built: $$(find $(ORB_BUNDLE)/dmg -name '*.dmg' 2>/dev/null | head -1)"
 

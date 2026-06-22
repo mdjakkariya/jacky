@@ -36,6 +36,8 @@ sessions/
 
 # Tauri / Rust build artifacts (orb shell)
 target/
+# frozen engine sidecar, copied in by `make bundle`
+ui/orb-shell/src-tauri/binaries/
 ui/orb-shell/src-tauri/gen/
 ui/orb-shell/src-tauri/icons/
 
@@ -43,3 +45,6 @@ ui/orb-shell/src-tauri/icons/
 .DS_Store
 .idea/
 .vscode/
+
+# Bundled default voice (downloaded by `make voice`)
+ui/orb-shell/src-tauri/voices/

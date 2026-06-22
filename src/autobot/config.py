@@ -47,7 +47,9 @@ _DEFAULT_WAKE_PHRASE = "jack"
 _DEFAULT_WAKE_MODEL = "hey_jarvis"
 
 _DEFAULT_TTS_VOICE = "~/.autobot/voices/en_US-ryan-high.onnx"
-_DEFAULT_SESSION_DIR = "sessions"
+# Absolute (under ~/.autobot) so it works regardless of the working directory —
+# e.g. launched from the bundled .app, whose CWD is "/".
+_DEFAULT_SESSION_DIR = "~/.autobot/sessions"
 _DEFAULT_LOG_DIR = "~/.autobot/logs"
 _DEFAULT_LOG_LEVEL = "DEBUG"
 _DEFAULT_LOG_CONSOLE_LEVEL = "WARNING"

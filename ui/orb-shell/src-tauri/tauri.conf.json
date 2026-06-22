@@ -35,6 +35,12 @@
     "targets": "all",
     "icon": [
       "icons/icon.png"
+    ],
+    "externalBin": [
+      "binaries/autobot-daemon"
+    ],
+    "resources": [
+      "voices/*"
     ]
   }
 }

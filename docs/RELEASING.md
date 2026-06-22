@@ -19,10 +19,14 @@ git tag v0.2.0
 git push origin main --tags
 
 # 3. CI gate + builds the engine wheel and creates the Release. Then, on your Mac,
-#    build the orb .dmg and attach it to that Release:
-make package-orb                    # cargo tauri build -> the .dmg
+#    build the single .dmg (orb + embedded engine) and attach it to that Release:
+make bundle                         # freeze engine -> sidecar -> the .dmg
 make publish-orb VERSION=0.2.0      # gh release upload the .dmg to v0.2.0
 ```
+
+`make bundle` is the single-installable build: it freezes the engine
+(`make freeze`), drops it in as the orb's sidecar, and runs `cargo tauri build`,
+producing one `.dmg` that contains both. See [`PACKAGING.md`](PACKAGING.md).
 
 Pushing the tag triggers `.github/workflows/release.yml`:
 
