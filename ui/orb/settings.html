@@ -410,14 +410,35 @@
     a.href = URL.createObjectURL(blob); a.download = "autobot-debug-report.md";
     a.click(); URL.revokeObjectURL(a.href);
   }
+  // Browsers/GitHub cap the new-issue URL (~8 KB). Keep well under so the form
+  // still opens; the full report is always on the clipboard as the reliable copy.
+  var ISSUE_URL = "https://github.com/mdjakkariya/autobot/issues/new";
+  var MAX_URL = 6000;
+
   async function reportIssue(){
     var txt = $("reportOut").value || await buildReport();
     if(!txt) return;
-    // Pull the version line out of the report to prefill the form field.
-    var m = /v([0-9][^ \n·]*)/.exec(txt.split("\n").find(function(l){ return l.indexOf("**App**") === 0; }) || "");
-    var url = "https://github.com/mdjakkariya/autobot/issues/new?template=bug_report.yml"
-            + (m ? "&version=" + encodeURIComponent("v" + m[1]) : "");
-    setStatus("Report copied — paste it into the issue's Debug report box.");
+    // Always put the full report on the clipboard (URL prefill may be truncated).
+    try { await navigator.clipboard.writeText(txt); } catch(e){ /* fall back to paste */ }
+
+    var appLine = txt.split("\n").find(function(l){ return l.indexOf("**App**") === 0; }) || "";
+    var m = /v([0-9][^ \n·]*)/.exec(appLine);
+    var base = ISSUE_URL + "?template=bug_report.yml" + (m ? "&version=" + encodeURIComponent("v" + m[1]) : "");
+
+    // Prefill the debug_report field, trimming the report so the whole URL fits.
+    var note = "\n\n…(truncated — the full report is on your clipboard; paste here to replace)";
+    var report = txt;
+    var budget = MAX_URL - base.length - "&debug_report=".length;
+    if(encodeURIComponent(report).length > budget){
+      var encNote = encodeURIComponent(note).length;
+      while(report.length && encodeURIComponent(report).length + encNote > budget){
+        report = report.slice(0, -200);
+      }
+      report += note;
+    }
+    var url = base + "&debug_report=" + encodeURIComponent(report);
+    var truncated = report.indexOf("(truncated") !== -1;
+    setStatus(truncated ? "Report copied — paste it into the issue to include all of it." : "Opening prefilled issue…");
     try { await window.__TAURI__.core.invoke("open_external", {url: url}); }
     catch(e){ window.open(url, "_blank"); }
   }
