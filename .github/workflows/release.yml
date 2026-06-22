@@ -1,0 +1,62 @@
+# Publish a release when a version tag (vX.Y.Z) is pushed.
+#
+# Runs on Linux only (macOS CI minutes are ~10x the cost). CI does the cheap part:
+# gate the checks, build the Python engine wheel/sdist, and create the GitHub
+# Release. The macOS orb `.dmg` is built locally on a Mac and uploaded to the same
+# Release — see `docs/RELEASING.md` (`make package-orb` + `make publish-orb`).
+name: Release
+
+on:
+  push:
+    tags: ["v*.*.*"]
+
+permissions:
+  contents: write # create the GitHub Release and upload assets
+
+jobs:
+  # Gate: same checks as CI, plus the manifests must match the pushed tag.
+  gate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v3
+        with:
+          enable-cache: true
+      - run: uv python install 3.11
+      - run: uv sync --extra dev
+      - run: uv run ruff check .
+      - run: uv run ruff format --check .
+      - run: uv run mypy
+      - run: uv run pytest
+      - name: Versions match the tag
+        run: uv run python scripts/bump_version.py --check "${GITHUB_REF_NAME#v}"
+
+  release:
+    needs: gate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v3
+        with:
+          enable-cache: true
+      - run: uv python install 3.11
+      - name: Build engine (wheel + sdist)
+        run: uv build # -> dist/*.whl, dist/*.tar.gz
+      - name: Create the GitHub Release (engine attached; orb .dmg added locally)
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          files: |
+            dist/*.whl
+            dist/*.tar.gz
+          body: |
+            ### Autobot ${{ github.ref_name }}
+
+            **Orb app (macOS):** the `.dmg` is uploaded separately (built locally).
+            It's an **unsigned dev preview** — first launch, right-click the app →
+            **Open** → **Open**, then it runs normally.
+
+            **Engine:** install the attached wheel —
+            `uv tool install ./autobot-*.whl` (or `pipx install ./autobot-*.whl`).
+            See the README for prerequisites (Ollama or an Anthropic key, the
+            STT/TTS models, Microphone + Automation permissions).

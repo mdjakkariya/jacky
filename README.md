@@ -8,6 +8,27 @@ A privacy-first, zero-cost, **on-device** voice assistant. Everything runs local
 
 ---
 
+## Try a release (dev preview)
+
+Grab the latest [GitHub Release](../../releases). Each release ships two pieces:
+
+1. **Orb app** — download the `.dmg`, drag **Jack** to Applications. It's an
+   **unsigned dev preview**, so the first launch: right-click the app → **Open** →
+   **Open** (after that it launches normally).
+2. **Engine** — install the attached wheel:
+   ```bash
+   uv tool install ./autobot-*.whl     # or: pipx install ./autobot-*.whl
+   ```
+
+Then, before running, you still need the local pieces (see [Setup](#setup-macos-apple-silicon)):
+Ollama running (or an Anthropic key for cloud mode), the STT/TTS models, and macOS
+**Microphone** permission (plus **Automation/Finder** if you use "empty the trash").
+Start the engine (`autobot-daemon`), then open the orb.
+
+Maintainers: cutting a release is documented in [`docs/RELEASING.md`](docs/RELEASING.md).
+
+---
+
 ## Architecture
 
 A pipeline of swappable stages, each defined as a `Protocol` in `src/autobot/core/interfaces.py`, driven by an orchestrator state machine. The language model **plans** tool calls; the **permission gate** executes them:

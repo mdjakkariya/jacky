@@ -2,7 +2,7 @@
 # First time:  make setup
 
 .DEFAULT_GOAL := help
-.PHONY: help setup install lint format typecheck test check run hooks clean
+.PHONY: help setup install lint format typecheck test check run hooks clean release release-check package-orb publish-orb
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) \
@@ -42,6 +42,23 @@ logs: ## Tail the debug log (override path with LOG=…)
 
 logs-grep: ## Filter the log to one component, e.g. make logs-grep C=stt
 	grep "\[$(C)\]" "$(LOG)"
+
+release: ## Bump version in all manifests: make release VERSION=0.2.0
+	uv run python scripts/bump_version.py $(VERSION)
+
+release-check: ## Verify all manifests agree: make release-check VERSION=0.2.0
+	uv run python scripts/bump_version.py --check $(VERSION)
+
+ORB_BUNDLE := ui/orb-shell/src-tauri/target/release/bundle
+package-orb: ## Build the macOS orb .dmg locally (needs cargo + tauri-cli)
+	cd ui/orb-shell && cargo tauri build
+	@echo "Built: $$(find $(ORB_BUNDLE)/dmg -name '*.dmg' 2>/dev/null | head -1)"
+
+publish-orb: ## Upload the locally-built .dmg to the GitHub release: make publish-orb VERSION=0.2.0
+	@dmg=$$(find $(ORB_BUNDLE)/dmg -name '*.dmg' 2>/dev/null | head -1); \
+	if [ -z "$$dmg" ]; then echo "No .dmg found — run 'make package-orb' first."; exit 1; fi; \
+	echo "Uploading $$dmg to release v$(VERSION)…"; \
+	gh release upload "v$(VERSION)" "$$dmg" --clobber
 
 hooks: ## Install pre-commit git hooks
 	uv run pre-commit install
