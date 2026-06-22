@@ -84,9 +84,15 @@ package-orb: ## Build only the orb .dmg (assumes the sidecar is already in place
 	cd ui/orb-shell && cargo tauri build
 	@echo "Built: $$(find $(ORB_BUNDLE)/dmg -name '*.dmg' 2>/dev/null | head -1)"
 
-publish-orb: ## Upload the locally-built .dmg to the GitHub release: make publish-orb VERSION=0.2.0
+publish-orb: ## Upload the locally-built .dmg to the GitHub release (creates it if missing): make publish-orb VERSION=0.2.0
 	@dmg=$$(find $(ORB_BUNDLE)/dmg -name '*.dmg' 2>/dev/null | head -1); \
 	if [ -z "$$dmg" ]; then echo "No .dmg found — run 'make package-orb' first."; exit 1; fi; \
+	if ! gh release view "v$(VERSION)" >/dev/null 2>&1; then \
+	  echo "Release v$(VERSION) not found — creating it (tag from the pushed HEAD)…"; \
+	  gh release create "v$(VERSION)" --title "v$(VERSION)" \
+	    --notes "Autobot v$(VERSION) — dev preview. The .dmg is unsigned: right-click Jack → Open." \
+	    || { echo "Couldn't create the release. Is 'gh auth login' done and HEAD pushed?"; exit 1; }; \
+	fi; \
 	echo "Uploading $$dmg to release v$(VERSION)…"; \
 	gh release upload "v$(VERSION)" "$$dmg" --clobber
 
