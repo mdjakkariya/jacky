@@ -85,6 +85,11 @@ _UNINSTALL = (
 # Close browser tabs whose URL matches a query, in a given browser (argv: query,
 # app name). Guarded by `is running` so it never launches a closed browser; the
 # app name is a fixed constant we pass, never user text. Returns the count closed.
+# Iterate windows by explicit index and grab each window's tabs into a list, then
+# close matching ones in reverse. `repeat with w in windows; tabs of w` resolves `w`
+# to "item N of every window" in Chrome (error -1700); `tabs of window wi` is a clean
+# reference. Inline element-by-variable refs like `tab ti of window wi` don't compile
+# (-2741), so we copy the tabs into a list variable first. Works in Safari + Chromium.
 _CLOSE_TAB = (
     "on run argv\n"
     "set q to item 1 of argv\n"
@@ -92,13 +97,12 @@ _CLOSE_TAB = (
     "set n to 0\n"
     "if application appName is running then\n"
     "tell application appName\n"
-    # Iterate windows/tabs by explicit index. Using `repeat with w in windows` and
-    # `tabs of w` mis-resolves in Chrome (error -1700); indexing is reliable across
-    # Safari and Chromium. Reverse tab order so closing one doesn't shift the rest.
     "repeat with wi from 1 to (count windows)\n"
-    "repeat with ti from (count tabs of window wi) to 1 by -1\n"
-    "if (URL of tab ti of window wi) contains q then\n"
-    "close tab ti of window wi\n"
+    "set theTabs to tabs of window wi\n"
+    "repeat with i from (count theTabs) to 1 by -1\n"
+    "set t to item i of theTabs\n"
+    "if (URL of t) contains q then\n"
+    "close t\n"
     "set n to n + 1\n"
     "end if\n"
     "end repeat\n"
