@@ -247,3 +247,22 @@ def build_report(
     parts.append("</details>")
 
     return redact("\n".join(parts))
+
+
+def save_report(
+    settings: Settings,
+    *,
+    buffer: DiagnosticsBuffer | None = None,
+    log_path: Path | None = None,
+) -> Path:
+    """Write the report to ``~/.autobot/reports/debug-report.md`` and return its path.
+
+    Always the same filename (overwritten) so it doesn't pile up — the user opens
+    it in Finder to copy or share. The directory derives from ``log_dir``'s parent.
+    """
+    text = build_report(settings, buffer=buffer, log_path=log_path)
+    base = Path(settings.log_dir).expanduser().parent / "reports"
+    base.mkdir(parents=True, exist_ok=True)
+    path = base / "debug-report.md"
+    path.write_text(text, encoding="utf-8")
+    return path

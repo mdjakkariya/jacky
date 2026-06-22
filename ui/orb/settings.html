@@ -99,7 +99,7 @@
   .report-text:focus{outline:none;border-color:var(--accent)}
   .report-foot{display:flex;align-items:center;justify-content:space-between;margin-top:8px}
   .report-foot .hint{margin:0}
-  .report-link{color:var(--accent);font-size:11.5px;text-decoration:none;flex:none;white-space:nowrap}
+  .report-link{color:var(--accent);font-size:11.5px;text-decoration:none;flex:none;white-space:nowrap;cursor:pointer}
   .report-link:hover{text-decoration:underline}
   /* Footer sits above the backdrop so its report buttons stay usable. */
   footer{position:relative;z-index:50}
@@ -230,7 +230,7 @@
     <textarea id="reportOut" class="report-text" readonly spellcheck="false"></textarea>
     <div class="report-foot">
       <span class="hint" id="reportHint">Redacted — no audio, no API keys.</span>
-      <a href="#" id="downloadReport" class="report-link">Download as file</a>
+      <a href="#" id="revealReport" class="report-link">Open in Finder</a>
     </div>
   </div>
 
@@ -464,13 +464,6 @@
     var txt = await buildReport();
     if(txt) openReport();
   }
-  function downloadReport(e){
-    e.preventDefault();
-    var blob = new Blob([$("reportOut").value], {type:"text/markdown"});
-    var a = document.createElement("a");
-    a.href = URL.createObjectURL(blob); a.download = "autobot-debug-report.md";
-    a.click(); URL.revokeObjectURL(a.href);
-  }
   var ISSUE_URL = "https://github.com/mdjakkariya/autobot/issues/new";
   var REDACT_HINT = "Redacted — no audio, no API keys.";
   var _hintTimer = null;
@@ -480,6 +473,17 @@
     el.textContent = msg;
     if(_hintTimer) clearTimeout(_hintTimer);
     _hintTimer = setTimeout(function(){ el.textContent = REDACT_HINT; }, 3000);
+  }
+
+  async function revealReport(e){
+    if(e) e.preventDefault();
+    try {
+      var r = await (await fetch(API + "/report/file")).json();
+      if(r && r.path){
+        await window.__TAURI__.core.invoke("reveal_in_finder", {path: r.path});
+        flashHint("Saved — revealed in Finder.");
+      }
+    } catch(e){ flashHint("Couldn't save the file."); }
   }
 
   async function reportIssue(){
@@ -502,7 +506,7 @@
   $("reportClose").addEventListener("click", closeReport);
   $("reportBackdrop").addEventListener("click", closeReport);
   $("reportIssue").addEventListener("click", reportIssue);
-  $("downloadReport").addEventListener("click", downloadReport);
+  $("revealReport").addEventListener("click", revealReport);
   $("save").addEventListener("click", save);
   $("reload").addEventListener("click", load);
   $("retry").addEventListener("click", load);

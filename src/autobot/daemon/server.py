@@ -185,6 +185,16 @@ def create_app(
         log_path = _Path(settings.log_dir).expanduser() / "autobot.log"
         return {"report": build_report(settings, log_path=log_path)}
 
+    async def get_report_file() -> dict[str, str]:
+        """Write the debug report to a file and return its path (for Reveal in Finder)."""
+        from pathlib import Path as _Path
+
+        from autobot.diagnostics import save_report
+
+        settings = Settings.load(path)
+        log_path = _Path(settings.log_dir).expanduser() / "autobot.log"
+        return {"path": str(save_report(settings, log_path=log_path))}
+
     async def post_secret(request: Request) -> dict[str, Any]:
         """Store (or clear) an API key in the Keychain. Only known names allowed."""
         from autobot.secrets import delete_secret, set_secret
@@ -217,6 +227,7 @@ def create_app(
     app.add_api_route("/models", get_models, methods=["GET"])
     app.add_api_route("/setup", get_setup, methods=["GET"])
     app.add_api_route("/report", get_report, methods=["GET"])
+    app.add_api_route("/report/file", get_report_file, methods=["GET"])
     app.add_api_route("/secret", post_secret, methods=["POST"])
     app.add_api_route("/confirm", post_confirm, methods=["POST"])
     return app

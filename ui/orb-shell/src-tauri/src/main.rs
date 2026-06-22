@@ -75,6 +75,15 @@ fn open_external(url: String) {
     }
 }
 
+/// Reveal a file in Finder (selects it in its folder), so the user can copy/share it.
+#[tauri::command]
+fn reveal_in_finder(path: String) {
+    #[cfg(target_os = "macos")]
+    {
+        let _ = std::process::Command::new("open").arg("-R").arg(&path).spawn();
+    }
+}
+
 // Orb size presets (square, logical px). The web orb scales to fill the window.
 const SIZE_SMALL: f64 = 150.0;
 const SIZE_MEDIUM: f64 = 220.0;
@@ -95,7 +104,11 @@ fn main() {
     let builder = builder.plugin(tauri_nspanel::init());
 
     builder
-        .invoke_handler(tauri::generate_handler![open_settings_window, open_external])
+        .invoke_handler(tauri::generate_handler![
+            open_settings_window,
+            open_external,
+            reveal_in_finder
+        ])
         .setup(|app| {
             // Bundled release: launch the embedded engine (the orb is its UI client).
             // In dev (`cargo tauri dev`) run the engine separately with `make run`,
