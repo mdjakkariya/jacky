@@ -123,6 +123,7 @@ def capture_utterance(
     end_silence_frames: int,
     max_frames: int,
     wait_frames: int | None,
+    start_frames: int = _START_FRAMES,
     seed: Sequence[AudioClip] = (),
     on_level: AmplitudeSink | None = None,
     on_speech_start: Callable[[], None] | None = None,
@@ -142,7 +143,7 @@ def capture_utterance(
     """
     endpointer = TrailingSilenceEndpointer(
         speech_threshold=vad_threshold,
-        start_frames=_START_FRAMES,
+        start_frames=start_frames,
         end_silence_frames=end_silence_frames,
     )
     prebuffer = FramePrebuffer(_PREROLL_FRAMES)
@@ -245,6 +246,9 @@ class WakeWordVadRecorder:
         self._max_frames = max(1, round(s.max_utterance_s * 1000 / _FRAME_MS))
         self._follow_up_frames = max(0, round(s.follow_up_window_s * 1000 / _FRAME_MS))
         self._wake_preroll_frames = max(0, round(s.wake_preroll_ms / _FRAME_MS))
+        # Barge-in needs *sustained* speech (not a 2-frame flicker) so residual echo
+        # or a transient never falsely interrupts Jack mid-reply.
+        self._barge_in_start_frames = max(_START_FRAMES, round(s.barge_in_min_speech_ms / _FRAME_MS))
 
     def _next_frame(self) -> AudioClip | None:
         """Pull the next frame from the (persistent) source, or ``None`` if ended."""
@@ -393,6 +397,7 @@ class WakeWordVadRecorder:
             end_silence_frames=self._end_silence_frames,
             max_frames=self._max_frames,
             wait_frames=None,
+            start_frames=self._barge_in_start_frames,
             on_level=self._on_level,
             on_speech_start=started,
             on_voice=self._voice,
@@ -443,6 +448,8 @@ class VadRecorder:
         s = self._settings
         self._end_silence_frames = max(1, round(s.end_silence_ms / _FRAME_MS))
         self._max_frames = max(1, round(s.max_utterance_s * 1000 / _FRAME_MS))
+        # Barge-in needs *sustained* speech so residual echo can't falsely interrupt.
+        self._barge_in_start_frames = max(_START_FRAMES, round(s.barge_in_min_speech_ms / _FRAME_MS))
 
     def _mark_speech_start(self) -> None:
         self._last_speech_started_at = time.monotonic()
@@ -551,6 +558,7 @@ class VadRecorder:
             end_silence_frames=self._end_silence_frames,
             max_frames=self._max_frames,
             wait_frames=None,
+            start_frames=self._barge_in_start_frames,
             on_level=self._on_level,
             on_speech_start=started,
             on_voice=self._voice,

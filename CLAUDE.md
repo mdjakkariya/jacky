@@ -117,7 +117,7 @@ field with a default in `config.py` (that's the single source).
 
 Input mode is the `input_mode` setting: `wake` (default, hands-free) or `ptt`.
 Hands-free needs the optional wake deps: `uv sync --extra wake` (openWakeWord +
-silero-vad; heavy, so kept out of the core install). Wake/VAD model wrappers and
+onnxruntime; the VAD runs silero's vendored ONNX model directly — no torch). Wake/VAD model wrappers and
 the mic are injected into `WakeWordVadRecorder`, and the endpointing/pre-roll
 logic is pure — so the real-time loop is unit-tested without hardware.
 

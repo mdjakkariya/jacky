@@ -16,6 +16,29 @@ from pathlib import Path
 from typing import Any, Protocol
 
 
+def prune_sessions(directory: str | Path, keep: int) -> list[Path]:
+    """Delete all but the ``keep`` most recent ``session-*.md`` files.
+
+    Keeps the sessions folder bounded so it never accumulates hundreds of files.
+    Filenames are timestamped (``session-YYYYmmdd-HHMMSS.md``), so a name sort is a
+    time sort. Returns the paths that were deleted. Never raises — a cleanup failure
+    must not block startup.
+    """
+    folder = Path(directory).expanduser()
+    if keep < 0 or not folder.is_dir():
+        return []
+    files = sorted(folder.glob("session-*.md"))
+    stale = files[:-keep] if keep else files
+    deleted: list[Path] = []
+    for path in stale:
+        try:
+            path.unlink()
+            deleted.append(path)
+        except OSError:
+            pass
+    return deleted
+
+
 class Transcript(Protocol):
     """Sink for session events; see :class:`FileTranscript` for the format."""
 

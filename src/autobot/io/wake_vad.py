@@ -16,6 +16,7 @@ from __future__ import annotations
 from typing import Protocol, runtime_checkable
 
 import numpy as np
+import numpy.typing as npt
 
 from autobot.core.types import AudioClip, Int16Frame
 from autobot.logging_setup import get_logger
@@ -93,23 +94,50 @@ class OpenWakeWord:
 
 
 class SileroVad:
-    """Voice-activity detector backed by silero-vad."""
+    """Voice-activity detector running silero-vad's ONNX model on onnxruntime.
+
+    We run the vendored ``silero_vad.onnx`` directly instead of going through the
+    ``silero-vad`` package, which would drag in torch + torchaudio (~half a gig once
+    frozen). The model is the same; we just replicate silero's tiny state machine —
+    a 512-sample frame prefixed with 64 samples of context, plus a recurrent state
+    carried between frames — in numpy. This also puts the VAD on the same runtime as
+    the wake word (onnxruntime). The model file ships as package data next to this
+    module; see ``packaging/autobot-daemon.spec`` for the frozen-bundle inclusion.
+    """
+
+    _CONTEXT = 64
+    """Samples of the previous frame the model prepends as context (16 kHz)."""
+
+    _SR = 16_000
 
     def __init__(self) -> None:
-        from silero_vad import load_silero_vad
+        from importlib import resources
 
-        _log.info("loading silero-vad")
-        self._model = load_silero_vad()
-        # ``torch`` is a transitive dependency of silero-vad; import it lazily too.
-        import torch
+        import onnxruntime as ort
 
-        self._torch = torch
+        _log.info("loading silero-vad (onnx)")
+        model_path = str(resources.files("autobot.io").joinpath("silero_vad.onnx"))
+        opts = ort.SessionOptions()
+        opts.inter_op_num_threads = 1
+        opts.intra_op_num_threads = 1
+        self._session = ort.InferenceSession(
+            model_path, providers=["CPUExecutionProvider"], sess_options=opts
+        )
+        self._sr = np.array(self._SR, dtype=np.int64)
+        self._state: npt.NDArray[np.float32]
+        self._context: npt.NDArray[np.float32]
+        self.reset()
 
     def speech_prob(self, frame: AudioClip) -> float:
         """Return the speech probability for one 512-sample 16 kHz frame."""
-        tensor = self._torch.from_numpy(np.ascontiguousarray(frame))
-        return float(self._model(tensor, 16_000).item())
+        x = np.ascontiguousarray(frame, dtype=np.float32).reshape(1, -1)
+        x = np.concatenate([self._context, x], axis=1)
+        out, state = self._session.run(None, {"input": x, "state": self._state, "sr": self._sr})
+        self._state = state
+        self._context = x[:, -self._CONTEXT :]
+        return float(out[0, 0])
 
     def reset(self) -> None:
-        """Reset silero's recurrent hidden state between utterances."""
-        self._model.reset_states()
+        """Reset silero's recurrent state and frame context between utterances."""
+        self._state = np.zeros((2, 1, 128), dtype=np.float32)
+        self._context = np.zeros((1, self._CONTEXT), dtype=np.float32)

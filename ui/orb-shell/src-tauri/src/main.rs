@@ -23,6 +23,11 @@ struct Engine(Mutex<Option<CommandChild>>);
 fn start_engine(app: &tauri::AppHandle) {
     app.manage(Engine(Mutex::new(None)));
     let sidecar = app.shell().sidecar("autobot-daemon").map(|cmd| {
+        // Tell the engine our PID so its watchdog can exit if we (the orb) go away.
+        // PyInstaller's onefile bootloader orphans the real Python child when we
+        // kill the sidecar, so this self-shutdown is what actually frees :8765 on
+        // quit / force-quit / crash. (We still kill() on a clean exit, below.)
+        let cmd = cmd.env("AUTOBOT_PARENT_PID", std::process::id().to_string());
         // Point the engine at the app's bundled voices, so a fresh install can
         // seed a default Piper voice and speak immediately.
         match app.path().resource_dir() {
@@ -57,6 +62,19 @@ fn open_settings_window(app: tauri::AppHandle) {
     open_settings(&app);
 }
 
+/// Open a URL in the user's default browser (e.g. the prefilled GitHub issue form).
+/// Constrained to https links so it can only ever open the web, never run anything.
+#[tauri::command]
+fn open_external(url: String) {
+    if !url.starts_with("https://") {
+        return;
+    }
+    #[cfg(target_os = "macos")]
+    {
+        let _ = std::process::Command::new("open").arg(&url).spawn();
+    }
+}
+
 // Orb size presets (square, logical px). The web orb scales to fill the window.
 const SIZE_SMALL: f64 = 150.0;
 const SIZE_MEDIUM: f64 = 220.0;
@@ -77,7 +95,7 @@ fn main() {
     let builder = builder.plugin(tauri_nspanel::init());
 
     builder
-        .invoke_handler(tauri::generate_handler![open_settings_window])
+        .invoke_handler(tauri::generate_handler![open_settings_window, open_external])
         .setup(|app| {
             // Bundled release: launch the embedded engine (the orb is its UI client).
             // In dev (`cargo tauri dev`) run the engine separately with `make run`,

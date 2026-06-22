@@ -31,8 +31,13 @@ def make_state_listener(bus: EventBus) -> StateListener:
     forwards the mapped :class:`OrbState` to every connected UI client.
     """
 
+    from autobot.diagnostics import get_buffer
+
+    buffer = get_buffer()
+
     def listener(old: State, new: State) -> None:
         _print_transition(old, new)
+        buffer.add_state(old.value, new.value)  # compact sequence trace for reports
         bus.publish_state(orb_state_for(new))
 
     return listener
@@ -78,7 +83,11 @@ def serve(settings: Settings | None = None) -> None:
     """
     settings = settings or Settings.load()
     from autobot.app import build
+    from autobot.daemon.watchdog import start_parent_watchdog
     from autobot.tools.confirm import ConfirmInbox
+
+    # Die if the orb (our launching parent) goes away, so we never linger on :8765.
+    start_parent_watchdog()
 
     bus = EventBus()
     # Bridge clicked Yes/No on a confirmation card (daemon thread) to the engine.
@@ -114,6 +123,9 @@ def serve_demo(settings: Settings | None = None) -> None:
     a model, or Ollama running.
     """
     settings = settings or Settings.load()
+    from autobot.daemon.watchdog import start_parent_watchdog
+
+    start_parent_watchdog()
     bus = EventBus()
 
     def cycle() -> None:

@@ -21,6 +21,10 @@ datas: list = []
 binaries: list = []
 hiddenimports: list = ["numpy", "anthropic", "ollama", "fastapi"]
 
+# We run silero's ONNX model directly (no torch); ship the vendored model file so
+# importlib.resources can find it inside the frozen bundle.
+datas += [(os.path.join(_ROOT, "src", "autobot", "io", "silero_vad.onnx"), "autobot/io")]
+
 # Packages that carry native libs and/or data files PyInstaller won't find on its own.
 for _pkg in (
     "faster_whisper",
@@ -28,7 +32,6 @@ for _pkg in (
     "onnxruntime",
     "sounddevice",
     "piper",
-    "silero_vad",
     "av",
     "tokenizers",
     "huggingface_hub",
@@ -53,7 +56,9 @@ a = Analysis(
     binaries=binaries,
     datas=datas,
     hiddenimports=hiddenimports,
-    excludes=["tkinter", "matplotlib", "pytest"],  # keep the bundle lean
+    # Keep the bundle lean. torch/torchaudio are no longer dependencies (we run
+    # silero's ONNX directly); exclude them so a stale env can't bloat the binary.
+    excludes=["tkinter", "matplotlib", "pytest", "torch", "torchaudio"],
     noarchive=False,
 )
 pyz = PYZ(a.pure)

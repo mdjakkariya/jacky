@@ -1,0 +1,64 @@
+name: "🐞 Bug report"
+description: "Report something Jack did wrong, with a debug report attached."
+title: "[bug]: "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for helping make Jack more stable!
+
+        **Tip:** open Jack's **Settings → Copy debug report**, then click
+        **Report an issue** — your report is copied to the clipboard and this form
+        opens. Just paste it into the "Debug report" box below. It's already
+        redacted (no audio, no API keys).
+  - type: textarea
+    id: summary
+    attributes:
+      label: What happened?
+      description: What did you ask Jack to do, and what went wrong?
+      placeholder: "I asked Jack to open Safari, but while it was replying it stopped and answered something I didn't say."
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: How can we trigger it? Step by step if you can.
+      placeholder: |
+        1. Say "Jack, open Safari"
+        2. Wait while it replies
+        3. …
+    validations:
+      required: false
+  - type: textarea
+    id: expected
+    attributes:
+      label: What did you expect instead?
+      placeholder: "It should finish speaking and not respond again unless I actually said something."
+    validations:
+      required: false
+  - type: textarea
+    id: debug_report
+    attributes:
+      label: Debug report
+      description: "Paste the report from Settings → Copy debug report (already on your clipboard)."
+      render: markdown
+    validations:
+      required: false
+  - type: input
+    id: version
+    attributes:
+      label: Jack version
+      description: "Shown at the top of the debug report (e.g. v0.1.0). Leave blank if unsure."
+    validations:
+      required: false
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Before submitting
+      options:
+        - label: "The debug report is pasted above (or I've explained why not)."
+          required: false
+        - label: "I searched existing issues and this isn't a duplicate."
+          required: false

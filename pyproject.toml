@@ -18,11 +18,13 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-# Hands-free listening (Phase 2). Heavy (onnxruntime + torch), so it's opt-in:
-# `uv sync --extra wake`. Push-to-talk needs none of this.
+# Hands-free listening (Phase 2). onnxruntime-only — both the wake word and the VAD
+# run on ONNX (we vendor silero's ONNX model and run it directly, avoiding the
+# silero-vad package's torch + torchaudio dependency, ~half a gig once frozen).
+# Opt-in: `uv sync --extra wake`. Push-to-talk needs none of this.
 wake = [
     "openwakeword>=0.6.0",
-    "silero-vad>=5.1",
+    "onnxruntime>=1.17",
 ]
 # Voice output (Phase 3). Piper synthesizes speech on-device (CPU).
 tts = [
@@ -81,6 +83,11 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/autobot"]
+
+# Vendored silero VAD model (ONNX) shipped as package data so the wake/VAD path
+# never needs the torch-heavy silero-vad package.
+[tool.hatch.build.targets.wheel.force-include]
+"src/autobot/io/silero_vad.onnx" = "autobot/io/silero_vad.onnx"
 
 # --- uv -------------------------------------------------------------------
 [tool.uv]
@@ -147,8 +154,7 @@ module = [
     "sounddevice.*",
     "ollama.*",
     "openwakeword.*",
-    "silero_vad.*",
-    "torch.*",
+    "onnxruntime.*",
     "piper.*",
     "ddgs.*",
     "fastapi.*",

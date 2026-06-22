@@ -66,7 +66,7 @@ def _build_audio_source(
 ) -> AudioSource:
     """Pick the input recorder for the configured mode and wake detector.
 
-    The hands-free path needs the optional ``wake`` dependencies (silero-vad, and
+    The hands-free path needs the optional ``wake`` dependency (onnxruntime, plus
     openWakeWord only for that detector); if missing we fail with a clear hint.
     """
     if settings.input_mode == "ptt":
@@ -77,7 +77,7 @@ def _build_audio_source(
 
     source = _build_mic_source(settings)
     try:
-        vad = SileroVad()  # imports the heavy runtime
+        vad = SileroVad()  # onnxruntime; loads the vendored silero model
         if settings.wake_detector == "openwakeword":
             return WakeWordVadRecorder(
                 settings=settings,
@@ -122,6 +122,12 @@ def _build_transcript(settings: Settings) -> Transcript:
         f"model: {llm_label} · stt: {settings.stt_model} · "
         f"input: {settings.input_mode}/{settings.wake_detector}"
     )
+    # Bound the sessions folder: drop the oldest beyond session_keep on startup.
+    from autobot.session_log import prune_sessions
+
+    pruned = prune_sessions(settings.session_dir, settings.session_keep)
+    if pruned:
+        get_logger("app").info("pruned old session files n=%d", len(pruned))
     try:
         transcript = FileTranscript(settings.session_dir, header)
     except OSError as exc:

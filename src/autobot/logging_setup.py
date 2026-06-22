@@ -86,6 +86,15 @@ def setup_logging(settings: Settings) -> Path:
 
     logger.addHandler(file_handler)
     logger.addHandler(console_handler)
+
+    # Keep an in-memory ring of recent breadcrumbs (INFO+) for the debug report,
+    # so a shareable report needs no log parsing and stays bounded by session size.
+    from autobot.diagnostics import RingLogHandler, get_buffer
+
+    ring_handler = RingLogHandler(get_buffer())
+    ring_handler.addFilter(component_filter)
+    logger.addHandler(ring_handler)
+
     _configured = True
 
     get_logger("log").info("logging started file=%s level=%s", log_path, settings.log_level)

@@ -171,6 +171,20 @@ def create_app(
             "voice_present": voice.exists(),
         }
 
+    async def get_report() -> dict[str, str]:
+        """Build a compact, redacted debug report the user can copy or save.
+
+        Bounded by the in-memory breadcrumb buffer plus a tail of the log file, so
+        it stays small regardless of how long the session ran. No secrets/PII.
+        """
+        from pathlib import Path as _Path
+
+        from autobot.diagnostics import build_report
+
+        settings = Settings.load(path)
+        log_path = _Path(settings.log_dir).expanduser() / "autobot.log"
+        return {"report": build_report(settings, log_path=log_path)}
+
     async def post_secret(request: Request) -> dict[str, Any]:
         """Store (or clear) an API key in the Keychain. Only known names allowed."""
         from autobot.secrets import delete_secret, set_secret
@@ -202,6 +216,7 @@ def create_app(
     app.add_api_route("/settings", post_settings, methods=["POST"])
     app.add_api_route("/models", get_models, methods=["GET"])
     app.add_api_route("/setup", get_setup, methods=["GET"])
+    app.add_api_route("/report", get_report, methods=["GET"])
     app.add_api_route("/secret", post_secret, methods=["POST"])
     app.add_api_route("/confirm", post_confirm, methods=["POST"])
     return app

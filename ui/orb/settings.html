@@ -185,8 +185,19 @@
     </section>
   </main>
 
+  <div id="reportPane" class="hidden" style="padding:0 16px 8px">
+    <div class="row" style="margin-bottom:6px">
+      <span class="grow"><span class="label">Debug report</span></span>
+      <button class="btn ghost" id="reportIssue">Report an issue</button>
+      <button class="btn ghost" id="hideReport">Hide report</button>
+    </div>
+    <textarea id="reportOut" readonly rows="12" style="width:100%;box-sizing:border-box;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11px"></textarea>
+    <div class="hint">Redacted snapshot (recent events, errors, state sequence) — no audio, no API keys. Safe to paste into a GitHub issue. <a href="#" id="downloadReport">Download as file</a></div>
+  </div>
+
   <footer>
     <span id="status"></span>
+    <button class="btn ghost" id="copyReport">Copy debug report</button>
     <button class="btn ghost" id="reload">Reload</button>
     <button class="btn" id="save">Save</button>
   </footer>
@@ -362,12 +373,59 @@
       await fetch(API + "/settings", {method:"POST", headers:{"content-type":"application/json"}, body: JSON.stringify(body)});
       await saveSecret("anthropic_api_key", $("anthropicKey"), $("keyState"));
       await saveSecret("web_api_key", $("webKey"), $("webKeyState"));
-      $("status").style.color = ""; $("status").textContent = "Saved. Takes effect on your next request.";
+      setStatus("Saved.");
     } catch(e){
-      $("status").style.color = "#ff6b6b"; $("status").textContent = "Save failed — is Jack running?";
+      setStatus("Save failed — is Jack running?", true);
     }
   }
 
+  var _statusTimer = null;
+  function setStatus(text, isError){
+    var el = $("status");
+    el.style.color = isError ? "#ff6b6b" : "";
+    el.textContent = text;
+    if(_statusTimer) clearTimeout(_statusTimer);
+    if(text){ _statusTimer = setTimeout(function(){ el.textContent = ""; }, 3000); }
+  }
+
+  // Build (and clipboard-copy) the report; returns the text, or "" on failure.
+  async function buildReport(){
+    setStatus("Building report…");
+    var txt = "";
+    try { txt = (await (await fetch(API + "/report")).json()).report || ""; }
+    catch(e){ setStatus("Couldn't build report — is Jack running?", true); return ""; }
+    $("reportOut").value = txt;
+    $("reportPane").classList.remove("hidden");
+    $("reportOut").focus(); $("reportOut").select();
+    var copied = false;
+    try { await navigator.clipboard.writeText(txt); copied = true; } catch(e){ copied = false; }
+    setStatus(copied ? "Report copied to clipboard." : "Report ready — press ⌘C to copy.");
+    return txt;
+  }
+  function hideReport(){ $("reportPane").classList.add("hidden"); }
+  function downloadReport(e){
+    e.preventDefault();
+    var blob = new Blob([$("reportOut").value], {type:"text/markdown"});
+    var a = document.createElement("a");
+    a.href = URL.createObjectURL(blob); a.download = "autobot-debug-report.md";
+    a.click(); URL.revokeObjectURL(a.href);
+  }
+  async function reportIssue(){
+    var txt = $("reportOut").value || await buildReport();
+    if(!txt) return;
+    // Pull the version line out of the report to prefill the form field.
+    var m = /v([0-9][^ \n·]*)/.exec(txt.split("\n").find(function(l){ return l.indexOf("**App**") === 0; }) || "");
+    var url = "https://github.com/mdjakkariya/autobot/issues/new?template=bug_report.yml"
+            + (m ? "&version=" + encodeURIComponent("v" + m[1]) : "");
+    setStatus("Report copied — paste it into the issue's Debug report box.");
+    try { await window.__TAURI__.core.invoke("open_external", {url: url}); }
+    catch(e){ window.open(url, "_blank"); }
+  }
+
+  $("copyReport").addEventListener("click", buildReport);
+  $("hideReport").addEventListener("click", hideReport);
+  $("reportIssue").addEventListener("click", reportIssue);
+  $("downloadReport").addEventListener("click", downloadReport);
   $("save").addEventListener("click", save);
   $("reload").addEventListener("click", load);
   $("retry").addEventListener("click", load);

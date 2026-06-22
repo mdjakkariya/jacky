@@ -127,6 +127,11 @@ class Settings:
     # only engages when the mic input is echo-cancelled (AEC), so Jack never
     # interrupts itself on its own voice through the speakers.
     barge_in: bool = True
+    # How long the user must keep speaking before it counts as a barge-in. A real
+    # interruption is sustained; a brief echo/transient is a flicker. Set high enough
+    # that residual echo never trips it, low enough that interrupting still feels
+    # instant. ~250 ms is a good balance.
+    barge_in_min_speech_ms: int = 250
     # Echo cancellation via macOS Voice-Processing I/O. Off by default until
     # validated on the target Mac; when on, the mic input cancels Jack's own output
     # so barge-in is safe on speakers. Falls back to the plain mic if unavailable.
@@ -150,6 +155,9 @@ class Settings:
     # --- debugging / logging ---
     session_log: bool = True
     session_dir: str = _DEFAULT_SESSION_DIR
+    # Keep only the most recent N session transcripts; older ones are pruned on
+    # startup so the sessions folder never accumulates hundreds of files.
+    session_keep: int = 20
     show_debug: bool = True
     log_dir: str = _DEFAULT_LOG_DIR
     log_level: str = _DEFAULT_LOG_LEVEL
