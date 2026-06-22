@@ -55,10 +55,15 @@ cloud = [
 whispercpp = [
     "pywhispercpp>=1.2",
 ]
-# Optional echo cancellation via macOS Voice-Processing (for barge-in). macOS only,
-# lazy-imported, falls back to the plain mic. `uv sync --extra aec`.
+# macOS-native bits: echo cancellation via Voice-Processing (for barge-in) and the
+# permission status checks. All lazy-imported and degrade gracefully off macOS.
+# AVFoundation: AEC mic + Microphone status. ApplicationServices: AXIsProcessTrusted
+# (Accessibility status). CoreServices: AEDeterminePermissionToAutomateTarget
+# (Automation status). `uv sync --extra aec`.
 aec = [
     "pyobjc-framework-AVFoundation>=10.0; sys_platform == 'darwin'",
+    "pyobjc-framework-ApplicationServices>=10.0; sys_platform == 'darwin'",
+    "pyobjc-framework-CoreServices>=10.0; sys_platform == 'darwin'",
 ]
 # Build the standalone engine binary for the orb's sidecar (see packaging/). Only
 # needed to produce a release bundle: `uv sync --extra freeze` then `make freeze`.

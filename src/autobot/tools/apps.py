@@ -25,7 +25,7 @@ from collections.abc import Callable
 
 from autobot.core.types import Risk
 from autobot.logging_setup import get_logger
-from autobot.permissions import ACCESSIBILITY, AUTOMATION
+from autobot.permissions import AUTOMATION
 from autobot.tools.registry import ToolRegistry, ToolSpec
 
 _log = get_logger("apps")
@@ -92,12 +92,13 @@ _CLOSE_TAB = (
     "set n to 0\n"
     "if application appName is running then\n"
     "tell application appName\n"
-    "repeat with w in windows\n"
-    "set theTabs to tabs of w\n"
-    "repeat with i from (count theTabs) to 1 by -1\n"
-    "set t to item i of theTabs\n"
-    "if (URL of t) contains q then\n"
-    "close t\n"
+    # Iterate windows/tabs by explicit index. Using `repeat with w in windows` and
+    # `tabs of w` mis-resolves in Chrome (error -1700); indexing is reliable across
+    # Safari and Chromium. Reverse tab order so closing one doesn't shift the rest.
+    "repeat with wi from 1 to (count windows)\n"
+    "repeat with ti from (count tabs of window wi) to 1 by -1\n"
+    "if (URL of tab ti of window wi) contains q then\n"
+    "close tab ti of window wi\n"
     "set n to n + 1\n"
     "end if\n"
     "end repeat\n"
@@ -403,7 +404,7 @@ class AppTools:
                 parameters=name_param,
                 handler=self.hide_app,
                 risk=Risk.WRITE,
-                requires=ACCESSIBILITY,
+                requires=AUTOMATION,
             ),
             ToolSpec(
                 name="minimize_app",
@@ -411,7 +412,7 @@ class AppTools:
                 parameters=name_param,
                 handler=self.minimize_app,
                 risk=Risk.WRITE,
-                requires=ACCESSIBILITY,
+                requires=AUTOMATION,
             ),
             ToolSpec(
                 name="maximize_app",
@@ -419,7 +420,7 @@ class AppTools:
                 parameters=name_param,
                 handler=self.maximize_app,
                 risk=Risk.WRITE,
-                requires=ACCESSIBILITY,
+                requires=AUTOMATION,
             ),
             ToolSpec(
                 name="quit_app",
@@ -440,7 +441,7 @@ class AppTools:
                 parameters={"type": "object", "properties": {}, "required": []},
                 handler=self.list_apps,
                 risk=Risk.READ_ONLY,
-                requires=ACCESSIBILITY,
+                requires=AUTOMATION,
             ),
             ToolSpec(
                 name="uninstall_app",

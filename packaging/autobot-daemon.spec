@@ -50,6 +50,12 @@ for _pkg in (
 for _mod in ("uvicorn", "anthropic", "fastapi", "starlette"):
     hiddenimports += collect_submodules(_mod)
 
+# PyObjC frameworks used for AEC + the permission status checks. They're imported
+# lazily inside functions, so make sure the freeze includes them (else the
+# Permissions tab can't read Accessibility/Automation status and shows "Unknown").
+for _fw in ("AVFoundation", "ApplicationServices", "CoreServices", "Foundation"):
+    hiddenimports.append(_fw)
+
 a = Analysis(
     [_ENTRY],
     pathex=[os.path.join(_ROOT, "src")],
