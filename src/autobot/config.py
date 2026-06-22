@@ -54,6 +54,17 @@ _DEFAULT_LOG_DIR = "~/.autobot/logs"
 _DEFAULT_LOG_LEVEL = "DEBUG"
 _DEFAULT_LOG_CONSOLE_LEVEL = "WARNING"
 
+# Biases the speech recognizer toward the command vocabulary (app names, the
+# assistant's name) so short proper nouns aren't misheard — e.g. "Chrome" → "home",
+# "Firefox" → "fire fox". Whisper's standard initial_prompt mechanism; phrased like
+# real commands so it primes the decoder without forcing words in. Editable in
+# settings.json to add your own apps.
+_DEFAULT_STT_PROMPT = (
+    "Commands for Jack: open or close apps like Safari, Chrome, Firefox, Microsoft Edge, "
+    "Finder, Mail, Calendar, Notes, Terminal, Spotify, Slack, Visual Studio Code, Music, "
+    "Messages, Photos, Preview, System Settings."
+)
+
 SAMPLE_RATE = 16_000
 """Sample rate (Hz) the whole pipeline assumes. Whisper expects 16 kHz mono."""
 
@@ -92,6 +103,8 @@ class Settings:
     stt_device: str = _DEFAULT_STT_DEVICE
     stt_compute_type: str = _DEFAULT_STT_COMPUTE_TYPE
     stt_beam_size: int = _DEFAULT_STT_BEAM
+    # Vocabulary hint passed to the recognizer each transcription (see above).
+    stt_prompt: str = _DEFAULT_STT_PROMPT
     # --- tools / sandbox ---
     sandbox_dir: str = _DEFAULT_SANDBOX_DIR
     audit_db: str = _DEFAULT_AUDIT_DB

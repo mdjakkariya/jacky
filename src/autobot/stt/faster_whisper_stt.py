@@ -56,6 +56,7 @@ class FasterWhisperSTT:
             language="en",  # English-only: never autodetect
             beam_size=self._settings.stt_beam_size,  # higher = more accurate
             vad_filter=False,  # we already VAD-gate upstream
+            initial_prompt=self._settings.stt_prompt or None,  # bias toward app names
         )
 
         texts: list[str] = []

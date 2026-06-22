@@ -59,7 +59,7 @@ fn stop_engine(app: &tauri::AppHandle) {
 /// Open the Settings window — callable from the orb (e.g. the first-run wizard).
 #[tauri::command]
 fn open_settings_window(app: tauri::AppHandle) {
-    open_settings(&app);
+    open_settings(&app, false);
 }
 
 /// Open a URL in the user's default browser (e.g. the prefilled GitHub issue form).
@@ -82,6 +82,27 @@ fn reveal_in_finder(path: String) {
     {
         let _ = std::process::Command::new("open").arg("-R").arg(&path).spawn();
     }
+}
+
+/// Copy text to the system clipboard. The webview's navigator.clipboard is
+/// unreliable under Tauri's custom protocol, so we write it natively (pbcopy).
+/// Returns whether it succeeded so the UI can confirm honestly.
+#[tauri::command]
+fn copy_to_clipboard(text: String) -> bool {
+    #[cfg(target_os = "macos")]
+    {
+        use std::io::Write;
+        use std::process::{Command, Stdio};
+        if let Ok(mut child) = Command::new("pbcopy").stdin(Stdio::piped()).spawn() {
+            if let Some(mut stdin) = child.stdin.take() {
+                if stdin.write_all(text.as_bytes()).is_err() {
+                    return false;
+                }
+            }
+            return child.wait().map(|s| s.success()).unwrap_or(false);
+        }
+    }
+    false
 }
 
 // Orb size presets (square, logical px). The web orb scales to fill the window.
@@ -107,7 +128,8 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             open_settings_window,
             open_external,
-            reveal_in_finder
+            reveal_in_finder,
+            copy_to_clipboard
         ])
         .setup(|app| {
             // Bundled release: launch the embedded engine (the orb is its UI client).
@@ -149,8 +171,9 @@ fn main() {
             let size = Submenu::with_items(app, "Size", true, &[&small, &medium, &large])?;
 
             let settings = MenuItem::with_id(app, "settings", "Settings…", true, None::<&str>)?;
+            let report = MenuItem::with_id(app, "report", "Report an issue…", true, None::<&str>)?;
             let quit = MenuItem::with_id(app, "quit", "Quit Jack", true, None::<&str>)?;
-            let menu = Menu::with_items(app, &[&view, &lock, &size, &settings, &quit])?;
+            let menu = Menu::with_items(app, &[&view, &lock, &size, &settings, &report, &quit])?;
 
             let visible = Arc::new(AtomicBool::new(true));
             let locked = Arc::new(AtomicBool::new(false));
@@ -186,7 +209,8 @@ fn main() {
                     "size_s" => resize(app, SIZE_SMALL),
                     "size_m" => resize(app, SIZE_MEDIUM),
                     "size_l" => resize(app, SIZE_LARGE),
-                    "settings" => open_settings(app),
+                    "settings" => open_settings(app, false),
+                    "report" => open_settings(app, true),
                     "quit" => app.exit(0),
                     _ => {}
                 })
@@ -246,7 +270,7 @@ fn install_edit_menu(app: &tauri::App) -> tauri::Result<()> {
 /// the API-key field. So while Settings is open we switch to the regular
 /// activation policy (the app activates, fields are typable, a Dock icon appears)
 /// and switch back to accessory when the window closes.
-fn open_settings(app: &tauri::AppHandle) {
+fn open_settings(app: &tauri::AppHandle, focus_report: bool) {
     // Become a regular app AND actually activate it — without activating, no
     // window can become "key", so text fields can't take focus or accept input.
     #[cfg(target_os = "macos")]
@@ -258,11 +282,17 @@ fn open_settings(app: &tauri::AppHandle) {
     if let Some(win) = app.get_webview_window("settings") {
         let _ = win.show();
         let _ = win.set_focus();
+        // Already open: ask the webview to pop the debug-report sheet.
+        if focus_report {
+            let _ = win.eval("window.__openReport && window.__openReport()");
+        }
         return;
     }
 
+    // Fresh window: a #report hash the page checks on load auto-opens the sheet.
+    let url = if focus_report { "settings.html#report" } else { "settings.html" };
     let handle = app.clone();
-    match WebviewWindowBuilder::new(app, "settings", WebviewUrl::App("settings.html".into()))
+    match WebviewWindowBuilder::new(app, "settings", WebviewUrl::App(url.into()))
         .title("Jack — Settings")
         .inner_size(580.0, 680.0)
         .resizable(true)

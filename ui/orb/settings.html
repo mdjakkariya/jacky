@@ -431,22 +431,34 @@
     if(text){ _statusTimer = setTimeout(function(){ el.textContent = ""; }, 3000); }
   }
 
-  // Build (and clipboard-copy) the report; returns the text, or "" on failure.
+  // Build the report and show it; returns the text, or "" on failure.
   async function buildReport(){
     var txt = "";
     try { txt = (await (await fetch(API + "/report")).json()).report || ""; }
     catch(e){ setStatus("Couldn't build report — is Jack running?", true); return ""; }
     $("reportOut").value = txt;
-    try { await navigator.clipboard.writeText(txt); } catch(e){ /* still visible to copy */ }
     return txt;
   }
-  // Re-copy from the open panel and confirm with a brief tooltip.
+  // Copy text reliably: navigator.clipboard is unreliable under Tauri's custom
+  // protocol, so prefer the native command and fall back to the web API.
+  async function copyText(txt){
+    try {
+      if(window.__TAURI__ && window.__TAURI__.core){
+        if(await window.__TAURI__.core.invoke("copy_to_clipboard", {text: txt})) return true;
+      }
+    } catch(e){ /* fall through to web API */ }
+    try { await navigator.clipboard.writeText(txt); return true; } catch(e){ return false; }
+  }
+  // Copy from the open panel and confirm with a brief tooltip (honest about success).
   async function copyReport(){
-    var txt = await buildReport();
+    var txt = $("reportOut").value || await buildReport();
     if(!txt) return;
+    var ok = await copyText(txt);
     var tip = $("copyTip");
+    tip.textContent = ok ? "Copied" : "Press ⌘C";
     tip.classList.add("show");
     setTimeout(function(){ tip.classList.remove("show"); }, 1400);
+    if(!ok){ $("reportOut").focus(); $("reportOut").select(); }
   }
   function openReport(){
     $("reportPane").classList.add("open");
@@ -462,7 +474,9 @@
   }
   async function raiseIssue(){
     var txt = await buildReport();
-    if(txt) openReport();
+    if(!txt) return;
+    await copyText(txt);  // so the panel's "Copied to your clipboard" is true
+    openReport();
   }
   var ISSUE_URL = "https://github.com/mdjakkariya/autobot/issues/new";
   var REDACT_HINT = "Redacted — no audio, no API keys.";
@@ -492,7 +506,7 @@
     // The report is several KB but a new-issue URL caps at ~8 KB, so we can't carry
     // it in the link. Put the full report on the clipboard and leave the form's
     // Debug report field empty — you paste it once, cleanly, into an empty box.
-    try { await navigator.clipboard.writeText(txt); } catch(e){ /* fall back to manual ⌘C */ }
+    await copyText(txt);
     var appLine = txt.split("\n").find(function(l){ return l.indexOf("**App**") === 0; }) || "";
     var m = /v([0-9][^ \n·]*)/.exec(appLine);
     var url = ISSUE_URL + "?template=bug_report.yml" + (m ? "&version=" + encodeURIComponent("v" + m[1]) : "");
@@ -510,6 +524,12 @@
   $("save").addEventListener("click", save);
   $("reload").addEventListener("click", load);
   $("retry").addEventListener("click", load);
+
+  // Let the tray "Report an issue…" open the report sheet: it evals this on an
+  // already-open window, or we auto-open when launched with a #report hash.
+  window.__openReport = raiseIssue;
+  if(location.hash.indexOf("report") >= 0){ raiseIssue(); }
+
   load();
 })();
 </script>

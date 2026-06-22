@@ -72,6 +72,16 @@ class WhisperCppSTT:
         """Transcribe one mono ``float32`` 16 kHz clip; see the interface contract."""
         if audio.size == 0:
             return Transcription(text="", confidence=0.0)
-        # pywhispercpp accepts a 16 kHz mono float32 numpy array directly.
-        segments = self._model.transcribe(audio, language="en")
+        # pywhispercpp accepts a 16 kHz mono float32 numpy array directly. The
+        # initial_prompt biases decoding toward the command vocabulary (app names);
+        # fall back gracefully if an older binding doesn't accept the kwarg.
+        prompt = self._settings.stt_prompt or ""
+        try:
+            segments = (
+                self._model.transcribe(audio, language="en", initial_prompt=prompt)
+                if prompt
+                else self._model.transcribe(audio, language="en")
+            )
+        except TypeError:
+            segments = self._model.transcribe(audio, language="en")
         return transcription_from_segments(segments)
