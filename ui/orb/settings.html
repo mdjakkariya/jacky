@@ -229,7 +229,7 @@
     <div class="report-sub">Copied to your clipboard — open the issue and paste it (⌘V) into the Debug report box.</div>
     <textarea id="reportOut" class="report-text" readonly spellcheck="false"></textarea>
     <div class="report-foot">
-      <span class="hint">Redacted — no audio, no API keys.</span>
+      <span class="hint" id="reportHint">Redacted — no audio, no API keys.</span>
       <a href="#" id="downloadReport" class="report-link">Download as file</a>
     </div>
   </div>
@@ -472,6 +472,15 @@
     a.click(); URL.revokeObjectURL(a.href);
   }
   var ISSUE_URL = "https://github.com/mdjakkariya/autobot/issues/new";
+  var REDACT_HINT = "Redacted — no audio, no API keys.";
+  var _hintTimer = null;
+  // Briefly flip the footer hint to a confirmation, then restore the default.
+  function flashHint(msg){
+    var el = $("reportHint");
+    el.textContent = msg;
+    if(_hintTimer) clearTimeout(_hintTimer);
+    _hintTimer = setTimeout(function(){ el.textContent = REDACT_HINT; }, 3000);
+  }
 
   async function reportIssue(){
     var txt = $("reportOut").value || await buildReport();
@@ -483,7 +492,7 @@
     var appLine = txt.split("\n").find(function(l){ return l.indexOf("**App**") === 0; }) || "";
     var m = /v([0-9][^ \n·]*)/.exec(appLine);
     var url = ISSUE_URL + "?template=bug_report.yml" + (m ? "&version=" + encodeURIComponent("v" + m[1]) : "");
-    setStatus("Report copied — paste it (⌘V) into the Debug report box.");
+    flashHint("Copied — paste it (⌘V) into the issue.");
     try { await window.__TAURI__.core.invoke("open_external", {url: url}); }
     catch(e){ window.open(url, "_blank"); }
   }
