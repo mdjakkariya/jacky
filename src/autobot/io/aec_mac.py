@@ -20,13 +20,15 @@ optional ``aec`` extra (``uv sync --extra aec``: pyobjc AVFoundation/CoreAudio).
 from __future__ import annotations
 
 import queue
+import threading
 import time
 from collections.abc import Iterator
 
 import numpy as np
 
 from autobot.config import Settings
-from autobot.core.types import AudioClip
+from autobot.core.events import AmplitudeSink
+from autobot.core.types import AudioClip, Int16Frame
 from autobot.logging_setup import get_logger
 
 _log = get_logger("listening")
@@ -42,8 +44,6 @@ class VoiceProcessingMicSource:
     voice processing, so the caller can fall back to the plain mic.
     """
 
-    aec_active = True
-
     def __init__(self, settings: Settings) -> None:
         self._settings = settings
         self._queue: queue.Queue[AudioClip] = queue.Queue()
@@ -51,31 +51,87 @@ class VoiceProcessingMicSource:
         self._started = False
         self._warned = False  # so a per-frame tap error logs only once
         self._engine: object | None = None
+        self._player_node: object | None = None
+        self._out_format: object | None = None
+        self._out_rate = float(_TARGET_RATE)
+        self._src_rate = 48_000.0
+        self._play_lock = threading.Lock()
+        # aec_active means the *full-duplex* path is live: TTS renders through this
+        # engine so its voice is cancelled and barge-in is safe. It's only set True
+        # when playback wiring succeeds; capture-only fallback leaves it False so the
+        # orchestrator runs half-duplex (and Jack can't hear itself).
+        self.aec_active = False
         self._start_engine()
 
     def _start_engine(self) -> None:
-        """Start an AVAudioEngine with voice processing enabled on the input node."""
-        # Imported here so the module stays importable without pyobjc, and any
-        # failure degrades to the plain mic rather than crashing startup.
+        """Bring up the AEC engine, preferring full-duplex but never breaking.
+
+        Voice-processing playback is device-finicky — on some mic/speaker combos the
+        duplex unit refuses to initialize (CoreAudio -10875, "input and output
+        formats do not match"). So we try full-duplex first (TTS rendered through the
+        engine as the echo reference, enabling safe barge-in); if that won't start, we
+        fall back to capture-only AEC and half-duplex; if even that fails, we raise so
+        the caller uses the plain mic. Either way the app keeps working.
+        """
         import objc  # noqa: F401  (ensures pyobjc is present)
-        from AVFoundation import AVAudioEngine
+
+        try:
+            self._build(with_playback=True)
+            self.aec_active = True  # full-duplex: route TTS here, barge-in safe
+            _log.info("voice-processing full-duplex (AEC + playback) rate=%.0f", self._out_rate)
+            return
+        except Exception as exc:
+            _log.warning("AEC playback unavailable (%s) — capture-only, half-duplex", exc)
+            self._player_node = None
+
+        # Capture-only fallback: mic is still echo-cancelled, but TTS plays through the
+        # normal output, so we stay half-duplex (aec_active=False) to avoid self-echo.
+        self._build(with_playback=False)
+        _log.info("voice-processing capture-only (half-duplex) rate=%.0f", self._src_rate)
+
+    def _build(self, with_playback: bool) -> None:
+        """Construct + start the engine, optionally wiring the TTS playback node."""
+        from AVFoundation import AVAudioEngine, AVAudioPlayerNode
+
+        # Tear down any prior attempt and start from clean buffers.
+        if self._engine is not None:
+            try:
+                self._engine.stop()  # type: ignore[attr-defined]
+            except Exception:
+                pass
+        self._engine = None
+        self._player_node = None
+        self._queue = queue.Queue()
+        self._buf = np.zeros(0, dtype=np.float32)
 
         engine = AVAudioEngine.alloc().init()
         input_node = engine.inputNode()
-        # Enable Apple's voice processing (AEC + noise suppression + AGC).
         ok, err = input_node.setVoiceProcessingEnabled_error_(True, None)
         if not ok:
             raise RuntimeError(f"voice processing unavailable: {err}")
-
         in_format = input_node.outputFormatForBus_(0)
-        src_rate = float(in_format.sampleRate()) or 48_000.0
+        self._src_rate = float(in_format.sampleRate()) or 48_000.0
+        self._out_rate = self._src_rate
+
+        if with_playback:
+            # Match the output node's own format (channels + rate) so the duplex unit
+            # initializes; a mismatched custom format triggers -10875.
+            out_node = engine.outputNode()
+            out_format = out_node.inputFormatForBus_(0)
+            player = AVAudioPlayerNode.alloc().init()
+            engine.attachNode_(player)
+            engine.connect_to_format_(player, out_node, out_format)
+            self._player_node = player
+            self._out_format = out_format
+            self._out_rate = float(out_format.sampleRate()) or self._src_rate
+
+        src_rate = self._src_rate
 
         def tap(buffer: object, _when: object) -> None:
-            # This runs on a realtime audio thread: an exception here is uncaught by
-            # ObjC and would terminate the whole app, so we must never let it raise.
+            # Realtime audio thread: an uncaught ObjC exception would kill the app.
             try:
                 self._queue.put(_buffer_to_mono16k(buffer, src_rate))
-            except Exception:  # drop the frame, warn once, keep the app alive
+            except Exception:
                 if not self._warned:
                     self._warned = True
                     _log.exception("AEC tap conversion failed; dropping frames")
@@ -86,10 +142,7 @@ class VoiceProcessingMicSource:
         if not ok:
             raise RuntimeError(f"audio engine failed to start: {err}")
         self._engine = engine
-        # Verify the tap actually delivers audio. Some setups start the engine but
-        # never pull from the input (the tap never fires) — that would block capture
-        # forever. If no frame arrives quickly, fail so the caller falls back to the
-        # plain mic instead of going deaf.
+        # Verify the tap delivers audio quickly, else we'd block capture forever.
         deadline = time.monotonic() + 2.0
         while time.monotonic() < deadline and self._queue.empty():
             time.sleep(0.05)
@@ -99,8 +152,9 @@ class VoiceProcessingMicSource:
                 "lacks Microphone permission (System Settings → Privacy & Security → "
                 "Microphone) or another app holds the input"
             )
+        if with_playback and self._player_node is not None:
+            self._player_node.play()  # idle until buffers are scheduled by play()
         self._started = True
-        _log.info("voice-processing mic started (AEC on) src_rate=%.0f", src_rate)
 
     def flush(self) -> None:
         """Drop everything currently queued (audio captured while we were busy)."""
@@ -119,6 +173,79 @@ class VoiceProcessingMicSource:
             while self._buf.size >= _FRAME:
                 yield self._buf[:_FRAME].copy()
                 self._buf = self._buf[_FRAME:]
+
+    def play(
+        self,
+        audio: Int16Frame,
+        sample_rate: int,
+        cancel: threading.Event,
+        on_level: AmplitudeSink | None = None,
+    ) -> bool:
+        """Play int16 PCM through the voice-processing output (the AEC reference).
+
+        Implements the TTS :class:`~autobot.tts.piper_tts.AudioPlayer` protocol so
+        Jack's speech is rendered through the same engine that captures the mic —
+        which is what lets macOS cancel his voice and makes barge-in safe on speakers.
+        Returns True if it played to completion, False if ``cancel`` interrupted it.
+        Any native failure is swallowed (logged) and reported as completed, so a
+        playback glitch never crashes a turn.
+        """
+        node, fmt = self._player_node, self._out_format
+        if node is None or fmt is None or audio.size == 0:
+            return True
+        try:
+            from AVFoundation import AVAudioPCMBuffer
+
+            # int16 -> float32 [-1, 1], resampled to the engine's rate.
+            samples = audio.astype(np.float32) / 32768.0
+            if abs(sample_rate - self._out_rate) >= 1.0:
+                n_out = max(1, round(samples.size * self._out_rate / sample_rate))
+                samples = np.asarray(
+                    np.interp(
+                        np.linspace(0, samples.size - 1, n_out),
+                        np.arange(samples.size),
+                        samples,
+                    ),
+                    dtype=np.float32,
+                )
+            n = samples.size
+            channels = max(1, int(fmt.channelCount()))
+            with self._play_lock:
+                buf = AVAudioPCMBuffer.alloc().initWithPCMFormat_frameCapacity_(fmt, n)
+                if buf is None:
+                    return True
+                buf.setFrameLength_(n)
+                # Write the mono signal into every channel of the output format.
+                channel_data = buf.floatChannelData()
+                for c in range(channels):
+                    view = channel_data[c].as_buffer(n)  # writable memoryview, n float32
+                    np.frombuffer(view, dtype=np.float32, count=n)[:] = samples
+                node.scheduleBuffer_completionHandler_(buf, None)
+                if not node.isPlaying():
+                    node.play()
+            # Poll to completion, honoring cancel and driving the orb level.
+            block = max(1, int(self._out_rate / 30))
+            idx = 0
+            while idx < n:
+                if cancel.is_set():
+                    node.stop()
+                    node.play()  # leave the node ready for the next reply
+                    if on_level is not None:
+                        on_level(0.0)
+                    return False
+                if on_level is not None:
+                    chunk = samples[idx : idx + block]
+                    on_level(float(np.sqrt(np.mean(chunk * chunk))) if chunk.size else 0.0)
+                time.sleep(block / self._out_rate)
+                idx += block
+            if on_level is not None:
+                on_level(0.0)
+            return True
+        except Exception:  # never let a playback glitch take down the turn
+            _log.exception("AEC playback failed; reply may be inaudible this turn")
+            if on_level is not None:
+                on_level(0.0)
+            return True
 
 
 def _buffer_to_mono16k(buffer: object, src_rate: float) -> AudioClip:

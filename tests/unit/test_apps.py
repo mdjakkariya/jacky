@@ -27,6 +27,77 @@ def test_open_app_uses_open_dash_a() -> None:
     assert runner.calls == [["open", "-a", "Safari"]]
 
 
+def test_open_website_prepends_https_for_bare_domain() -> None:
+    runner = FakeRunner()
+    tools = AppTools(runner)
+    assert tools.open_website("youtube.com") == "Opened https://youtube.com"
+    assert runner.calls == [["open", "https://youtube.com"]]
+
+
+def test_open_website_keeps_explicit_scheme() -> None:
+    runner = FakeRunner()
+    tools = AppTools(runner)
+    tools.open_website("http://example.com")
+    assert runner.calls == [["open", "http://example.com"]]
+
+
+def test_open_website_rejects_empty() -> None:
+    runner = FakeRunner()
+    assert AppTools(runner).open_website("  ") == "No website given."
+    assert runner.calls == []
+
+
+def test_open_website_is_registered_as_write() -> None:
+    specs = {s.name: s for s in AppTools(FakeRunner()).specs()}
+    assert "open_website" in specs
+    assert specs["open_website"].risk is Risk.WRITE
+
+
+def _all_installed(_name: str) -> bool:
+    return True
+
+
+def test_close_website_closes_matching_tabs_not_the_browser() -> None:
+    runner = FakeRunner(rc=0, out="1")  # each installed browser closes one tab
+    tools = AppTools(runner, is_installed=_all_installed)
+    msg = tools.close_website("https://chatgpt.com/chat")
+    assert "chatgpt.com" in msg and "tab" in msg
+    assert all(c[0] == "osascript" for c in runner.calls)
+    assert all(c[-2] == "chatgpt.com" for c in runner.calls)  # query, not a quit
+    assert {"Safari", "Google Chrome", "Microsoft Edge"} <= {c[-1] for c in runner.calls}
+
+
+def test_close_website_only_scripts_installed_browsers() -> None:
+    # Chrome not installed → never referenced (so no "Choose Application" picker).
+    runner = FakeRunner(rc=0, out="1")
+    tools = AppTools(runner, is_installed=lambda n: n in {"Safari", "Microsoft Edge"})
+    tools.close_website("chatgpt.com")
+    assert {c[-1] for c in runner.calls} == {"Safari", "Microsoft Edge"}
+
+
+def test_close_website_reports_when_no_tab_found() -> None:
+    tools = AppTools(FakeRunner(rc=0, out="0"), is_installed=_all_installed)
+    assert "couldn't find an open" in tools.close_website("example.com").lower()
+
+
+def test_close_website_reports_when_no_browser_installed() -> None:
+    runner = FakeRunner()
+    tools = AppTools(runner, is_installed=lambda _n: False)
+    assert "couldn't find a browser" in tools.close_website("example.com").lower()
+    assert runner.calls == []  # never scripted anything
+
+
+def test_close_website_rejects_empty() -> None:
+    runner = FakeRunner()
+    assert AppTools(runner, is_installed=_all_installed).close_website("  ") == "No website given."
+    assert runner.calls == []
+
+
+def test_close_website_is_registered_as_write() -> None:
+    specs = {s.name: s for s in AppTools(FakeRunner()).specs()}
+    assert specs["close_website"].risk is Risk.WRITE
+
+
 def test_osascript_passes_name_as_argument_not_code() -> None:
     runner = FakeRunner()
     tools = AppTools(runner)

@@ -63,8 +63,12 @@ def _build_audio_source(
     settings: Settings,
     on_level: AmplitudeSink | None = None,
     on_voice: Callable[[bool], None] | None = None,
+    source: FrameSource | None = None,
 ) -> AudioSource:
     """Pick the input recorder for the configured mode and wake detector.
+
+    ``source`` lets the caller pass a pre-built mic source (so the same AEC engine
+    used for capture is also used to play TTS); if omitted, one is built here.
 
     The hands-free path needs the optional ``wake`` dependency (onnxruntime, plus
     openWakeWord only for that detector); if missing we fail with a clear hint.
@@ -75,7 +79,7 @@ def _build_audio_source(
     from autobot.io.listening import VadRecorder, WakeWordVadRecorder
     from autobot.io.wake_vad import OpenWakeWord, SileroVad
 
-    source = _build_mic_source(settings)
+    source = source or _build_mic_source(settings)
     try:
         vad = SileroVad()  # onnxruntime; loads the vendored silero model
         if settings.wake_detector == "openwakeword":
@@ -140,8 +144,16 @@ def _build_transcript(settings: Settings) -> Transcript:
     return transcript
 
 
-def _build_tts(settings: Settings, on_level: AmplitudeSink | None = None) -> TextToSpeech:
+def _build_tts(
+    settings: Settings,
+    on_level: AmplitudeSink | None = None,
+    player: object | None = None,
+) -> TextToSpeech:
     """Build the voice output: Piper if enabled and available, else silent.
+
+    ``player`` (an AudioPlayer) is where speech is rendered. On the AEC path it's the
+    Voice-Processing engine's output node, so macOS cancels Jack's voice from the mic
+    and barge-in is safe; otherwise it defaults to the plain system output.
 
     Falls back to a no-op so a missing 'tts' extra or voice model degrades to a
     text-only assistant rather than crashing.
@@ -153,11 +165,12 @@ def _build_tts(settings: Settings, on_level: AmplitudeSink | None = None) -> Tex
         print("[tts] voice output OFF (AUTOBOT_TTS=0) — text only.")
         return NullTTS()
     try:
-        from autobot.tts.piper_tts import PiperTTS
+        from autobot.tts.piper_tts import AudioPlayer, PiperTTS
 
-        tts = PiperTTS(settings, on_level=on_level)
-        log.info("voice output ready voice=%s", settings.tts_voice)
-        print(f"[tts] voice output READY (voice: {settings.tts_voice})")
+        tts = PiperTTS(settings, on_level=on_level, player=player if isinstance(player, AudioPlayer) else None)
+        routed = " (through AEC engine)" if isinstance(player, AudioPlayer) else ""
+        log.info("voice output ready voice=%s%s", settings.tts_voice, routed)
+        print(f"[tts] voice output READY (voice: {settings.tts_voice}){routed}")
         return tts
     except (ImportError, FileNotFoundError) as exc:
         log.warning("voice output disabled: %s", exc)
@@ -383,9 +396,15 @@ def build(
     ensure_voice(settings.tts_voice, os.environ.get("AUTOBOT_VOICE_DIR"))
 
     # Voice I/O is built before the gate so the confirmer can speak the prompt and
-    # listen for the spoken yes/no.
-    tts = _build_tts(settings, amplitude_sink)
-    audio = _build_audio_source(settings, amplitude_sink, on_voice)
+    # listen for the spoken yes/no. Build the mic source first: if it's the AEC
+    # engine, route TTS through it (its play()) so macOS cancels Jack's own voice
+    # from the mic — that's what makes full-duplex barge-in safe on speakers. If AEC
+    # isn't available it's a plain mic with no play(), so TTS uses the system output
+    # and we run half-duplex.
+    mic = _build_mic_source(settings)
+    aec_player = mic if getattr(mic, "aec_active", False) and hasattr(mic, "play") else None
+    tts = _build_tts(settings, amplitude_sink, player=aec_player)
+    audio = _build_audio_source(settings, amplitude_sink, on_voice, source=mic)
 
     # Reloadable STT: rebuilt (new model loaded) when the Settings view changes
     # the speech model — no restart needed (applies on the next transcription).

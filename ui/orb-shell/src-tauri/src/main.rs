@@ -84,6 +84,29 @@ fn reveal_in_finder(path: String) {
     }
 }
 
+/// Dev only: wipe debug artifacts under ~/.autobot (logs, sessions, reports) for a
+/// fresh start. Leaves settings, secrets, voices, and memory untouched. The running
+/// engine keeps writing to its already-open log until it's restarted.
+#[cfg(debug_assertions)]
+fn cleanup_storage(app: &tauri::AppHandle) -> String {
+    let home = match app.path().home_dir() {
+        Ok(h) => h,
+        Err(_) => return "couldn't resolve home dir".into(),
+    };
+    let base = home.join(".autobot");
+    let mut removed = 0u32;
+    for sub in ["logs", "sessions", "reports"] {
+        if let Ok(entries) = std::fs::read_dir(base.join(sub)) {
+            for entry in entries.flatten() {
+                if std::fs::remove_file(entry.path()).is_ok() {
+                    removed += 1;
+                }
+            }
+        }
+    }
+    format!("cleaned up {removed} file(s) under ~/.autobot (restart the engine for a fresh log)")
+}
+
 /// Copy text to the system clipboard. The webview's navigator.clipboard is
 /// unreliable under Tauri's custom protocol, so we write it natively (pbcopy).
 /// Returns whether it succeeded so the UI can confirm honestly.
@@ -173,6 +196,17 @@ fn main() {
             let settings = MenuItem::with_id(app, "settings", "Settings…", true, None::<&str>)?;
             let report = MenuItem::with_id(app, "report", "Report an issue…", true, None::<&str>)?;
             let quit = MenuItem::with_id(app, "quit", "Quit Jack", true, None::<&str>)?;
+
+            // Dev builds get a "Clean up storage" item at the top for quick resets.
+            #[cfg(debug_assertions)]
+            let cleanup =
+                MenuItem::with_id(app, "cleanup", "Clean up storage (dev)", true, None::<&str>)?;
+            #[cfg(debug_assertions)]
+            let menu = Menu::with_items(
+                app,
+                &[&cleanup, &view, &lock, &size, &settings, &report, &quit],
+            )?;
+            #[cfg(not(debug_assertions))]
             let menu = Menu::with_items(app, &[&view, &lock, &size, &settings, &report, &quit])?;
 
             let visible = Arc::new(AtomicBool::new(true));
@@ -211,6 +245,8 @@ fn main() {
                     "size_l" => resize(app, SIZE_LARGE),
                     "settings" => open_settings(app, false),
                     "report" => open_settings(app, true),
+                    #[cfg(debug_assertions)]
+                    "cleanup" => eprintln!("[jack] {}", cleanup_storage(app)),
                     "quit" => app.exit(0),
                     _ => {}
                 })

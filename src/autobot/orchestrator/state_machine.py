@@ -214,6 +214,32 @@ def _looks_incomplete(text: str) -> bool:
     return tokens[-1] in _CONTINUATION_WORDS
 
 
+def _echo_tokens(text: str) -> list[str]:
+    """Lowercase alphanumeric word tokens, for comparing two utterances."""
+    return re.findall(r"[a-z0-9']+", text.lower())
+
+
+def _is_self_echo(heard: str, reply: str) -> bool:
+    """True if ``heard`` looks like Jack's own ``reply`` bleeding into the mic.
+
+    When echo cancellation doesn't fully remove Jack's voice, a barge-in can capture
+    Jack's own words. We reject the capture if it's a contiguous fragment of the
+    reply, or if almost all of its words appear in the reply — so the assistant can't
+    act on what it just said. Conservative enough that a real interruption (new
+    words) passes through.
+    """
+    h = _echo_tokens(heard)
+    r = _echo_tokens(reply)
+    if not h or not r:
+        return False
+    joined_h, joined_r = " ".join(h), " ".join(r)
+    if joined_h in joined_r:  # verbatim fragment of the reply (e.g. its opener)
+        return True
+    rset = set(r)
+    overlap = sum(1 for w in h if w in rset) / len(h)
+    return overlap >= 0.75
+
+
 def _ack_phrase(risk: Risk | None) -> str:
     """Pick an acknowledgement that fits what the tool is about to do.
 
@@ -271,6 +297,8 @@ class Orchestrator:
         # the next turn instead of capturing fresh.
         self._pending_audio: AudioClip | None = None
         self._pending_started_at: float | None = None
+        # The last reply text we spoke, so a barge-in that echoes it can be rejected.
+        self._last_reply = ""
 
     def _greeting(self) -> str:
         """The reply to a bare wake word — name-aware, and a first hello if new."""
@@ -384,6 +412,11 @@ class Orchestrator:
                 bool(getattr(self._audio, "aec_active", False)),
             )
             self._tts.speak(reply)
+            # Half-duplex: let the speaker tail decay before the mic re-opens, so Jack
+            # never captures (and acts on) the end of its own voice.
+            settle = max(0.0, self._settings.tts_settle_ms / 1000)
+            if settle:
+                time.sleep(settle)
             return None
         _log.info("speaking with barge-in monitoring (talk to interrupt)")
         done = threading.Event()
@@ -414,7 +447,8 @@ class Orchestrator:
 
     def run_once(self) -> None:
         """Run a single turn: listen, transcribe, gate the wake word, plan, respond."""
-        if self._pending_audio is not None:
+        from_barge = self._pending_audio is not None
+        if from_barge:
             # The user barged in over the last reply — process what they said now,
             # without capturing fresh. We're in a conversation, so stay awake.
             audio, started_at = self._pending_audio, self._pending_started_at
@@ -446,6 +480,16 @@ class Orchestrator:
             if transcription.text.strip():
                 self._transcript.note(f"ignored (not speech): {transcription.text!r}")
             self._set_awake(False)
+            self._sm.transition(State.IDLE)
+            return
+
+        # A barge-in capture that echoes the reply Jack was just speaking is Jack's
+        # own voice leaking past echo cancellation — not the user. Drop it (and stay
+        # engaged) so the assistant can't act on its own words in a feedback loop.
+        if from_barge and _is_self_echo(transcription.text, self._last_reply):
+            _log.info("ignored reason=self_echo text=%r", transcription.text)
+            self._transcript.note(f"ignored (echo of my own reply): {transcription.text!r}")
+            self._set_awake(True)
             self._sm.transition(State.IDLE)
             return
 
@@ -497,6 +541,8 @@ class Orchestrator:
         _log.info("replied chars=%d latency_ms=%d", len(reply), elapsed_ms)
         print(f"[autobot] {reply}\n")
         self._transcript.assistant(reply)
+        # Remember what we're about to say so a barge-in echo of it can be rejected.
+        self._last_reply = reply
         # Speak it — but if the user talks over Jack, stop and capture what they said.
         barge = self._respond(reply)
         if self._dismissed:

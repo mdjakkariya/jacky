@@ -44,6 +44,54 @@ class _FakeSd:
         return self._stream
 
 
+class _FakePlayer:
+    def __init__(self) -> None:
+        self.calls: list[tuple[AudioClip, int]] = []
+
+    def play(self, audio: AudioClip, sample_rate: int, cancel: object, on_level: object = None) -> bool:
+        self.calls.append((audio, sample_rate))
+        return True
+
+
+class _Chunk:
+    def __init__(self, arr: AudioClip, rate: int) -> None:
+        self.audio_int16_array = arr
+        self.sample_rate = rate
+
+
+class _FakeVoice:
+    def __init__(self, chunks: list[_Chunk]) -> None:
+        self._chunks = chunks
+
+    def synthesize(self, _text: str) -> object:
+        return iter(self._chunks)
+
+
+def test_pipertts_routes_audio_to_injected_player() -> None:
+    from autobot.tts.piper_tts import AudioPlayer, PiperTTS, SoundDevicePlayer
+
+    tts = object.__new__(PiperTTS)  # bypass __init__ (no piper / no model file)
+    tts._voice = _FakeVoice(  # type: ignore[attr-defined]
+        [
+            _Chunk(np.array([1, 2, 3], dtype=np.int16), 22_050),
+            _Chunk(np.array([4, 5], dtype=np.int16), 22_050),
+        ]
+    )
+    player = _FakePlayer()
+    tts._player = player  # type: ignore[attr-defined]
+    tts._on_level = None  # type: ignore[attr-defined]
+    tts._cancel = threading.Event()  # type: ignore[attr-defined]
+
+    tts.speak("hello")
+
+    assert len(player.calls) == 1
+    audio, rate = player.calls[0]
+    assert rate == 22_050
+    assert list(audio) == [1, 2, 3, 4, 5]  # chunks concatenated
+    assert isinstance(player, AudioPlayer)  # conforms to the protocol
+    assert isinstance(SoundDevicePlayer(), AudioPlayer)
+
+
 def test_plays_to_completion_when_not_cancelled() -> None:
     audio = np.zeros(16_000, dtype=np.int16)  # 1s @ 16k
     stream = _FakeStream()

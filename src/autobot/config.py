@@ -136,19 +136,25 @@ class Settings:
     tts_enabled: bool = True
     tts_voice: str = _DEFAULT_TTS_VOICE
     speak_acknowledgements: bool = True
-    # Barge-in: let the user talk over Jack to interrupt it. On by default, but it
-    # only engages when the mic input is echo-cancelled (AEC), so Jack never
-    # interrupts itself on its own voice through the speakers.
+    # Brief pause after Jack finishes speaking before the mic re-opens (half-duplex
+    # fallback path), so the tail of its own voice can't bleed into the next capture.
+    tts_settle_ms: int = 250
+    # Barge-in: let the user talk over Jack mid-reply. On by default but it only
+    # actually engages when the AEC full-duplex path is active — i.e. the mic runs
+    # through macOS Voice-Processing AND Jack's TTS is rendered through that same
+    # engine, so his voice is cancelled from the mic. When AEC isn't available we fall
+    # back to half-duplex (don't listen while speaking) automatically. Needs `aec`.
     barge_in: bool = True
     # How long the user must keep speaking before it counts as a barge-in. A real
     # interruption is sustained; a brief echo/transient is a flicker. Set high enough
     # that residual echo never trips it, low enough that interrupting still feels
     # instant. ~250 ms is a good balance.
     barge_in_min_speech_ms: int = 250
-    # Echo cancellation via macOS Voice-Processing I/O. Off by default until
-    # validated on the target Mac; when on, the mic input cancels Jack's own output
-    # so barge-in is safe on speakers. Falls back to the plain mic if unavailable.
-    aec: bool = False
+    # Echo cancellation via macOS Voice-Processing I/O (mic capture + TTS playback
+    # through one engine, so Jack's voice is cancelled from the mic). On by default;
+    # if it can't start (no pyobjc, no mic permission, VPIO error) we fall back to the
+    # plain mic and half-duplex automatically — nothing breaks.
+    aec: bool = True
     # --- web search (opt-in, off-device) ---
     allow_web: bool = False
     web_results: int = 5

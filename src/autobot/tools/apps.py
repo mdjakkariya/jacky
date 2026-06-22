@@ -20,6 +20,7 @@ without spawning any process or touching the OS.
 
 from __future__ import annotations
 
+import re
 from collections.abc import Callable
 
 from autobot.core.types import Risk
@@ -80,6 +81,33 @@ _UNINSTALL = (
     'on run argv\ntell application "Finder" to delete '
     '(POSIX file ("/Applications/" & (item 1 of argv) & ".app"))\nend run'
 )
+# Close browser tabs whose URL matches a query, in a given browser (argv: query,
+# app name). Guarded by `is running` so it never launches a closed browser; the
+# app name is a fixed constant we pass, never user text. Returns the count closed.
+_CLOSE_TAB = (
+    "on run argv\n"
+    "set q to item 1 of argv\n"
+    "set appName to item 2 of argv\n"
+    "set n to 0\n"
+    "if application appName is running then\n"
+    "tell application appName\n"
+    "repeat with w in windows\n"
+    "set theTabs to tabs of w\n"
+    "repeat with i from (count theTabs) to 1 by -1\n"
+    "set t to item i of theTabs\n"
+    "if (URL of t) contains q then\n"
+    "close t\n"
+    "set n to n + 1\n"
+    "end if\n"
+    "end repeat\n"
+    "end repeat\n"
+    "end tell\n"
+    "end if\n"
+    "return n\n"
+    "end run"
+)
+# Browsers we can close tabs in via AppleScript (Chromium family + Safari).
+_TAB_BROWSERS = ("Safari", "Google Chrome", "Microsoft Edge")
 
 
 # Spoken when macOS blocks control because the host app lacks Accessibility
@@ -106,8 +134,10 @@ def _is_permission_error(output: str) -> bool:
         for marker in (
             "assistive access",  # System Events not allowed assistive access
             "not allowed",
-            "not authorized",
+            "not authorized",  # "Not authorized to send Apple events to <app>"
+            "apple events",
             "-1719",  # errAEEventNotPermitted / assistive access
+            "-1743",  # errAEEventWouldRequireUserConsent / not authorized
             "-25211",
             "1002",  # automation (Apple Events) denial
         )
@@ -128,11 +158,33 @@ def _subprocess_runner(args: list[str]) -> RunResult:
     return proc.returncode, output
 
 
+def _app_installed(name: str) -> bool:
+    """Whether an app bundle named ``name`` exists in a standard location.
+
+    A plain filesystem check (no permissions, no AppleScript) so we never reference
+    an uninstalled app — doing so makes AppleScript pop a "Choose Application" picker.
+    """
+    from pathlib import Path
+
+    roots = (
+        Path("/Applications"),
+        Path.home() / "Applications",
+        Path("/System/Applications"),
+        Path("/System/Cryptexes/App/System/Applications"),  # Safari on modern macOS
+    )
+    return any((root / f"{name}.app").exists() for root in roots)
+
+
 class AppTools:
     """macOS application lifecycle operations exposed as tools."""
 
-    def __init__(self, runner: Runner | None = None) -> None:
+    def __init__(
+        self,
+        runner: Runner | None = None,
+        is_installed: Callable[[str], bool] | None = None,
+    ) -> None:
         self._run = runner or _subprocess_runner
+        self._is_installed = is_installed or _app_installed
 
     def _osa(self, script: str, *args: str) -> RunResult:
         """Run an AppleScript, passing ``args`` as the script's run arguments."""
@@ -169,6 +221,54 @@ class AppTools:
     def open_app(self, name: str) -> str:
         """Launch an app (or bring it forward if already running)."""
         return self._launch(name, f"Opened {name}.")
+
+    def open_website(self, url: str) -> str:
+        """Open a URL in the default browser via ``open <url>`` (https by default)."""
+        target = url.strip()
+        if not target:
+            return "No website given."
+        if not re.match(r"^[a-z][a-z0-9+.-]*://", target, re.I):
+            target = "https://" + target  # bare domain like "youtube.com"
+        rc, out = self._run(["open", target])
+        return self._ok(rc, out, f"Opened {target}", f"Couldn't open {target}")
+
+    def close_website(self, url: str) -> str:
+        """Close browser tab(s) showing ``url`` — the matching tabs only, not the app."""
+        query = re.sub(r"^[a-z][a-z0-9+.-]*://", "", url.strip(), flags=re.I).split("/")[0].strip()
+        if not query:
+            return "No website given."
+        # Only script browsers that are installed (filesystem check — referencing an
+        # uninstalled app pops a "Choose Application" picker). The script's own
+        # `is running` guard handles installed-but-closed browsers (nothing to close).
+        total = 0
+        scripted = 0
+        for browser in _TAB_BROWSERS:
+            if not self._is_installed(browser):
+                _log.debug("close_website skip browser=%s (not installed)", browser)
+                continue
+            scripted += 1
+            rc, out = self._osa(_CLOSE_TAB, query, browser)
+            closed = int("".join(ch for ch in out if ch.isdigit()) or 0) if rc == 0 else 0
+            # Log the raw result per browser so failures (permission, no-match,
+            # script error) are diagnosable from the debug report.
+            _log.info(
+                "close_website browser=%s query=%r rc=%d closed=%d detail=%r",
+                browser,
+                query,
+                rc,
+                closed,
+                out[:200],
+            )
+            if rc != 0:
+                if _is_permission_error(out):
+                    return _PERMISSION_HINT
+                continue
+            total += closed
+        if total:
+            return f"Closed {total} tab{'s' if total != 1 else ''} for {query}."
+        if scripted == 0:
+            return f"I couldn't find a browser to close {query} in."
+        return f"I couldn't find an open {query} tab."
 
     def focus_app(self, name: str) -> str:
         """Switch to / show an app, restoring it if minimized."""
@@ -241,6 +341,50 @@ class AppTools:
                 risk=Risk.WRITE,
             ),
             ToolSpec(
+                name="open_website",
+                description=(
+                    "Open a website or online service in the browser (e.g. 'open "
+                    "YouTube' -> youtube.com, 'open Gmail', 'go to apple.com', 'pull up "
+                    "the news'). Use this — not open_app — whenever the user names a "
+                    "website or a service that lives on the web rather than an installed "
+                    "app. A bare domain is fine; it's opened as https."
+                ),
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "url": {
+                            "type": "string",
+                            "description": "URL or domain, e.g. 'youtube.com' or 'https://youtube.com'.",
+                        }
+                    },
+                    "required": ["url"],
+                },
+                handler=self.open_website,
+                risk=Risk.WRITE,
+            ),
+            ToolSpec(
+                name="close_website",
+                description=(
+                    "Close the browser tab(s) showing a website (e.g. 'close "
+                    "chatgpt.com', 'close that YouTube tab', 'close the page you just "
+                    "opened'). Closes only the matching tabs across Safari/Chrome/Edge "
+                    "— NOT the whole browser. Use this to close a site opened with "
+                    "open_website; only use quit_app to close an entire application."
+                ),
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "url": {
+                            "type": "string",
+                            "description": "Site/domain to close, e.g. 'chatgpt.com'.",
+                        }
+                    },
+                    "required": ["url"],
+                },
+                handler=self.close_website,
+                risk=Risk.WRITE,
+            ),
+            ToolSpec(
                 name="focus_app",
                 description=(
                     "Switch to / show an app: bring it to the front, restoring its "
@@ -275,9 +419,10 @@ class AppTools:
             ToolSpec(
                 name="quit_app",
                 description=(
-                    "Close / quit / exit / shut down a running app (e.g. 'close "
-                    "Spotify', 'quit Mail'). This is the right tool whenever the user "
-                    "wants an app closed — never tell them to click the X."
+                    "Close / quit / exit / shut down a whole running app (e.g. 'close "
+                    "Spotify', 'quit Mail'). Never tell the user to click the X. But to "
+                    "close a website or a browser tab, use close_website — quit_app "
+                    "would close the entire browser and all its other tabs."
                 ),
                 parameters=name_param,
                 handler=self.quit_app,
@@ -312,5 +457,5 @@ def register_app_tools(registry: ToolRegistry, runner: Runner | None = None) -> 
     tools = AppTools(runner)
     for spec in tools.specs():
         registry.register(spec)
-    _log.info("app-control tools registered (open/focus/hide/min/max/quit/list/uninstall)")
+    _log.info("app-control tools registered (open/website/close-tab/focus/hide/quit/list/uninstall)")
     return tools

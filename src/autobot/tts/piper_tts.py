@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import threading
 from pathlib import Path
-from typing import Any
+from typing import Any, Protocol, runtime_checkable
 
 import numpy as np
 
@@ -22,6 +22,21 @@ from autobot.io.endpointing import rms_level
 from autobot.logging_setup import get_logger
 
 _log = get_logger("tts")
+
+
+@runtime_checkable
+class AudioPlayer(Protocol):
+    """Plays a block of int16 PCM, interruptibly. See :func:`play_cancellable`."""
+
+    def play(
+        self,
+        audio: Int16Frame,
+        sample_rate: int,
+        cancel: threading.Event,
+        on_level: AmplitudeSink | None = None,
+    ) -> bool:
+        """Play ``audio``; return True if it finished, False if ``cancel`` interrupted."""
+        ...
 
 
 def play_cancellable(
@@ -63,10 +78,37 @@ def play_cancellable(
     return not interrupted
 
 
-class PiperTTS:
-    """Speaks replies with a Piper voice, playing audio through the speakers."""
+class SoundDevicePlayer:
+    """Default player: the system default output via sounddevice (no echo cancel)."""
 
-    def __init__(self, settings: Settings, on_level: AmplitudeSink | None = None) -> None:
+    def play(
+        self,
+        audio: Int16Frame,
+        sample_rate: int,
+        cancel: threading.Event,
+        on_level: AmplitudeSink | None = None,
+    ) -> bool:
+        """Play through sounddevice; see :func:`play_cancellable`."""
+        import sounddevice as sd
+
+        return play_cancellable(sd, audio, sample_rate, cancel, on_level)
+
+
+class PiperTTS:
+    """Speaks replies with a Piper voice, playing audio through an injected player.
+
+    The ``player`` is where the audio goes: by default the system output
+    (:class:`SoundDevicePlayer`), but on the AEC path it's the Voice-Processing
+    engine's output node — so macOS cancels Jack's own voice from the mic and
+    barge-in works on speakers.
+    """
+
+    def __init__(
+        self,
+        settings: Settings,
+        on_level: AmplitudeSink | None = None,
+        player: AudioPlayer | None = None,
+    ) -> None:
         from piper import PiperVoice
 
         voice_path = Path(settings.tts_voice).expanduser()
@@ -75,14 +117,13 @@ class PiperTTS:
         _log.info("loading piper voice=%s", voice_path)
         self._voice = PiperVoice.load(str(voice_path))
         self._on_level = on_level
+        self._player: AudioPlayer = player or SoundDevicePlayer()
         self._cancel = threading.Event()  # set by stop() to interrupt playback
 
     def speak(self, text: str) -> None:
         """Synthesize ``text`` and play it; interruptible via :meth:`stop`."""
         if not text.strip():
             return
-        import sounddevice as sd
-
         self._cancel.clear()  # fresh reply — clear any leftover interrupt
         # piper>=1.2: synthesize() yields one AudioChunk per sentence, each with
         # an int16 numpy array and its sample rate.
@@ -92,7 +133,7 @@ class PiperTTS:
         audio = np.concatenate([chunk.audio_int16_array for chunk in chunks])
         sample_rate = int(chunks[0].sample_rate)
         _log.debug("speaking chars=%d samples=%d rate=%d", len(text), audio.size, sample_rate)
-        if not play_cancellable(sd, audio, sample_rate, self._cancel, self._on_level):
+        if not self._player.play(audio, sample_rate, self._cancel, self._on_level):
             _log.info("tts interrupted (barge-in)")
 
     def stop(self) -> None:
