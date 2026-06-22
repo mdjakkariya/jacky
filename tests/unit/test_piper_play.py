@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import threading
+from typing import Any, cast
 
 import numpy as np
 
@@ -73,14 +74,16 @@ def test_pipertts_routes_audio_to_injected_player() -> None:
     from autobot.tts.piper_tts import AudioPlayer, PiperTTS, SoundDevicePlayer
 
     tts = object.__new__(PiperTTS)  # bypass __init__ (no piper / no model file)
-    tts._voice = _FakeVoice(  # type: ignore[assignment]
-        [
-            _Chunk(np.array([1, 2, 3], dtype=np.int16), 22_050),
-            _Chunk(np.array([4, 5], dtype=np.int16), 22_050),
-        ]
-    )
+    # cast(Any, …) so the fakes assign cleanly whether or not piper is installed —
+    # its absence makes _voice's declared type Any on CI, which would otherwise make
+    # a `type: ignore` here "unused".
+    chunks = [
+        _Chunk(np.array([1, 2, 3], dtype=np.int16), 22_050),
+        _Chunk(np.array([4, 5], dtype=np.int16), 22_050),
+    ]
     player = _FakePlayer()
-    tts._player = player  # type: ignore[assignment]
+    tts._voice = cast(Any, _FakeVoice(chunks))
+    tts._player = cast(Any, player)
     tts._on_level = None
     tts._cancel = threading.Event()
 
