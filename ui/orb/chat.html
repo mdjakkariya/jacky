@@ -25,7 +25,8 @@
   body{background:var(--bg);color:var(--text);display:flex;flex-direction:column;height:100vh;
     border-radius:14px;overflow:hidden;border:.5px solid var(--line);
     font:13px/1.5 -apple-system,BlinkMacSystemFont,"SF Pro Text",system-ui,sans-serif;-webkit-font-smoothing:antialiased;}
-  header{display:flex;align-items:center;justify-content:space-between;padding:10px 12px;border-bottom:.5px solid var(--line);-webkit-app-region:drag;}
+  header{display:flex;align-items:center;justify-content:space-between;padding:10px 12px;border-bottom:.5px solid var(--line);cursor:grab;user-select:none;-webkit-user-select:none;}
+  header:active{cursor:grabbing;}
   header .seg{display:inline-flex;background:var(--seg);border-radius:8px;padding:2px;-webkit-app-region:no-drag;}
   header .seg button{border:none;background:transparent;color:var(--muted);font-size:12px;padding:4px 10px;border-radius:6px;cursor:pointer;}
   header .seg button.on{background:var(--accent-bg);color:var(--accent);font-weight:500;}
@@ -172,6 +173,19 @@
   $("m-voice").addEventListener("click", closeDrawer);
   $("m-chat").addEventListener("click", function(){ setMode("chat"); });
   $("close").addEventListener("click", closeDrawer);
+
+  // Drag the window by its header. CSS app-region is unreliable on frameless macOS
+  // windows, so drive Tauri's native startDragging on mousedown — but let the
+  // toggle/close controls keep working (don't start a drag from a button).
+  var header = document.querySelector("header");
+  if(header){
+    header.addEventListener("mousedown", function(e){
+      if(e.button !== 0) return;
+      if(e.target.closest("button, .seg")) return;
+      var w = window.__TAURI__ && window.__TAURI__.window;
+      if(w && w.getCurrentWindow){ w.getCurrentWindow().startDragging().catch(function(){}); }
+    });
+  }
 
   // Opening the drawer = entering chat mode (pauses the voice loop). Re-assert on
   // focus too, in case a mode POST was missed while the window was hidden.
