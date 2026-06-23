@@ -305,7 +305,7 @@ fn main() {
                     "size_s" => resize(app, SIZE_SMALL),
                     "size_m" => resize(app, SIZE_MEDIUM),
                     "size_l" => resize(app, SIZE_LARGE),
-                    "chat" => open_chat(app),
+                    "chat" => open_chat(app.clone()),
                     "settings" => open_settings(app, false),
                     "report" => open_settings(app, true),
                     #[cfg(debug_assertions)]
