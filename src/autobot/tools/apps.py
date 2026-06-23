@@ -82,38 +82,42 @@ _UNINSTALL = (
     'on run argv\ntell application "Finder" to delete '
     '(POSIX file ("/Applications/" & (item 1 of argv) & ".app"))\nend run'
 )
-# Close browser tabs whose URL matches a query, in a given browser (argv: query,
-# app name). Guarded by `is running` so it never launches a closed browser; the
-# app name is a fixed constant we pass, never user text. Returns the count closed.
-# Iterate windows by explicit index and grab each window's tabs into a list, then
-# close matching ones in reverse. `repeat with w in windows; tabs of w` resolves `w`
-# to "item N of every window" in Chrome (error -1700); `tabs of window wi` is a clean
-# reference. Inline element-by-variable refs like `tab ti of window wi` don't compile
-# (-2741), so we copy the tabs into a list variable first. Works in Safari + Chromium.
-_CLOSE_TAB = (
-    "on run argv\n"
-    "set q to item 1 of argv\n"
-    "set appName to item 2 of argv\n"
-    "set n to 0\n"
-    "if application appName is running then\n"
-    "tell application appName\n"
-    "repeat with wi from 1 to (count windows)\n"
-    "set theTabs to tabs of window wi\n"
-    "repeat with i from (count theTabs) to 1 by -1\n"
-    "set t to item i of theTabs\n"
-    "if (URL of t) contains q then\n"
-    "close t\n"
-    "set n to n + 1\n"
-    "end if\n"
-    "end repeat\n"
-    "end repeat\n"
-    "end tell\n"
-    "end if\n"
-    "return n\n"
-    "end run"
-)
 # Browsers we can close tabs in via AppleScript (Chromium family + Safari).
 _TAB_BROWSERS = ("Safari", "Google Chrome", "Microsoft Edge")
+
+
+def _close_tab_script(browser: str) -> str:
+    """AppleScript that closes tabs whose URL matches argv[1], in ``browser``.
+
+    The app name is baked in as a *literal* (not a run-arg): ``tell application
+    <variable>`` doesn't load the target's scripting terminology, so ``tabs``/``URL``
+    fail to resolve (Chrome error -1700). The query stays a run-arg so a spoken site
+    name can't inject script. Guarded by ``is running`` so it never launches a closed
+    browser; iterate windows by index and copy tabs into a list (inline
+    ``tab i of window wi`` won't compile, -2741), closing matches in reverse.
+    ``browser`` is one of our fixed constants, never user text.
+    """
+    return (
+        "on run argv\n"
+        "set q to item 1 of argv\n"
+        "set n to 0\n"
+        f'if application "{browser}" is running then\n'
+        f'tell application "{browser}"\n'
+        "repeat with wi from 1 to (count windows)\n"
+        "set theTabs to tabs of window wi\n"
+        "repeat with i from (count theTabs) to 1 by -1\n"
+        "set t to item i of theTabs\n"
+        "if (URL of t) contains q then\n"
+        "close t\n"
+        "set n to n + 1\n"
+        "end if\n"
+        "end repeat\n"
+        "end repeat\n"
+        "end tell\n"
+        "end if\n"
+        "return n\n"
+        "end run"
+    )
 
 
 # Spoken when macOS blocks control because the host app lacks Accessibility
@@ -253,7 +257,7 @@ class AppTools:
                 _log.debug("close_website skip browser=%s (not installed)", browser)
                 continue
             scripted += 1
-            rc, out = self._osa(_CLOSE_TAB, query, browser)
+            rc, out = self._osa(_close_tab_script(browser), query)
             closed = int("".join(ch for ch in out if ch.isdigit()) or 0) if rc == 0 else 0
             # Log the raw result per browser so failures (permission, no-match,
             # script error) are diagnosable from the debug report.

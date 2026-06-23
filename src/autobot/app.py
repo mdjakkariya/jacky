@@ -240,6 +240,9 @@ def _build_confirmer(
         on_clear=on_confirm_clear,
         poll_click=poll_click,
         flush=flush if callable(flush) else None,
+        # In chat mode confirm by the card click only (no speaking / mic). Read live
+        # so a runtime voice⇄chat switch is honoured.
+        is_chat=lambda: Settings.load().interaction_mode == "chat",
         timeout_s=settings.confirm_timeout_s,
     )
 

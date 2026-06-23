@@ -101,9 +101,11 @@ class VoiceConfirmer:
         on_clear: Callable[[], None] | None = None,
         poll_click: Callable[[], bool | None] | None = None,
         flush: Callable[[], None] | None = None,
+        is_chat: Callable[[], bool] | None = None,
         timeout_s: float = 30.0,
         chunk_s: float = 2.0,
         clock: Callable[[], float] = time.monotonic,
+        sleep: Callable[[float], None] = time.sleep,
     ) -> None:
         self._speak = speak
         self._listen = listen  # (max_wait_s) -> transcript ("" on silence)
@@ -111,9 +113,27 @@ class VoiceConfirmer:
         self._on_clear = on_clear
         self._poll_click = poll_click  # () -> True/False from a card click, else None
         self._flush = flush  # drop pre-prompt audio so only the answer is heard
+        # When this returns True (chat mode), confirm by the card click only — don't
+        # speak the prompt or listen on the mic (which would talk over chat / fight
+        # the idle voice loop). Defaults to voice behaviour.
+        self._is_chat = is_chat
         self._timeout_s = timeout_s
         self._chunk_s = chunk_s
         self._clock = clock
+        self._sleep = sleep
+
+    def _confirm_by_click(self, prompt: str) -> bool:
+        """Chat-mode confirm: poll the card click until answered or timed out."""
+        _log.info("confirming (chat, click-only) prompt=%r", prompt)
+        deadline = self._clock() + self._timeout_s
+        while self._clock() < deadline:
+            if self._poll_click is not None:
+                clicked = self._poll_click()
+                if clicked is not None:
+                    return self._resolve(clicked, "click")
+            self._sleep(min(0.15, self._chunk_s))
+        _log.info("confirmation timed out (chat) — cancelling")
+        return False
 
     def _resolve(self, answer: bool, how: str) -> bool:
         """Record the outcome and return it.
@@ -138,6 +158,10 @@ class VoiceConfirmer:
         if self._on_show is not None:
             self._on_show(prompt)
         try:
+            # Chat mode: just show the card and wait for a click — no speaking, no
+            # mic (those belong to voice mode and would talk over / fight chat).
+            if self._is_chat is not None and self._is_chat():
+                return self._confirm_by_click(prompt)
             _log.info("confirming prompt=%r", prompt)
             self._speak(f"{prompt} Say proceed to confirm, or cancel.")
             # Drop anything captured before/while asking, so only speech that comes

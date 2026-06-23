@@ -57,14 +57,25 @@ def _all_installed(_name: str) -> bool:
     return True
 
 
+def _scripted_browsers(runner: FakeRunner) -> set[str]:
+    """Which browsers' scripts ran — each tell-block bakes in the literal app name."""
+    found = set()
+    for call in runner.calls:
+        script = call[2] if len(call) > 2 else ""
+        for name in ("Safari", "Google Chrome", "Microsoft Edge"):
+            if f'application "{name}"' in script:
+                found.add(name)
+    return found
+
+
 def test_close_website_closes_matching_tabs_not_the_browser() -> None:
     runner = FakeRunner(rc=0, out="1")  # each installed browser closes one tab
     tools = AppTools(runner, is_installed=_all_installed)
     msg = tools.close_website("https://chatgpt.com/chat")
     assert "chatgpt.com" in msg and "tab" in msg
     assert all(c[0] == "osascript" for c in runner.calls)
-    assert all(c[-2] == "chatgpt.com" for c in runner.calls)  # query, not a quit
-    assert {"Safari", "Google Chrome", "Microsoft Edge"} <= {c[-1] for c in runner.calls}
+    assert all(c[-1] == "chatgpt.com" for c in runner.calls)  # query is the run-arg
+    assert {"Safari", "Google Chrome", "Microsoft Edge"} <= _scripted_browsers(runner)
 
 
 def test_close_website_only_scripts_installed_browsers() -> None:
@@ -72,7 +83,7 @@ def test_close_website_only_scripts_installed_browsers() -> None:
     runner = FakeRunner(rc=0, out="1")
     tools = AppTools(runner, is_installed=lambda n: n in {"Safari", "Microsoft Edge"})
     tools.close_website("chatgpt.com")
-    assert {c[-1] for c in runner.calls} == {"Safari", "Microsoft Edge"}
+    assert _scripted_browsers(runner) == {"Safari", "Microsoft Edge"}
 
 
 def test_close_website_reports_when_no_tab_found() -> None:

@@ -100,6 +100,54 @@ def test_confirm_true_on_voice_yes_and_clears_card() -> None:
     assert flow.cleared == 1
 
 
+def test_chat_mode_confirms_by_click_without_speaking() -> None:
+    spoken: list[str] = []
+    shown: list[str] = []
+    polls = {"n": 0}
+
+    def poll() -> bool | None:
+        polls["n"] += 1
+        return True if polls["n"] >= 2 else None  # drain sees None, then a click
+
+    def no_listen(_t: float) -> str:
+        raise AssertionError("chat mode must not listen on the mic")
+
+    c = VoiceConfirmer(
+        speak=spoken.append,
+        listen=no_listen,
+        on_show=shown.append,
+        poll_click=poll,
+        is_chat=lambda: True,
+        timeout_s=10.0,
+        clock=lambda: 0.0,
+        sleep=lambda _s: None,
+    )
+    assert c.confirm("Empty the Trash?") is True
+    assert spoken == []  # never spoke the prompt
+    assert shown == ["Empty the Trash?"]  # the card was shown
+
+
+def test_chat_mode_times_out_silently() -> None:
+    spoken: list[str] = []
+    t = {"v": 0.0}
+
+    def clock() -> float:
+        t["v"] += 1.0
+        return t["v"]
+
+    c = VoiceConfirmer(
+        speak=spoken.append,
+        listen=lambda _t: "",
+        poll_click=lambda: None,
+        is_chat=lambda: True,
+        timeout_s=3.0,
+        clock=clock,
+        sleep=lambda _s: None,
+    )
+    assert c.confirm("Delete it?") is False
+    assert spoken == []
+
+
 def test_confirm_false_on_voice_no() -> None:
     c, _ = _voice(["no"])
     assert c.confirm("Delete it?") is False
