@@ -2,7 +2,7 @@
 # First time:  make setup
 
 .DEFAULT_GOAL := help
-.PHONY: help setup install lint format typecheck test check run hooks clean release release-check package-orb publish-orb freeze bundle voice
+.PHONY: help setup install lint format typecheck test check run hooks clean release release-check changelog changelog-preview package-orb publish-orb freeze bundle voice
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) \
@@ -53,6 +53,16 @@ release: ## Bump version in all manifests: make release VERSION=0.2.0
 release-check: ## Verify all manifests agree: make release-check VERSION=0.2.0
 	uv run python scripts/bump_version.py --check $(VERSION)
 
+changelog: ## Prepend this version's section to CHANGELOG.md from Conventional Commits: make changelog VERSION=0.3.0
+	@command -v git-cliff >/dev/null || { echo "git-cliff not found — install with 'brew install git-cliff'."; exit 1; }
+	@if [ -z "$(VERSION)" ]; then echo "Set VERSION, e.g. make changelog VERSION=0.3.0"; exit 1; fi
+	git-cliff --unreleased --tag "v$(VERSION)" --prepend CHANGELOG.md
+	@echo "Updated CHANGELOG.md with v$(VERSION). Review it, then commit."
+
+changelog-preview: ## Print the pending (unreleased) changelog without writing anything
+	@command -v git-cliff >/dev/null || { echo "git-cliff not found — install with 'brew install git-cliff'."; exit 1; }
+	@git-cliff --unreleased
+
 freeze: ## Freeze the engine into dist/autobot-daemon (bundles the daemon/cloud/tts/wake deps)
 	uv sync $(EXTRA_FLAGS) --extra freeze
 	uv run pyinstaller --noconfirm --clean packaging/autobot-daemon.spec
@@ -84,15 +94,24 @@ package-orb: ## Build only the orb .dmg (assumes the sidecar is already in place
 	cd ui/orb-shell && cargo tauri build
 	@echo "Built: $$(find $(ORB_BUNDLE)/dmg -name '*.dmg' 2>/dev/null | head -1)"
 
-publish-orb: ## Upload the locally-built .dmg to the GitHub release (creates it if missing): make publish-orb VERSION=0.2.0
+publish-orb: ## Upload the .dmg to the GitHub release with auto-generated notes: make publish-orb VERSION=0.2.0
 	@dmg=$$(find $(ORB_BUNDLE)/dmg -name '*.dmg' 2>/dev/null | head -1); \
 	if [ -z "$$dmg" ]; then echo "No .dmg found — run 'make package-orb' first."; exit 1; fi; \
+	notes=$$(mktemp); \
+	printf 'Autobot **v%s** — dev preview. The .dmg is unsigned: right-click **Jack** → **Open**.\n\n' "$(VERSION)" > "$$notes"; \
+	if command -v git-cliff >/dev/null 2>&1; then \
+	  git-cliff --unreleased --tag "v$(VERSION)" --strip header >> "$$notes" 2>/dev/null || true; \
+	else \
+	  echo "(install git-cliff for auto-generated release notes)"; \
+	fi; \
 	if ! gh release view "v$(VERSION)" >/dev/null 2>&1; then \
 	  echo "Release v$(VERSION) not found — creating it (tag from the pushed HEAD)…"; \
-	  gh release create "v$(VERSION)" --title "v$(VERSION)" \
-	    --notes "Autobot v$(VERSION) — dev preview. The .dmg is unsigned: right-click Jack → Open." \
-	    || { echo "Couldn't create the release. Is 'gh auth login' done and HEAD pushed?"; exit 1; }; \
+	  gh release create "v$(VERSION)" --title "v$(VERSION)" --notes-file "$$notes" \
+	    || { echo "Couldn't create the release. Is 'gh auth login' done and HEAD pushed?"; rm -f "$$notes"; exit 1; }; \
+	else \
+	  gh release edit "v$(VERSION)" --notes-file "$$notes" >/dev/null 2>&1 || true; \
 	fi; \
+	rm -f "$$notes"; \
 	echo "Uploading $$dmg to release v$(VERSION)…"; \
 	gh release upload "v$(VERSION)" "$$dmg" --clobber
 

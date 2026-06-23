@@ -11,18 +11,40 @@ mismatch.
 
 ```bash
 # 1. Bump every manifest (does NOT commit/tag for you).
-make release VERSION=0.2.0          # -> pyproject.toml, Cargo.toml, tauri.conf.json
+make release VERSION=0.3.0          # -> pyproject.toml, Cargo.toml, tauri.conf.json
 
-# 2. Review the diff, then commit + tag + push — this triggers CI.
-git add -A && git commit -m "release v0.2.0"
-git tag v0.2.0
+# 2. Update the changelog from the Conventional Commits since the last tag.
+make changelog VERSION=0.3.0        # prepends a categorized section to CHANGELOG.md
+#   (preview first with: make changelog-preview)
+
+# 3. Review the diff, then commit + tag + push — this triggers CI.
+git add -A && git commit -m "chore(release): v0.3.0"
+git tag v0.3.0
 git push origin main --tags
 
-# 3. CI gate + builds the engine wheel and creates the Release. Then, on your Mac,
+# 4. CI gate + builds the engine wheel and creates the Release. Then, on your Mac,
 #    build the single .dmg (orb + embedded engine) and attach it to that Release:
 make bundle                         # freeze engine -> sidecar -> the .dmg
-make publish-orb VERSION=0.2.0      # gh release upload the .dmg to v0.2.0
+make publish-orb VERSION=0.3.0      # uploads the .dmg AND sets the release notes
 ```
+
+## Changelog (automated)
+
+The changelog is generated from **Conventional Commits** by
+[git-cliff](https://git-cliff.org) (`brew install git-cliff`), configured in
+[`cliff.toml`](../cliff.toml):
+
+- Write commits as `feat: …`, `fix: …`, `perf: …`, `refactor: …`, `docs: …`,
+  `chore: …` (a `!` like `feat!:` or a `BREAKING CHANGE:` footer marks a breaking
+  change). These map to the **Features / Bug Fixes / Performance & Stability /
+  Improvements / Documentation / Maintenance** sections. `chore(release):` commits
+  are skipped, and non-conventional commits are left out of the changelog.
+- `make changelog VERSION=x` prepends that version's section to
+  [`CHANGELOG.md`](../CHANGELOG.md) (run once per release, then commit it).
+- `make publish-orb` regenerates the same notes for the GitHub Release body
+  automatically — so the Release page and `CHANGELOG.md` stay in sync with zero
+  manual writing. (If `git-cliff` isn't installed it falls back to the plain
+  "dev preview" note.)
 
 `make bundle` is the single-installable build: it freezes the engine
 (`make freeze`), drops it in as the orb's sidecar, and runs `cargo tauri build`,

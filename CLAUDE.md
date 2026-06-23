@@ -97,6 +97,12 @@ docs/          roadmap + architecture
   the global prompt. When the model misbehaves, fix the *general* principle (one
   rule that covers a whole class) or the relevant tool description — never append
   an incident-specific line to the prompt.
+- **Commit messages: Conventional Commits.** Write `feat: …`, `fix: …`, `perf: …`,
+  `refactor: …`, `docs: …`, `chore: …` (use `!` or a `BREAKING CHANGE:` footer for
+  breaking changes; `chore(release): vX` for release bumps). The changelog and
+  GitHub release notes are generated from these by git-cliff — see
+  [`docs/RELEASING.md`](docs/RELEASING.md). Non-conventional commits are left out of
+  the changelog, so keep the subject in this form.
 
 ## Commands
 
