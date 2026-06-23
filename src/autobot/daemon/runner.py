@@ -24,11 +24,15 @@ from autobot.orchestrator.state_machine import StateListener, _print_transition
 _log = get_logger("daemon")
 
 
-def make_state_listener(bus: EventBus) -> StateListener:
+def make_state_listener(
+    bus: EventBus, is_chat: Callable[[], bool] | None = None
+) -> StateListener:
     """Adapt the engine's transition callback to publish onto the bus.
 
     Keeps the existing console line (so terminal runs are unchanged) and also
-    forwards the mapped :class:`OrbState` to every connected UI client.
+    forwards the mapped :class:`OrbState` to every connected UI client — except in
+    chat mode, where the orb is the *voice* UI and must stay hidden: a typed turn's
+    THINKING/TALKING transitions would otherwise pop the orb up over the chat drawer.
     """
     from autobot.diagnostics import get_buffer
 
@@ -37,6 +41,8 @@ def make_state_listener(bus: EventBus) -> StateListener:
     def listener(old: State, new: State) -> None:
         _print_transition(old, new)
         buffer.add_state(old.value, new.value)  # compact sequence trace for reports
+        if is_chat is not None and is_chat():
+            return  # chat mode: don't drive the voice orb
         bus.publish_state(orb_state_for(new))
 
     return listener
@@ -91,9 +97,17 @@ def serve(settings: Settings | None = None) -> None:
     bus = EventBus()
     # Bridge clicked Yes/No on a confirmation card (daemon thread) to the engine.
     inbox = ConfirmInbox()
+    # The state listener needs to know the engine's mode to keep the orb quiet in
+    # chat — but the orchestrator doesn't exist yet, so consult it lazily.
+    holder: dict[str, object] = {}
+
+    def _is_chat() -> bool:
+        orch = holder.get("orch")
+        return bool(orch is not None and orch.in_chat_mode())  # type: ignore[union-attr]
+
     orchestrator = build(
         settings,
-        on_state=make_state_listener(bus),
+        on_state=make_state_listener(bus, is_chat=_is_chat),
         amplitude_sink=make_amplitude_sink(bus),
         on_visibility=bus.publish_visibility,
         on_voice=make_voice_sink(bus),
@@ -101,6 +115,7 @@ def serve(settings: Settings | None = None) -> None:
         on_confirm_clear=bus.publish_confirm_clear,
         poll_click=inbox.take,
     )
+    holder["orch"] = orchestrator
     thread = threading.Thread(target=orchestrator.run, name="engine", daemon=True)
     thread.start()
     print(f"[daemon] serving on ws://{settings.daemon_host}:{settings.daemon_port}/ws")

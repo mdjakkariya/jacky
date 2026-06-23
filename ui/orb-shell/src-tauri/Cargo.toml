@@ -12,6 +12,9 @@ tauri-build = { version = "2", features = [] }
 tauri = { version = "2", features = ["macos-private-api", "tray-icon"] }
 # Launch the bundled engine binary as a sidecar (one app contains orb + engine).
 tauri-plugin-shell = "2"
+# Global hotkey (⌘⌃J) to summon/dismiss Jack from any app — registered in Rust, so
+# it needs no JS-facing capability. Carbon RegisterEventHotKey, no TCC permission.
+tauri-plugin-global-shortcut = "2"
 
 # macOS only: convert the orb window into a non-activating NSPanel so it can float
 # over other apps' full-screen Spaces (a plain NSWindow can't, at any level). This

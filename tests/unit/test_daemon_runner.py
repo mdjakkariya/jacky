@@ -26,6 +26,23 @@ def test_state_listener_publishes_mapped_orb_state() -> None:
     assert bus.last_state is OrbState.THINKING
 
 
+def test_state_listener_stays_quiet_in_chat_mode() -> None:
+    # The orb is the voice UI; in chat mode a typed turn's THINKING/TALKING must not
+    # be published, or the orb pops up over the chat drawer.
+    bus = EventBus()
+    seen: list[dict[str, object]] = []
+    bus.subscribe(seen.append)
+    chat = {"on": True}
+    listener = make_state_listener(bus, is_chat=lambda: chat["on"])
+
+    listener(State.IDLE, State.PLANNING)  # chat turn -> suppressed
+    assert seen == []
+
+    chat["on"] = False
+    listener(State.IDLE, State.PLANNING)  # voice turn -> published
+    assert seen == [{"type": "state", "value": "thinking"}]
+
+
 def test_amplitude_sink_emits_while_listening_or_talking() -> None:
     bus = EventBus()
     seen: list[dict[str, object]] = []

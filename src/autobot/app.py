@@ -209,7 +209,7 @@ def _build_confirmer(
     tts: TextToSpeech,
     audio: AudioSource,
     stt: SpeechToText,
-    on_confirm: Callable[[str], None] | None,
+    on_confirm: Callable[[str, bool], None] | None,
     on_confirm_clear: Callable[[], None] | None,
     poll_click: Callable[[], bool | None] | None,
 ) -> object:
@@ -233,16 +233,25 @@ def _build_confirmer(
         return stt.transcribe(clip).text
 
     flush = getattr(audio, "flush", None)
+    # In chat mode confirm by the card click only (no speaking / mic). Read live so a
+    # runtime voice⇄chat switch is honoured.
+    is_chat = lambda: Settings.load().interaction_mode == "chat"  # noqa: E731
+    # Tag the broadcast card with the mode so the voice orb ignores chat-mode
+    # confirmations (otherwise it pops up a duplicate card over the chat drawer).
+    show = None
+    if on_confirm is not None:
+
+        def show(prompt: str) -> None:
+            on_confirm(prompt, is_chat())
+
     return VoiceConfirmer(
         speak=tts.speak,
         listen=listen,
-        on_show=on_confirm,
+        on_show=show,
         on_clear=on_confirm_clear,
         poll_click=poll_click,
         flush=flush if callable(flush) else None,
-        # In chat mode confirm by the card click only (no speaking / mic). Read live
-        # so a runtime voice⇄chat switch is honoured.
-        is_chat=lambda: Settings.load().interaction_mode == "chat",
+        is_chat=is_chat,
         timeout_s=settings.confirm_timeout_s,
     )
 
@@ -288,7 +297,7 @@ def build(
     amplitude_sink: AmplitudeSink | None = None,
     on_visibility: VisibilitySink | None = None,
     on_voice: Callable[[bool], None] | None = None,
-    on_confirm: Callable[[str], None] | None = None,
+    on_confirm: Callable[[str, bool], None] | None = None,
     on_confirm_clear: Callable[[], None] | None = None,
     poll_click: Callable[[], bool | None] | None = None,
 ) -> Orchestrator:

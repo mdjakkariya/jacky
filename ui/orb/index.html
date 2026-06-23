@@ -179,7 +179,7 @@
       if(msg.type==="state"&&SC[msg.value]){var prev=state;state=msg.value;if(prev!==state)onStateChange(prev,state);}
       else if(msg.type==="amplitude"){liveAmp=Math.max(0,Math.min(1,+msg.value||0));}
       else if(msg.type==="visibility"){ if(msg.value==="hide") requestHide(); else showOrb(); }
-      else if(msg.type==="confirm"){ showCard(msg.text); }
+      else if(msg.type==="confirm"){ if(msg.mode!=="chat") showCard(msg.text); }
       else if(msg.type==="confirm_clear"){ clearCards(); }
     };
     ws.onclose=function(){scheduleReconnect();};

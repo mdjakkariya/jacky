@@ -145,25 +145,34 @@ class PermissionGate:
                 spec.name, spec.risk, call.arguments
             )
             if not self._confirmer.confirm(prompt):
-                _log.info("denied tool=%s risk=%s reason=user_declined", call.name, spec.risk.name)
+                # Timeout (no answer) reads differently from a deliberate "no": say we
+                # cancelled for lack of confirmation, not that the user declined.
+                timed_out = bool(getattr(self._confirmer, "timed_out", False))
+                reason = "timeout" if timed_out else "user_declined"
+                _log.info("denied tool=%s risk=%s reason=%s", call.name, spec.risk.name, reason)
                 self._audit.log(
                     tool=call.name,
                     arguments=call.arguments,
                     risk=spec.risk.name,
                     decision=Decision.DENIED,
                     ok=None,
-                    detail="declined by user",
+                    detail="timed out without confirmation" if timed_out else "declined by user",
                 )
-                # Tell the model plainly the user said no — so it acknowledges briefly
-                # and does NOT re-ask or retry (that caused a nagging loop).
-                return ToolResult(
-                    name=call.name,
-                    content=(
+                # Tell the model plainly what happened — acknowledge briefly and do NOT
+                # re-ask or retry (that caused a nagging loop).
+                if timed_out:
+                    content = (
+                        "No confirmation was received in time, so the action was "
+                        "cancelled and NOT performed. Tell the user, in one short "
+                        "sentence, that you cancelled it because you didn't get a "
+                        "confirmation. Do not ask again or retry."
+                    )
+                else:
+                    content = (
                         "The user declined this action, so it was not performed. "
                         "Acknowledge in one short sentence; do not ask again or retry."
-                    ),
-                    ok=False,
-                )
+                    )
+                return ToolResult(name=call.name, content=content, ok=False)
 
         result = self._registry.dispatch(call.name, call.arguments)
         # Learn from the outcome: a success means the permission is granted; a

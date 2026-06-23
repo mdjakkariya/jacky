@@ -97,13 +97,19 @@ class VisibilityEvent:
 
 @dataclass(frozen=True, slots=True)
 class ConfirmEvent:
-    """The assistant needs the user to approve a risky action (shows a card)."""
+    """The assistant needs the user to approve a risky action (shows a card).
+
+    ``chat`` marks a confirmation raised during a typed turn: the chat drawer shows
+    the card, and the voice orb ignores it (so it doesn't pop up a duplicate card
+    over the drawer).
+    """
 
     prompt: str
+    chat: bool = False
 
     def message(self) -> dict[str, object]:
         """Serialize to the wire shape clients consume."""
-        return {"type": "confirm", "text": self.prompt}
+        return {"type": "confirm", "text": self.prompt, "mode": "chat" if self.chat else "voice"}
 
 
 @dataclass(frozen=True, slots=True)
@@ -191,9 +197,13 @@ class EventBus:
         """Broadcast a UI show/hide request (does not change ``last_state``)."""
         self._emit(VisibilityEvent(visible).message())
 
-    def publish_confirm(self, prompt: str) -> None:
-        """Broadcast that a confirmation is pending (the orb shows a card)."""
-        self._emit(ConfirmEvent(prompt).message())
+    def publish_confirm(self, prompt: str, chat: bool = False) -> None:
+        """Broadcast that a confirmation is pending (the orb shows a card).
+
+        ``chat=True`` marks it as belonging to the chat drawer so the voice orb
+        ignores it (no duplicate card / pop-up over the drawer).
+        """
+        self._emit(ConfirmEvent(prompt, chat=chat).message())
 
     def publish_confirm_clear(self) -> None:
         """Broadcast that the pending confirmation was resolved (hide the card)."""

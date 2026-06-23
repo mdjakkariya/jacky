@@ -12,17 +12,50 @@ def test_empty_trash_runs_finder_and_reports_success() -> None:
 
     def runner(argv: list[str]) -> tuple[int, str]:
         calls.append(argv)
-        return 0, ""
+        return 0, "5"  # Finder found (and emptied) 5 items
 
     msg = empty_trash(runner=runner)
     assert "emptied the Trash" in msg
-    # Always actually runs the empty (no unreliable pre-count short-circuit).
     assert calls and calls[0][0] == "osascript"
+
+
+def test_empty_trash_reports_already_empty_without_erroring() -> None:
+    # An already-empty Trash returns count 0 (and -128 is avoided by counting first).
+    msg = empty_trash(runner=lambda _a: (0, "0"))
+    assert "already empty" in msg.lower()
+    assert "couldn't" not in msg.lower()
+
+
+def test_empty_trash_counts_before_emptying() -> None:
+    # The script must count items and only empty when there are some — that's what
+    # prevents the already-empty -128.
+    captured: list[list[str]] = []
+    empty_trash(runner=lambda a: (captured.append(a) or (0, "0")))
+    script = captured[0][-1]
+    assert "count of items in trash" in script
+    assert "if _n > 0 then" in script
 
 
 def test_empty_trash_reports_generic_failure() -> None:
     msg = empty_trash(runner=lambda _a: (1, "boom"))
     assert "couldn't empty" in msg.lower() and "boom" in msg
+
+
+def test_empty_trash_disables_finders_warning_to_avoid_minus_128() -> None:
+    # The script must turn off Finder's "are you sure?" warning (and restore it),
+    # so `empty the trash` doesn't pop a dialog and return -128.
+    captured: list[list[str]] = []
+    empty_trash(runner=lambda a: (captured.append(a) or (0, "")))
+    script = captured[0][-1]
+    assert "warns before emptying of trash to false" in script
+    assert "empty the trash" in script
+
+
+def test_empty_trash_reports_canceled_cleanly_on_minus_128() -> None:
+    err = "29:44: execution error: Finder got an error: The operation can’t be completed. (-128)"
+    msg = empty_trash(runner=lambda _a: (1, err))
+    assert "canceled" in msg.lower()
+    assert "-128" not in msg and "execution error" not in msg  # no raw AppleScript noise
 
 
 def test_empty_trash_explains_automation_permission_denied() -> None:

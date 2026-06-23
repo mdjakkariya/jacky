@@ -151,6 +151,19 @@ def test_chat_mode_times_out_silently() -> None:
 def test_confirm_false_on_voice_no() -> None:
     c, _ = _voice(["no"])
     assert c.confirm("Delete it?") is False
+    assert c.timed_out is False  # a deliberate "no" is not a timeout
+
+
+def test_timed_out_flag_tracks_silence_vs_explicit_answer() -> None:
+    # Silence to the deadline -> timed_out True (so the gate can say "no confirmation").
+    c, _ = _voice([], timeout_s=3.0)
+    assert c.confirm("Empty the Trash?") is False
+    assert c.timed_out is True
+
+    # An explicit yes clears it.
+    c2, _ = _voice(["proceed"])
+    assert c2.confirm("Empty the Trash?") is True
+    assert c2.timed_out is False
 
 
 def test_confirm_reprompts_once_then_times_out_to_cancel() -> None:

@@ -45,6 +45,33 @@ class _RecordingConfirmer:
         return False
 
 
+class _TimeoutConfirmer:
+    """Declines by timing out (no answer), like a confirmation that wasn't answered."""
+
+    timed_out = True
+
+    def confirm(self, _prompt: str) -> bool:
+        return False
+
+
+def test_timed_out_confirmation_tells_model_no_confirmation_received() -> None:
+    tool = _SpyTool(Risk.DESTRUCTIVE)
+    gate, _ = _gate_with(tool, "empty_trash", _TimeoutConfirmer())
+    result = gate.execute(ToolCall(name="empty_trash", arguments={}))
+    assert not tool.ran
+    assert not result.ok
+    low = result.content.lower()
+    assert "confirmation" in low and "cancel" in low  # not "the user declined"
+    assert "declined" not in low
+
+
+def test_explicit_decline_says_user_declined() -> None:
+    tool = _SpyTool(Risk.DESTRUCTIVE)
+    gate, _ = _gate_with(tool, "empty_trash", _RecordingConfirmer())  # timed_out absent -> False
+    result = gate.execute(ToolCall(name="empty_trash", arguments={}))
+    assert "declined" in result.content.lower()
+
+
 def test_confirm_prompt_is_friendly_and_names_the_target() -> None:
     tool = _SpyTool(Risk.DESTRUCTIVE)
     confirmer = _RecordingConfirmer()

@@ -121,6 +121,15 @@ class VoiceConfirmer:
         self._chunk_s = chunk_s
         self._clock = clock
         self._sleep = sleep
+        # Whether the most recent confirm() ended by *timing out* (no answer) rather
+        # than an explicit cancel. Lets the gate phrase "I cancelled because I didn't
+        # get a confirmation" instead of treating silence like a deliberate "no".
+        self._timed_out = False
+
+    @property
+    def timed_out(self) -> bool:
+        """True if the last :meth:`confirm` ended by timeout (no answer given)."""
+        return self._timed_out
 
     def _confirm_by_click(self, prompt: str) -> bool:
         """Chat-mode confirm: poll the card click until answered or timed out."""
@@ -133,6 +142,7 @@ class VoiceConfirmer:
                     return self._resolve(clicked, "click")
             self._sleep(min(0.15, self._chunk_s))
         _log.info("confirmation timed out (chat) — cancelling")
+        self._timed_out = True
         return False
 
     def _resolve(self, answer: bool, how: str) -> bool:
@@ -152,6 +162,7 @@ class VoiceConfirmer:
         and cancels on no / silence / ambiguity / timeout — only an explicit,
         un-negated yes proceeds.
         """
+        self._timed_out = False  # reset; set True only if we end by timeout
         if self._poll_click is not None:
             while self._poll_click() is not None:
                 pass  # discard any stale click from a previous prompt
@@ -188,6 +199,7 @@ class VoiceConfirmer:
                     reprompted = True
                     self._speak("Sorry, was that a yes or no?")
             _log.info("confirmation timed out — cancelling")
+            self._timed_out = True
             return False  # the assistant's reply will note it wasn't done
         finally:
             if self._on_clear is not None:

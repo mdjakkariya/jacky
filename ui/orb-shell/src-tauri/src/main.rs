@@ -62,22 +62,23 @@ fn open_settings_window(app: tauri::AppHandle) {
     open_settings(&app, false);
 }
 
-/// Open (or focus) the chat drawer — a focusable, right-docked panel for typed
-/// chat mode. Unlike the orb it must take keyboard focus, so we switch to the
-/// regular activation policy while it's open (and back to accessory on close).
+/// Open (or focus) the chat drawer — a right-docked panel for typed chat mode.
+///
+/// It's a *non-activating* panel (see `make_chat_panel`): it can become key to
+/// receive typing, but never activates Jack as the front app. That's deliberate —
+/// activating a normal app while you're in another app's full-screen Space makes
+/// macOS jump you to the Desktop Space, which is exactly the bug we're avoiding.
 #[tauri::command]
 fn open_chat(app: tauri::AppHandle) {
-    #[cfg(target_os = "macos")]
-    {
-        let _ = app.set_activation_policy(tauri::ActivationPolicy::Regular);
-        activate_app();
-    }
     // Chat and voice are one-at-a-time: hide the orb while the chat drawer is open
     // (close_chat shows it again), so they never overlap.
     with_orb(&app, |w| {
         let _ = w.hide();
     });
     if let Some(win) = app.get_webview_window("chat") {
+        // Don't call set_visible_on_all_workspaces here — it resets the collection
+        // behaviour and would strip the full-screen-auxiliary bit the panel needs.
+        // The panel keeps its behaviour across hide/show, so just bring it forward.
         let _ = win.show();
         let _ = win.set_focus();
         return;
@@ -101,6 +102,10 @@ fn open_chat(app: tauri::AppHandle) {
                 let _ = win.set_size(tauri::LogicalSize::new(width, size.height - 96.0));
                 let _ = win.set_position(tauri::LogicalPosition::new(size.width - width - 16.0, 48.0));
             }
+            // Float over other apps' full-screen Spaces too, Spotlight-style, while
+            // staying typeable — without yanking you to the Desktop Space.
+            #[cfg(target_os = "macos")]
+            make_chat_panel(&win);
             let _ = win.set_focus();
             win.on_window_event(move |event| {
                 if matches!(
@@ -215,6 +220,10 @@ fn main() {
     #[cfg(target_os = "macos")]
     let builder = builder.plugin(tauri_nspanel::init());
 
+    // Global hotkey (⌘⇧J) to summon/dismiss Jack from any app. The actual binding
+    // is registered in setup(); this just installs the plugin.
+    let builder = builder.plugin(tauri_plugin_global_shortcut::Builder::new().build());
+
     builder
         .invoke_handler(tauri::generate_handler![
             open_settings_window,
@@ -254,19 +263,25 @@ fn main() {
             }
 
             // Menu-bar (tray) control surface. Two toggles whose labels show the
-            // current state, plus a Size submenu and Quit.
-            let view = MenuItem::with_id(app, "view", HIDE, true, None::<&str>)?;
-            let lock = MenuItem::with_id(app, "lock", MOVABLE, true, None::<&str>)?;
+            // current state, plus a Size submenu and Quit. The accelerator field makes
+            // macOS render each shortcut right-aligned and greyed (native look). On a
+            // tray/status-item menu these key-equivalents are display-only — they fire
+            // only while the menu is open — so the GLOBAL hotkeys registered after the
+            // tray (same as summon) are the real, always-on handlers. The combos match.
+            let view = MenuItem::with_id(app, "view", HIDE, true, Some("Command+Control+J"))?;
+            let lock = MenuItem::with_id(app, "lock", MOVABLE, true, Some("Command+Control+L"))?;
 
             let small = MenuItem::with_id(app, "size_s", "Small", true, None::<&str>)?;
             let medium = MenuItem::with_id(app, "size_m", "Medium", true, None::<&str>)?;
             let large = MenuItem::with_id(app, "size_l", "Large", true, None::<&str>)?;
             let size = Submenu::with_items(app, "Size", true, &[&small, &medium, &large])?;
 
-            let chat = MenuItem::with_id(app, "chat", "Chat…", true, None::<&str>)?;
-            let settings = MenuItem::with_id(app, "settings", "Settings…", true, None::<&str>)?;
-            let report = MenuItem::with_id(app, "report", "Report an issue…", true, None::<&str>)?;
-            let quit = MenuItem::with_id(app, "quit", "Quit Jack", true, None::<&str>)?;
+            let chat = MenuItem::with_id(app, "chat", "Chat…", true, Some("Command+Control+C"))?;
+            let settings =
+                MenuItem::with_id(app, "settings", "Settings…", true, Some("Command+Control+S"))?;
+            let report =
+                MenuItem::with_id(app, "report", "Report an issue…", true, Some("Command+Control+R"))?;
+            let quit = MenuItem::with_id(app, "quit", "Quit Jack", true, Some("Command+Control+Q"))?;
 
             // Dev builds get a "Clean up storage" item at the top for quick resets.
             #[cfg(debug_assertions)]
@@ -285,6 +300,9 @@ fn main() {
             let locked = Arc::new(AtomicBool::new(false));
             let view_item = view.clone();
             let lock_item = lock.clone();
+            // Clones for the global ⌘⌃L handler (the tray closure moves the originals).
+            let locked_sc = locked.clone();
+            let lock_item_sc = lock.clone();
 
             let icon = app
                 .default_window_icon()
@@ -324,6 +342,60 @@ fn main() {
                     _ => {}
                 })
                 .build(app)?;
+
+            // Global hotkeys for every option (an accessory app has no menu bar, so
+            // menu key-equivalents only fire while the menu is open — these work from
+            // anywhere, like summon). All in the ⌘⌃ namespace so they never shadow an
+            // app-local ⌘-letter binding. Registered in Rust → no JS capability.
+            {
+                use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
+
+                // Non-fatal: if a combo is already taken system-wide, log it and keep
+                // going — a hotkey clash must never stop Jack from launching.
+                macro_rules! reg {
+                    ($combo:expr, $handler:expr) => {
+                        if let Err(e) = app.global_shortcut().on_shortcut($combo, $handler) {
+                            eprintln!("[jack] global shortcut {} unavailable: {e}", $combo);
+                        }
+                    };
+                }
+
+                reg!("Command+Control+J", |app, _s, e| {
+                    if e.state() == ShortcutState::Pressed {
+                        toggle_jack(app);
+                    }
+                });
+                reg!("Command+Control+C", |app, _s, e| {
+                    if e.state() == ShortcutState::Pressed {
+                        open_chat(app.clone());
+                    }
+                });
+                reg!("Command+Control+S", |app, _s, e| {
+                    if e.state() == ShortcutState::Pressed {
+                        open_settings(app, false);
+                    }
+                });
+                reg!("Command+Control+R", |app, _s, e| {
+                    if e.state() == ShortcutState::Pressed {
+                        open_settings(app, true);
+                    }
+                });
+                reg!("Command+Control+Q", |app, _s, e| {
+                    if e.state() == ShortcutState::Pressed {
+                        app.exit(0);
+                    }
+                });
+                reg!("Command+Control+L", move |app, _s, e| {
+                    if e.state() == ShortcutState::Pressed {
+                        let now = !locked_sc.load(Ordering::Relaxed);
+                        locked_sc.store(now, Ordering::Relaxed);
+                        with_orb(app, |w| {
+                            let _ = w.set_ignore_cursor_events(now);
+                        });
+                        let _ = lock_item_sc.set_text(if now { LOCKED } else { MOVABLE });
+                    }
+                });
+            }
 
             Ok(())
         })
@@ -432,6 +504,26 @@ fn with_orb(app: &tauri::AppHandle, f: impl FnOnce(&tauri::WebviewWindow)) {
     }
 }
 
+/// Summon/dismiss Jack (the ⌘⇧J global hotkey). Keeps the one-mode-at-a-time rule:
+/// if the chat drawer is open it's closed first (which brings the voice orb back);
+/// otherwise the orb is toggled. So the hotkey never shows the orb and chat at once.
+fn toggle_jack(app: &tauri::AppHandle) {
+    if let Some(chat) = app.get_webview_window("chat") {
+        if chat.is_visible().unwrap_or(false) {
+            close_chat(app.clone()); // hides chat, restores voice + shows the orb
+            return;
+        }
+    }
+    with_orb(app, |w| {
+        if w.is_visible().unwrap_or(false) {
+            let _ = w.hide();
+        } else {
+            let _ = w.show();
+            let _ = w.set_always_on_top(true);
+        }
+    });
+}
+
 /// Resize the orb window to a square `px`; the web orb scales to fill it.
 fn resize(app: &tauri::AppHandle, px: f64) {
     with_orb(app, |w| {
@@ -470,5 +562,39 @@ fn make_floating_panel(window: &tauri::WebviewWindow) {
             eprintln!("[jack] orb is now a floating NSPanel (over full-screen)");
         }
         Err(_) => eprintln!("[jack] to_panel() failed — orb stays a normal window"),
+    }
+}
+
+/// macOS: make the chat drawer float over other apps' full-screen Spaces while
+/// still accepting keyboard input — the Spotlight/Alfred recipe.
+///
+/// A non-activating panel can become *key* (so you can type into it) WITHOUT
+/// activating Jack as the front app. That matters because activating a normal app
+/// over another app's full-screen window makes macOS switch to the Desktop Space —
+/// which is why the chat used to appear on the wrong screen. `fullScreenAuxiliary`
+/// + `canJoinAllSpaces` let it draw over the current full-screen Space instead.
+/// We keep the resizable bit so the drawer can still be dragged-to-resize.
+#[cfg(target_os = "macos")]
+#[allow(deprecated)] // tauri-nspanel re-exports the (now-deprecated) cocoa crate; still correct.
+fn make_chat_panel(window: &tauri::WebviewWindow) {
+    use tauri_nspanel::cocoa::appkit::NSWindowCollectionBehavior;
+    use tauri_nspanel::WebviewWindowExt;
+
+    const NS_NONACTIVATING_PANEL: i32 = 1 << 7; // NSWindowStyleMaskNonactivatingPanel
+    const NS_RESIZABLE: i32 = 1 << 3; // NSWindowStyleMaskResizable
+    const NS_MAIN_MENU_WINDOW_LEVEL: i32 = 24;
+
+    match window.to_panel() {
+        Ok(panel) => {
+            panel.set_level(NS_MAIN_MENU_WINDOW_LEVEL + 1);
+            panel.set_style_mask(NS_NONACTIVATING_PANEL | NS_RESIZABLE);
+            panel.set_collection_behaviour(
+                NSWindowCollectionBehavior::NSWindowCollectionBehaviorCanJoinAllSpaces
+                    | NSWindowCollectionBehavior::NSWindowCollectionBehaviorFullScreenAuxiliary,
+            );
+            panel.order_front_regardless();
+            eprintln!("[jack] chat is now a floating key panel (over full-screen)");
+        }
+        Err(e) => eprintln!("[jack] chat to_panel() failed — stays a normal window: {e}"),
     }
 }

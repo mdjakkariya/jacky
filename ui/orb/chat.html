@@ -54,6 +54,7 @@
   .inbar:focus-within{border-color:var(--accent);}
   #box{flex:1;min-width:0;border:none;background:transparent;color:var(--text);font-size:15px;line-height:26px;resize:none;height:26px;min-height:26px;max-height:130px;outline:none;padding:0;margin:0;display:block;}
   #box::placeholder{color:var(--muted);}
+  #box:disabled{opacity:.5;}
   #send{border:none;width:38px;height:38px;border-radius:50%;background:var(--accent);color:#fff;font-size:18px;display:inline-flex;align-items:center;justify-content:center;cursor:pointer;flex:none;transition:opacity .15s,transform .08s;}
   #send:disabled{opacity:.35;cursor:default;}
   #send:not(:disabled):active{transform:scale(.94);}
@@ -74,7 +75,7 @@
   <div id="log"></div>
   <footer>
     <div class="inbar">
-      <textarea id="box" rows="1" placeholder="Message Jack…"></textarea>
+      <textarea id="box" rows="1" placeholder="⌘⌃J summon · Esc to close"></textarea>
       <button id="send" aria-label="Send" disabled>↑</button>
     </div>
   </footer>
@@ -90,38 +91,52 @@
     var d = document.createElement("div"); d.className = "msg " + cls; d.textContent = text;
     log.appendChild(d); scroll(); return d;
   }
-  function typing(){
-    var d = document.createElement("div"); d.className = "typing";
-    d.setAttribute("aria-label", "Jack is typing");
-    d.innerHTML = "<span></span><span></span><span></span>";
-    log.appendChild(d); scroll(); return d;
+  // A single, shared typing indicator (never more than one).
+  var typingEl = null;
+  function showTyping(){ if(!typingEl){ typingEl = document.createElement("div"); typingEl.className = "typing"; typingEl.setAttribute("aria-label", "Jack is typing"); typingEl.innerHTML = "<span></span><span></span><span></span>"; log.appendChild(typingEl); } scroll(); }
+  function hideTyping(){ if(typingEl){ typingEl.remove(); typingEl = null; } }
+
+  // One turn at a time: while a turn is in flight (including while a confirmation
+  // card is waiting for you), lock the input so a second message can't queue up
+  // behind it and leave the dots stuck. Answer a confirmation with its buttons.
+  var busy = false;
+  function lockInput(on){
+    busy = on;
+    box.disabled = on;
+    send.disabled = on || !box.value.trim();
   }
 
   async function submit(){
     var text = box.value.trim();
-    if(!text) return;
-    box.value = ""; resize(); send.disabled = true;
+    if(busy || !text) return;
+    box.value = ""; resize();
     bubble("me", text);
-    var t = typing();
+    lockInput(true);
+    showTyping();
     try {
       var r = await (await fetch(API + "/chat", {method:"POST", headers:{"content-type":"application/json"}, body: JSON.stringify({text: text})})).json();
-      t.remove();
       bubble("jack", (r && r.reply) ? r.reply : "(no reply)");
     } catch(e){
-      t.remove();
       bubble("jack", "Couldn't reach Jack — is it running?");
+    } finally {
+      hideTyping();
+      clearConfirm();
+      lockInput(false);
     }
   }
 
   function resize(){ box.style.height = "26px"; box.style.height = Math.min(130, box.scrollHeight) + "px"; }
-  box.addEventListener("input", function(){ resize(); send.disabled = !box.value.trim(); });
+  box.addEventListener("input", function(){ resize(); send.disabled = busy || !box.value.trim(); });
   box.addEventListener("keydown", function(e){
     if(e.key === "Enter" && !e.shiftKey){ e.preventDefault(); submit(); }
   });
   send.addEventListener("click", submit);
 
-  // Confirmation cards arrive over the WebSocket (same events the orb uses).
+  // Confirmation cards arrive over the WebSocket. The loading dots keep running
+  // underneath (the turn is still in flight); the input stays locked, so the card's
+  // buttons are how you answer — no second message can queue up behind it.
   function showConfirm(prompt){
+    clearConfirm();
     var card = document.createElement("div"); card.className = "confirm"; card.id = "confirm-card";
     card.innerHTML = '<div class="h">⚠️ Just checking</div><div class="b"></div>'
       + '<div class="row"><button class="btn" data-a="0">Cancel</button>'
@@ -129,12 +144,13 @@
     card.querySelector(".b").textContent = prompt || "Do you want me to go ahead with this?";
     card.querySelectorAll("button").forEach(function(b){
       b.addEventListener("click", function(){
-        answer(b.getAttribute("data-a") === "1"); card.remove();
+        answer(b.getAttribute("data-a") === "1");
+        card.remove();
       });
     });
     log.appendChild(card); scroll();
   }
-  function clearConfirm(){ var c = $("confirm-card"); if(c) c.remove(); }
+  function clearConfirm(){ var c = $("confirm-card"); if(c){ c.remove(); } }
   async function answer(ok){
     try { await fetch(API + "/confirm", {method:"POST", headers:{"content-type":"application/json"}, body: JSON.stringify({answer: ok})}); } catch(e){}
   }
@@ -173,6 +189,12 @@
   $("m-voice").addEventListener("click", closeDrawer);
   $("m-chat").addEventListener("click", function(){ setMode("chat"); });
   $("close").addEventListener("click", closeDrawer);
+
+  // Esc or ⌘W closes the drawer (back to voice) — standard, accessible shortcuts.
+  document.addEventListener("keydown", function(e){
+    if(e.key === "Escape"){ e.preventDefault(); closeDrawer(); }
+    else if((e.metaKey || e.ctrlKey) && (e.key === "w" || e.key === "W")){ e.preventDefault(); closeDrawer(); }
+  });
 
   // Drag the window by its header. CSS app-region is unreliable on frameless macOS
   // windows, so drive Tauri's native startDragging on mousedown — but let the

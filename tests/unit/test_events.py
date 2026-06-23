@@ -52,6 +52,18 @@ def test_publish_visibility_broadcasts_without_changing_last_state() -> None:
     assert bus.last_state is OrbState.TALKING
 
 
+def test_publish_confirm_carries_mode_so_the_orb_can_ignore_chat_cards() -> None:
+    bus = EventBus()
+    seen: list[dict[str, object]] = []
+    bus.subscribe(seen.append)
+
+    bus.publish_confirm("Empty the Trash?")  # voice by default
+    assert seen[-1] == {"type": "confirm", "text": "Empty the Trash?", "mode": "voice"}
+
+    bus.publish_confirm("Empty the Trash?", chat=True)  # chat turn -> orb ignores it
+    assert seen[-1] == {"type": "confirm", "text": "Empty the Trash?", "mode": "chat"}
+
+
 def test_bus_broadcasts_state_to_subscribers_and_records_last() -> None:
     bus = EventBus()
     seen: list[dict[str, object]] = []

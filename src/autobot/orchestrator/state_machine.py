@@ -358,6 +358,14 @@ class Orchestrator:
         """The orchestrator's current state."""
         return self._sm.state
 
+    def in_chat_mode(self) -> bool:
+        """True when typed-chat is active, so the voice orb shouldn't be driven.
+
+        Covers both a steady chat mode and the moment a typed turn is being handled
+        (so a chat turn's THINKING/TALKING transitions don't wake the orb).
+        """
+        return self._mode == "chat" or self._text_mode
+
     def mark_llm_dirty(self) -> None:
         """Ask the LLM to rebuild from fresh settings before the next turn.
 
