@@ -339,6 +339,19 @@ class OllamaLanguageModel:
             "model": self._settings.llm_model,
         }
 
+    def new_session(self) -> None:
+        """Discard all conversation history and start a fresh session.
+
+        Clears the running summary and per-turn token counts so the context meter
+        resets. The resolved context window and client are untouched — only the
+        conversation is wiped. Drives the chat's "New chat" action.
+        """
+        self._history = []
+        self._summary = ""
+        self._last_prompt_tokens = 0
+        self._last_eval_tokens = 0
+        _log.info("session reset (new chat)")
+
     def _report_usage(self) -> None:
         """Log/echo this turn's token usage for debugging."""
         ctx = self._context_tokens

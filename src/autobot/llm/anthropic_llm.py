@@ -593,6 +593,22 @@ class AnthropicLanguageModel:
         self._history = trim_history(self._history, _HARD_MAX_MESSAGES)
         return reply
 
+    def new_session(self) -> None:
+        """Discard all conversation history and start a fresh session.
+
+        Clears the running summary and per-turn usage trackers too, so the context
+        meter resets to empty. The model config (window, client) is untouched — only
+        the conversation is wiped. Drives the chat's "New chat" action.
+        """
+        self._history = []
+        self._summary = ""
+        self._last_prompt_total = 0
+        self._last_cache_read = 0
+        self._last_cache_write = 0
+        self._last_turn_in = 0
+        self._last_turn_out = 0
+        _log.info("cloud session reset (new chat)")
+
     @property
     def context_window(self) -> int:
         """The model's prompt-token window (dynamic; for the context meter)."""

@@ -111,6 +111,18 @@ def test_post_confirm_delivers_clicked_answer() -> None:
     assert answers == [True, False]
 
 
+def test_post_new_session_invokes_callback() -> None:
+    calls = {"n": 0}
+    app = create_app(EventBus(), on_new_session=lambda: calls.__setitem__("n", calls["n"] + 1))
+    assert TestClient(app).post("/session/new").json() == {"ok": True}
+    assert calls["n"] == 1
+
+
+def test_post_new_session_ok_without_callback() -> None:
+    # The route must not error when no engine callback is wired (e.g. demo mode).
+    assert TestClient(create_app(EventBus())).post("/session/new").json() == {"ok": True}
+
+
 def test_post_confirm_rejects_missing_answer() -> None:
     app = create_app(EventBus(), on_confirm_answer=lambda _a: None)
     body = TestClient(app).post("/confirm", json={}).json()

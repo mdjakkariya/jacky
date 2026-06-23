@@ -57,3 +57,11 @@ class ReloadableLanguageModel:
         """Delegate the context-meter usage to the active inner model (if it has it)."""
         fn = getattr(self._inner, "context_usage", None)
         return fn() if callable(fn) else None
+
+    def new_session(self) -> None:
+        """Reset the active inner model's conversation (the chat's "New chat")."""
+        with self._lock:
+            inner = self._inner
+        fn = getattr(inner, "new_session", None)
+        if callable(fn):
+            fn()

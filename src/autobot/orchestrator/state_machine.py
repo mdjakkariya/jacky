@@ -370,6 +370,21 @@ class Orchestrator:
         """
         return self._mode == "chat" or self._text_mode
 
+    def new_chat_session(self) -> None:
+        """Discard the conversation and start fresh (the chat's "New chat" action).
+
+        Wipes the LLM's history/summary so the next turn starts clean, clears the
+        last reply, and rests the state machine at IDLE. Held under the turn lock so
+        it can never land in the middle of an in-flight turn (voice or typed).
+        """
+        with self._turn_lock:
+            reset = getattr(self._llm, "new_session", None)
+            if callable(reset):
+                reset()
+            self._last_reply = ""
+            self._sm.reset(State.IDLE)
+        _log.info("new chat session started")
+
     def mark_llm_dirty(self) -> None:
         """Ask the LLM to rebuild from fresh settings before the next turn.
 

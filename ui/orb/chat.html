@@ -41,7 +41,10 @@
   .ctx-detail .r{display:flex;justify-content:space-between;font-size:11.5px;color:var(--muted);gap:14px;margin-top:3px;}
   .ctx-detail .r b{font-weight:500;color:var(--text);font-variant-numeric:tabular-nums;}
   .ctx-detail .note{font-size:11px;color:var(--muted);margin-top:8px;opacity:.8;}
-  header .x{border:none;background:transparent;color:var(--muted);font-size:16px;cursor:pointer;-webkit-app-region:no-drag;}
+  header .x{border:none;background:transparent;color:var(--muted);font-size:16px;cursor:pointer;-webkit-app-region:no-drag;display:inline-flex;align-items:center;}
+  header .x:hover{color:var(--text);}
+  header .x svg{width:16px;height:16px;display:block;}
+  header #newchat{margin-left:8px;}
   #log{flex:1;overflow-y:auto;padding:14px 12px;display:flex;flex-direction:column;gap:10px;}
   #log > *{flex-shrink:0;}
   .msg{max-width:82%;font-size:15px;line-height:1.55;padding:10px 13px;border-radius:16px;white-space:pre-wrap;word-wrap:break-word;}
@@ -100,6 +103,9 @@
 <body>
   <header>
     <span class="title">Jack</span>
+    <button class="x" id="newchat" aria-label="New chat" title="New chat">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 4H6a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-6"/><path d="M18.4 2.6a2 2 0 0 1 2.8 2.8L12.5 14l-3.7 1 1-3.7z"/></svg>
+    </button>
     <span id="ctx" class="ctx" aria-label="Context used">
       <svg width="16" height="16" viewBox="0 0 36 36" aria-hidden="true"><circle cx="18" cy="18" r="15" fill="none" stroke="var(--field-line)" stroke-width="5"/><circle id="ctxArc" cx="18" cy="18" r="15" fill="none" stroke="#7fb87a" stroke-width="5" stroke-linecap="round" stroke-dasharray="94.2" stroke-dashoffset="94.2" transform="rotate(-90 18 18)"/></svg>
       <span id="ctxPct" class="pct">0%</span>
@@ -178,21 +184,29 @@
     d.insertAdjacentElement("afterend", b);
   }
   // The fresh-session welcome lives in #log; drop it as soon as the conversation
-  // starts (a bubble or the typing indicator), and bring it back if the log empties.
+  // starts, and re-render it for a new chat. Keep a pristine clone as the template.
+  var emptyTpl = $("empty").cloneNode(true);
   function removeEmpty(){ var e = $("empty"); if(e) e.remove(); }
+  function bindChips(root){
+    Array.prototype.forEach.call(root.querySelectorAll(".chip"), function(chip){
+      chip.addEventListener("click", function(){
+        if(busy) return;
+        box.value = chip.getAttribute("data-send") || "";
+        resize(); updateCounter(); submit();
+      });
+    });
+  }
+  function showEmpty(){
+    log.innerHTML = "";
+    var n = emptyTpl.cloneNode(true);
+    log.appendChild(n); bindChips(n);
+  }
   function bubble(cls, text){
     removeEmpty();
     var d = document.createElement("div"); d.className = "msg " + cls; d.textContent = text;
     log.appendChild(d); clampIfLong(d, cls); scroll(); return d;
   }
-  // Tap a suggestion chip to send its example prompt.
-  Array.prototype.forEach.call(document.querySelectorAll(".chip"), function(chip){
-    chip.addEventListener("click", function(){
-      if(busy) return;
-      box.value = chip.getAttribute("data-send") || "";
-      resize(); updateCounter(); submit();
-    });
-  });
+  bindChips(log);  // wire the chips already in the DOM
   // A single, shared typing indicator (never more than one).
   var typingEl = null;
   function showTyping(){ if(!typingEl){ typingEl = document.createElement("div"); typingEl.className = "typing"; typingEl.setAttribute("aria-label", "Jack is typing"); typingEl.innerHTML = "<span></span><span></span><span></span>"; log.appendChild(typingEl); } scroll(); }
@@ -319,6 +333,26 @@
     var d = $("ctxDetail"), hidden = d.classList.toggle("hidden");
     if(!hidden) renderCtxDetail();
   });
+  // Back to empty for a fresh session: clear the ring and hide the detail card.
+  function resetCtx(){
+    lastCtx = null;
+    var wrap = $("ctx"), arc = $("ctxArc"), pctEl = $("ctxPct");
+    if(wrap){ wrap.classList.remove("show", "dev"); }  // hide entirely until the next turn
+    if(arc){ arc.setAttribute("stroke-dashoffset", CTX_CIRC.toFixed(1)); arc.setAttribute("stroke", "#7fb87a"); }
+    if(pctEl){ pctEl.textContent = "0%"; pctEl.style.color = "var(--muted)"; }
+    $("ctxDetail").classList.add("hidden");
+  }
+
+  // New chat: discard the engine's conversation, then reset the drawer to a fresh
+  // welcome. The UI clears regardless of the request outcome so it never feels stuck.
+  async function newChat(){
+    if(busy) return;  // a turn is in flight — don't wipe mid-thought
+    try { await fetch(API + "/session/new", {method:"POST"}); } catch(e){}
+    hideTyping(); clearConfirm();
+    showEmpty(); resetCtx();
+    box.value = ""; resize(); updateCounter(); lockInput(false); box.focus();
+  }
+  $("newchat").addEventListener("click", newChat);
 
   function connect(){
     try {

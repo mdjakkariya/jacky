@@ -168,6 +168,40 @@ def test_chat_turn_emits_context_usage() -> None:
     assert seen == [{"used": 12_000, "window": 200_000, "model": "m", "cache_read": 9_000, "cache_write": 0}]
 
 
+def test_new_chat_session_resets_llm_and_state() -> None:
+    from autobot.core.types import State
+    from autobot.orchestrator.wake_gate import PassThroughGate
+    from autobot.tts.null_tts import NullTTS
+
+    class _ResettableLLM(_EchoLLM):
+        def __init__(self) -> None:
+            self.reset_calls = 0
+
+        def new_session(self) -> None:
+            self.reset_calls += 1
+
+    llm = _ResettableLLM()
+    orch = Orchestrator(
+        settings=Settings(),
+        audio=_FakeAudio(),
+        stt=_FakeSTT("unused"),
+        llm=llm,
+        gate=_RecordingGate(),  # type: ignore[arg-type]
+        wake_gate=PassThroughGate(),
+        tts=NullTTS(),
+    )
+    orch.run_text_turn("hello")
+    orch.new_chat_session()
+    assert llm.reset_calls == 1  # the LLM's history was wiped
+    assert orch.state is State.IDLE  # the machine rests after a reset
+
+
+def test_new_chat_session_is_safe_without_llm_support() -> None:
+    # _EchoLLM has no new_session(); the orchestrator must no-op, not crash.
+    orch = _orchestrator("unused", _RecordingGate(), _RecordingTTS())
+    orch.new_chat_session()  # should not raise
+
+
 def test_text_turn_ignores_blank_input() -> None:
     orch = _orchestrator("unused", _RecordingGate(), _RecordingTTS())
     assert orch.run_text_turn("   ") == ""

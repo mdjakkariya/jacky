@@ -131,6 +131,7 @@ def serve(settings: Settings | None = None) -> None:
         on_change=orchestrator.mark_settings_changed,
         on_confirm_answer=inbox.submit,
         on_chat=orchestrator.run_text_turn,
+        on_new_session=orchestrator.new_chat_session,
     )
 
 

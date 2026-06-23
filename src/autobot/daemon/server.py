@@ -60,6 +60,7 @@ def create_app(
     on_change: Any | None = None,
     on_confirm_answer: Any | None = None,
     on_chat: Any | None = None,
+    on_new_session: Any | None = None,
 ) -> Any:
     """Build the FastAPI app: the event stream plus the Settings-view API.
 
@@ -236,6 +237,16 @@ def create_app(
         reply = await asyncio.to_thread(on_chat, str(text))
         return {"ok": True, "reply": reply}
 
+    async def post_new_session() -> dict[str, Any]:
+        """Start a fresh chat session — discard the engine's conversation history.
+
+        Runs off the event loop: the reset takes the engine's turn lock, so it waits
+        for any in-flight turn before clearing (and never blocks the WebSocket).
+        """
+        if on_new_session is not None:
+            await asyncio.to_thread(on_new_session)
+        return {"ok": True}
+
     async def post_confirm(request: Request) -> dict[str, Any]:
         """Deliver a clicked Yes/No answer for a pending confirmation to the engine."""
         payload = await request.json()
@@ -260,6 +271,7 @@ def create_app(
     app.add_api_route("/secret", post_secret, methods=["POST"])
     app.add_api_route("/confirm", post_confirm, methods=["POST"])
     app.add_api_route("/chat", post_chat, methods=["POST"])
+    app.add_api_route("/session/new", post_new_session, methods=["POST"])
     return app
 
 
@@ -270,6 +282,7 @@ def run_daemon(
     on_change: Any | None = None,
     on_confirm_answer: Any | None = None,
     on_chat: Any | None = None,
+    on_new_session: Any | None = None,
 ) -> None:
     """Run the daemon server (blocking) on ``host:port``.
 
@@ -287,7 +300,11 @@ def run_daemon(
     # noisy CancelledError traceback on Ctrl-C. KeyboardInterrupt is swallowed for
     # a clean exit.
     app = create_app(
-        bus, on_change=on_change, on_confirm_answer=on_confirm_answer, on_chat=on_chat
+        bus,
+        on_change=on_change,
+        on_confirm_answer=on_confirm_answer,
+        on_chat=on_chat,
+        on_new_session=on_new_session,
     )
     with contextlib.suppress(KeyboardInterrupt):
         uvicorn.run(app, host=host, port=port, log_level="warning", lifespan="off")

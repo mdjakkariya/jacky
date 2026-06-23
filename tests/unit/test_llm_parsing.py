@@ -140,6 +140,26 @@ def test_ollama_persists_tool_exchange_in_history() -> None:
     assert usage["turn_in"] == 120 and usage["turn_out"] == 0
 
 
+def test_ollama_new_session_clears_history_and_usage() -> None:
+    from autobot.config import Settings
+    from autobot.llm.ollama_llm import OllamaLanguageModel
+
+    m = object.__new__(OllamaLanguageModel)
+    m._settings = Settings()
+    m._history = [{"role": "user", "content": "hi"}]
+    m._summary = "earlier stuff"
+    m._last_prompt_tokens = 1200
+    m._last_eval_tokens = 40
+    m._context_tokens = 8192
+
+    m.new_session()
+
+    assert m._history == []
+    assert m._summary == ""
+    assert m._last_prompt_tokens == 0 and m._last_eval_tokens == 0
+    assert m.context_usage() is None  # meter reads empty until the next turn
+
+
 def test_pick_context_length_finds_arch_specific_key() -> None:
     info = {"general.architecture": "qwen2", "qwen2.context_length": 32768, "x": 1}
     assert pick_context_length(info, 4096) == 32768

@@ -323,6 +323,25 @@ def test_compaction_summarizes_older_turns_and_keeps_recent() -> None:
     assert "OLDER STUFF SUMMARY" in model._system()  # summary injected into the system prompt
 
 
+def test_new_session_clears_history_summary_and_usage() -> None:
+    # "New chat" must wipe the conversation and reset the context meter to empty.
+    model = AnthropicLanguageModel(
+        Settings(llm_provider="anthropic"), _registry(), client=FakeClient([])
+    )
+    model._history.append({"role": "user", "content": "hi"})
+    model._summary = "earlier stuff"
+    model._last_prompt_total = 5000
+    model._last_cache_read = 4000
+    model._last_turn_in = 900
+
+    model.new_session()
+
+    assert model._history == []
+    assert model._summary == ""
+    assert model._last_prompt_total == 0 and model._last_cache_read == 0 and model._last_turn_in == 0
+    assert model.context_usage() is None  # meter reads empty until the next turn
+
+
 def test_too_long_even_after_trim_returns_calm_reply_and_rolls_back() -> None:
     class _AlwaysTooLong:
         def create(self, **_kwargs: Any) -> Any:
