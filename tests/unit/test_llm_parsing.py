@@ -70,6 +70,67 @@ def test_trim_history_zero_disables() -> None:
     assert trim_history([{"role": "user", "content": "a"}], 0) == []
 
 
+def test_trim_history_starts_on_a_clean_user_turn() -> None:
+    # A tail-slice could land mid tool-exchange; trim must skip leading
+    # assistant/tool messages so a tool result never appears orphaned.
+    hist = [
+        {"role": "assistant", "content": "", "tool_calls": [{"function": {"name": "x"}}]},
+        {"role": "tool", "tool_name": "x", "content": "ok"},
+        {"role": "user", "content": "next"},
+        {"role": "assistant", "content": "done"},
+    ]
+    trimmed = trim_history(hist, 3)
+    assert [m["role"] for m in trimmed] == ["user", "assistant"]
+
+
+def test_ollama_persists_tool_exchange_in_history() -> None:
+    # The local model must keep the assistant tool call + tool result in history
+    # (not just the final text), so a later "close it" can resolve what it opened.
+    from autobot.config import Settings
+    from autobot.core.types import ToolResult
+    from autobot.llm.ollama_llm import OllamaLanguageModel
+    from autobot.session_log import NullTranscript
+    from autobot.tools.registry import ToolRegistry, ToolSpec
+
+    reg = ToolRegistry()
+    reg.register(
+        ToolSpec(name="open_app", description="", parameters={"type": "object"}, handler=lambda **k: "ok")
+    )
+    tool_call = types.SimpleNamespace(
+        function=types.SimpleNamespace(name="open_app", arguments={"name": "Safari"})
+    )
+    resp1 = types.SimpleNamespace(
+        message=types.SimpleNamespace(content="", tool_calls=[tool_call]), prompt_eval_count=100
+    )
+    resp2 = types.SimpleNamespace(
+        message=types.SimpleNamespace(content="Opened it.", tool_calls=[]), prompt_eval_count=120
+    )
+
+    class FakeClient:
+        def __init__(self) -> None:
+            self._responses = [resp1, resp2]
+
+        def chat(self, **_kwargs: object) -> object:
+            return self._responses.pop(0)
+
+    m = object.__new__(OllamaLanguageModel)
+    m._settings = Settings()
+    m._registry = reg
+    m._transcript = NullTranscript()
+    m._memory = None
+    m._client = FakeClient()
+    m._history = []
+    m._summary = ""
+    m._last_prompt_tokens = 0
+    m._context_tokens = 8192
+
+    reply = m.run_turn("open safari", lambda c: ToolResult(name=c.name, content="Opened Safari."))
+    assert reply == "Opened it."
+    roles = [msg.get("role") for msg in m._history]
+    assert "tool" in roles  # the tool result is persisted, not dropped
+    assert roles[0] == "user" and roles[-1] == "assistant"
+
+
 def test_pick_context_length_finds_arch_specific_key() -> None:
     info = {"general.architecture": "qwen2", "qwen2.context_length": 32768, "x": 1}
     assert pick_context_length(info, 4096) == 32768

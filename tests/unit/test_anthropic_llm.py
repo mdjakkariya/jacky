@@ -13,11 +13,14 @@ from autobot.config import Settings
 from autobot.core.types import ToolCall, ToolResult
 from autobot.llm.anthropic_llm import (
     AnthropicLanguageModel,
+    _first_pairing_problem,
     cloud_error_reply,
     estimate_cost_usd,
     parse_tool_uses,
     text_from_content,
     to_anthropic_tools,
+    trim_history,
+    with_cache_breakpoint,
 )
 from autobot.tools.registry import ToolRegistry, ToolSpec
 
@@ -109,6 +112,76 @@ def test_run_turn_executes_tool_then_returns_final_text() -> None:
         for m in second["messages"]
         if isinstance(m.get("content"), list)
     )
+
+
+def test_history_keeps_tool_blocks_across_turns() -> None:
+    # Turn 1 opens a site (a tool round); turn 2 must see the *structured* record of
+    # that tool call/result, not just text — so "close it" can resolve the target.
+    responses = [
+        SimpleNamespace(
+            content=[_block(type="tool_use", id="t1", name="open_app", input={"name": "Safari"})]
+        ),
+        SimpleNamespace(content=[_block(type="text", text="Opened it.")]),
+        SimpleNamespace(content=[_block(type="text", text="Closed it.")]),
+    ]
+    model = AnthropicLanguageModel(
+        Settings(llm_provider="anthropic"), _registry(), client=FakeClient(responses)
+    )
+    model.run_turn("open safari", lambda c: ToolResult(name=c.name, content="Opened Safari."))
+    model.run_turn("close it", lambda c: ToolResult(name=c.name, content=""))
+
+    # The 3rd API call (turn 2) carries the full prior turn: the tool_use AND its
+    # tool_result are in the sent messages, so the model knows what it did.
+    sent = model._client.messages.calls[2]["messages"]
+    kinds = [
+        _b.get("type")
+        for m in sent
+        if isinstance(m.get("content"), list)
+        for _b in m["content"]
+    ]
+    assert "tool_use" in kinds and "tool_result" in kinds
+
+
+def test_cache_breakpoint_is_on_the_last_block_only() -> None:
+    msgs = [
+        {"role": "user", "content": "hi"},
+        {"role": "assistant", "content": [{"type": "text", "text": "hello"}]},
+    ]
+    out = with_cache_breakpoint(msgs)
+    # Last block of the last message carries the breakpoint; earlier ones don't.
+    assert out[-1]["content"][-1]["cache_control"] == {"type": "ephemeral"}
+    assert "cache_control" not in str(out[0])  # prefix stays clean/stable
+    # The input wasn't mutated (history must stay byte-stable for caching).
+    assert msgs[0]["content"] == "hi"
+
+
+def test_pairing_problem_flags_unanswered_tool_use() -> None:
+    bad = [
+        {"role": "user", "content": "open safari"},
+        {"role": "assistant", "content": [{"type": "tool_use", "id": "t1", "name": "x", "input": {}}]},
+        {"role": "user", "content": "close it"},  # never returned tool_result for t1
+    ]
+    assert _first_pairing_problem(bad) is not None and "t1" in _first_pairing_problem(bad)
+    good = [
+        {"role": "user", "content": "open safari"},
+        {"role": "assistant", "content": [{"type": "tool_use", "id": "t1", "name": "x", "input": {}}]},
+        {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "t1", "content": "ok"}]},
+        {"role": "assistant", "content": [{"type": "text", "text": "done"}]},
+    ]
+    assert _first_pairing_problem(good) is None
+
+
+def test_trim_history_starts_on_a_clean_user_turn() -> None:
+    # A naive tail-slice could start on an orphaned tool_result; trim must skip to a
+    # plain user turn so the API never sees a dangling tool exchange.
+    hist = [
+        {"role": "assistant", "content": [{"type": "tool_use", "id": "t1", "name": "x", "input": {}}]},
+        {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "t1", "content": "ok"}]},
+        {"role": "user", "content": "next thing"},
+        {"role": "assistant", "content": [{"type": "text", "text": "ok"}]},
+    ]
+    trimmed = trim_history(hist, 3)
+    assert trimmed[0] == {"role": "user", "content": "next thing"}
 
 
 def test_run_turn_no_tools_returns_text() -> None:

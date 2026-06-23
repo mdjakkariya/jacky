@@ -122,10 +122,18 @@ def normalize_tool_calls(message: Any) -> list[ToolCall]:
 
 
 def trim_history(history: list[dict[str, Any]], max_messages: int) -> list[dict[str, Any]]:
-    """Keep only the most recent ``max_messages`` entries (0 disables history)."""
+    """Keep the most recent ``max_messages`` entries (0 disables history).
+
+    Never starts mid tool-exchange: drops leading ``assistant``/``tool`` messages
+    until a real ``user`` turn, so a ``tool`` result can't appear without the
+    assistant ``tool_calls`` that produced it.
+    """
     if max_messages <= 0:
         return []
-    return history[-max_messages:]
+    trimmed = history[-max_messages:]
+    while trimmed and trimmed[0].get("role") != "user":
+        trimmed.pop(0)
+    return trimmed
 
 
 def pick_context_length(model_info: dict[str, Any] | None, default: int) -> int:
@@ -277,25 +285,36 @@ class OllamaLanguageModel:
         message = _get(response, "message")
         calls = normalize_tool_calls(message)
 
+        # Persist the turn *append-only* and faithfully — including the assistant's
+        # tool_calls and each tool result — so the next turn has a real record of
+        # what was done ("close it" can resolve the site it just opened), not only
+        # the final text. A stable, ordered history also lets Ollama reuse its KV
+        # cache for the unchanged prefix.
+        turn: list[dict[str, Any]] = [user_msg]
         if not calls:
             _log.debug("planned no tool calls model=%s", self._settings.llm_model)
             reply = message_content(message)
+            turn.append({"role": "assistant", "content": reply})
         else:
             _log.info(
                 "planned tools=%s model=%s", [c.name for c in calls], self._settings.llm_model
             )
-            messages.append(_to_message_dict(message))
+            assistant_msg = _to_message_dict(message)
+            messages.append(assistant_msg)
+            turn.append(assistant_msg)
             for call in calls:
                 # Execution goes through the injected executor (the permission gate),
                 # never the registry directly — this is the gate's seam.
                 result = execute(call)
-                messages.append({"role": "tool", "tool_name": call.name, "content": result.content})
+                tool_msg = {"role": "tool", "tool_name": call.name, "content": result.content}
+                messages.append(tool_msg)
+                turn.append(tool_msg)
             final = self._chat(messages)
             reply = message_content(_get(final, "message"))
+            turn.append({"role": "assistant", "content": reply})
 
-        # Persist the clean turn; reactive safety net using the real token count.
-        self._history.append(user_msg)
-        self._history.append({"role": "assistant", "content": reply})
+        # Reactive safety net using the real token count; trim at a clean boundary.
+        self._history.extend(turn)
         self._history = trim_history(self._history, _HARD_MAX_MESSAGES)  # hard backstop
         self._compact_if_needed(self._last_prompt_tokens, source="post-turn")
         self._report_usage()
@@ -322,11 +341,14 @@ class OllamaLanguageModel:
         if not needs_compaction(prompt_tokens, ctx, self._settings.compact_at):
             return
         keep = self._settings.keep_recent_messages
-        older = self._history[:-keep] if keep > 0 else self._history
+        # Keep a *clean* recent tail (never starting mid tool-exchange); summarize
+        # everything before it. Using trim_history keeps the boundary valid.
+        kept = trim_history(self._history, keep) if keep > 0 else []
+        older = self._history[: len(self._history) - len(kept)]
         if not older:
             return
         self._summary = self._summarize(self._summary, older)
-        self._history = self._history[-keep:] if keep > 0 else []
+        self._history = kept
         pct = round(100 * prompt_tokens / ctx) if ctx else 0
         _log.info(
             "compacted source=%s prompt_tokens=%d ctx=%d pct=%d summarized=%d kept=%d",
