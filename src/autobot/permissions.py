@@ -83,7 +83,11 @@ def _accessibility_status() -> str:
     try:
         from ApplicationServices import AXIsProcessTrusted
 
-        return GRANTED if AXIsProcessTrusted() else NEEDED
+        # `True` is authoritative (we're trusted). `False` from the engine sidecar is
+        # NOT — the tools act via osascript and macOS attributes trust to Jack.app, a
+        # different code identity — so report "unknown" instead of a misleading
+        # "needed", and let a real tool outcome (or the user) settle it.
+        return GRANTED if AXIsProcessTrusted() else UNKNOWN
     except Exception:
         return UNKNOWN
 
@@ -112,18 +116,18 @@ def _automation_target_status(bundle_id: str) -> str:
 
 
 def _automation_status() -> str:
-    """Aggregate Automation across the targets Jack uses that are installed.
+    """Aggregate Automation across the targets Jack uses.
 
-    GRANTED only if every checkable target is granted; NEEDED if any is denied;
-    UNKNOWN if we couldn't determine (then the tool is allowed to try).
+    Per-target and coarse on purpose: if *any* target is granted we show GRANTED
+    (you've allowed Jack to control something — the rest prompt on first use); if
+    none are granted but some are denied, NEEDED; otherwise UNKNOWN. The gate's
+    per-tool reactive path still surfaces a specific target that's actually blocked.
     """
-    seen: set[str] = set()
-    for bundle in _AUTOMATION_TARGETS:
-        seen.add(_automation_target_status(bundle))
+    seen = {_automation_target_status(bundle) for bundle in _AUTOMATION_TARGETS}
+    if GRANTED in seen:
+        return GRANTED
     if NEEDED in seen:
         return NEEDED
-    if seen == {GRANTED}:
-        return GRANTED
     return UNKNOWN
 
 
