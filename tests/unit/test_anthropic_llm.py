@@ -136,16 +136,13 @@ def test_history_keeps_tool_blocks_across_turns() -> None:
     # tool_result are in the sent messages, so the model knows what it did.
     sent = model._client.messages.calls[2]["messages"]
     kinds = [
-        _b.get("type")
-        for m in sent
-        if isinstance(m.get("content"), list)
-        for _b in m["content"]
+        _b.get("type") for m in sent if isinstance(m.get("content"), list) for _b in m["content"]
     ]
     assert "tool_use" in kinds and "tool_result" in kinds
 
 
 def test_cache_breakpoint_is_on_the_last_block_only() -> None:
-    msgs = [
+    msgs: list[dict[str, Any]] = [
         {"role": "user", "content": "hi"},
         {"role": "assistant", "content": [{"type": "text", "text": "hello"}]},
     ]
@@ -158,16 +155,26 @@ def test_cache_breakpoint_is_on_the_last_block_only() -> None:
 
 
 def test_pairing_problem_flags_unanswered_tool_use() -> None:
-    bad = [
+    bad: list[dict[str, Any]] = [
         {"role": "user", "content": "open safari"},
-        {"role": "assistant", "content": [{"type": "tool_use", "id": "t1", "name": "x", "input": {}}]},
+        {
+            "role": "assistant",
+            "content": [{"type": "tool_use", "id": "t1", "name": "x", "input": {}}],
+        },
         {"role": "user", "content": "close it"},  # never returned tool_result for t1
     ]
-    assert _first_pairing_problem(bad) is not None and "t1" in _first_pairing_problem(bad)
-    good = [
+    problem = _first_pairing_problem(bad)
+    assert problem is not None and "t1" in problem
+    good: list[dict[str, Any]] = [
         {"role": "user", "content": "open safari"},
-        {"role": "assistant", "content": [{"type": "tool_use", "id": "t1", "name": "x", "input": {}}]},
-        {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "t1", "content": "ok"}]},
+        {
+            "role": "assistant",
+            "content": [{"type": "tool_use", "id": "t1", "name": "x", "input": {}}],
+        },
+        {
+            "role": "user",
+            "content": [{"type": "tool_result", "tool_use_id": "t1", "content": "ok"}],
+        },
         {"role": "assistant", "content": [{"type": "text", "text": "done"}]},
     ]
     assert _first_pairing_problem(good) is None
@@ -176,9 +183,15 @@ def test_pairing_problem_flags_unanswered_tool_use() -> None:
 def test_trim_history_starts_on_a_clean_user_turn() -> None:
     # A naive tail-slice could start on an orphaned tool_result; trim must skip to a
     # plain user turn so the API never sees a dangling tool exchange.
-    hist = [
-        {"role": "assistant", "content": [{"type": "tool_use", "id": "t1", "name": "x", "input": {}}]},
-        {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "t1", "content": "ok"}]},
+    hist: list[dict[str, Any]] = [
+        {
+            "role": "assistant",
+            "content": [{"type": "tool_use", "id": "t1", "name": "x", "input": {}}],
+        },
+        {
+            "role": "user",
+            "content": [{"type": "tool_result", "tool_use_id": "t1", "content": "ok"}],
+        },
         {"role": "user", "content": "next thing"},
         {"role": "assistant", "content": [{"type": "text", "text": "ok"}]},
     ]
@@ -247,7 +260,8 @@ def test_window_resolves_per_model_and_override() -> None:
 
     assert default_window_for("claude-haiku-4-5") == 200_000
     assert default_window_for("some-unknown-future-model") == 200_000  # safe default
-    assert parse_window_limit(RuntimeError("prompt is too long: 40000 tokens > 32768 maximum")) == 32768
+    too_long = RuntimeError("prompt is too long: 40000 tokens > 32768 maximum")
+    assert parse_window_limit(too_long) == 32768
     assert parse_window_limit(RuntimeError("nope")) is None
     # Explicit settings override wins over the per-model default.
     m = AnthropicLanguageModel(
@@ -302,7 +316,10 @@ def test_compaction_summarizes_older_turns_and_keeps_recent() -> None:
     turn = SimpleNamespace(
         content=[_block(type="text", text="ok")],
         usage=SimpleNamespace(
-            input_tokens=3, output_tokens=2, cache_read_input_tokens=180_000, cache_creation_input_tokens=0
+            input_tokens=3,
+            output_tokens=2,
+            cache_read_input_tokens=180_000,
+            cache_creation_input_tokens=0,
         ),
     )
     summ = SimpleNamespace(
@@ -338,7 +355,9 @@ def test_new_session_clears_history_summary_and_usage() -> None:
 
     assert model._history == []
     assert model._summary == ""
-    assert model._last_prompt_total == 0 and model._last_cache_read == 0 and model._last_turn_in == 0
+    assert model._last_prompt_total == 0
+    assert model._last_cache_read == 0
+    assert model._last_turn_in == 0
     assert model.context_usage() is None  # meter reads empty until the next turn
 
 
@@ -348,7 +367,9 @@ def test_too_long_even_after_trim_returns_calm_reply_and_rolls_back() -> None:
             raise RuntimeError("prompt is too long: 300000 tokens > 200000 maximum")
 
     model = AnthropicLanguageModel(
-        Settings(llm_provider="anthropic"), _registry(), client=SimpleNamespace(messages=_AlwaysTooLong())
+        Settings(llm_provider="anthropic"),
+        _registry(),
+        client=SimpleNamespace(messages=_AlwaysTooLong()),
     )
     reply = model.run_turn("hi", lambda c: ToolResult(name=c.name, content=""))
     assert reply == too_long_reply()

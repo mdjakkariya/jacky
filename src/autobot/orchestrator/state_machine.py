@@ -281,9 +281,7 @@ def _format_ack(template: str, arguments: dict[str, object]) -> str:
     """
     if "{target}" not in template:
         return template
-    target = next(
-        (v.strip() for v in arguments.values() if isinstance(v, str) and v.strip()), None
-    )
+    target = next((v.strip() for v in arguments.values() if isinstance(v, str) and v.strip()), None)
     if target:
         return template.replace("{target}", target)
     return re.sub(r"\s{2,}", " ", template.replace("{target}", "that")).strip()

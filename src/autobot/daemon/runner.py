@@ -24,9 +24,7 @@ from autobot.orchestrator.state_machine import StateListener, _print_transition
 _log = get_logger("daemon")
 
 
-def make_state_listener(
-    bus: EventBus, is_chat: Callable[[], bool] | None = None
-) -> StateListener:
+def make_state_listener(bus: EventBus, is_chat: Callable[[], bool] | None = None) -> StateListener:
     """Adapt the engine's transition callback to publish onto the bus.
 
     Keeps the existing console line (so terminal runs are unchanged) and also
@@ -103,7 +101,7 @@ def serve(settings: Settings | None = None) -> None:
 
     def _is_chat() -> bool:
         orch = holder.get("orch")
-        return bool(orch is not None and orch.in_chat_mode())  # type: ignore[union-attr]
+        return bool(orch is not None and orch.in_chat_mode())  # type: ignore[attr-defined]
 
     def publish_context(info: dict[str, object]) -> None:
         bus.publish_context(info, dev=settings.show_debug)

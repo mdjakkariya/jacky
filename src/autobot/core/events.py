@@ -20,6 +20,7 @@ import enum
 import threading
 from collections.abc import Callable
 from dataclasses import dataclass
+from typing import Any
 
 from autobot.core.types import State
 
@@ -243,7 +244,7 @@ class EventBus:
         """Broadcast that the pending confirmation was resolved (hide the card)."""
         self._emit(ConfirmClearEvent().message())
 
-    def publish_context(self, info: dict[str, object], dev: bool = False) -> None:
+    def publish_context(self, info: dict[str, Any], dev: bool = False) -> None:
         """Broadcast this turn's context-window usage (drives the chat meter).
 
         ``info`` is the model's :meth:`context_usage` payload: used, window, model,
@@ -255,8 +256,8 @@ class EventBus:
                 window=int(info.get("window", 0) or 0),
                 dev=dev,
                 model=str(info.get("model", "") or ""),
-                cache_read=info.get("cache_read"),  # type: ignore[arg-type]
-                cache_write=info.get("cache_write"),  # type: ignore[arg-type]
+                cache_read=info.get("cache_read"),
+                cache_write=info.get("cache_write"),
                 turn_in=int(info.get("turn_in", 0) or 0),
                 turn_out=int(info.get("turn_out", 0) or 0),
             ).message()

@@ -323,8 +323,11 @@ class OllamaLanguageModel:
         return reply
 
     def context_usage(self) -> dict[str, Any] | None:
-        """Context-meter payload, or None pre-turn. Local has no prompt-cache billing,
-        so cache_read/write are None (the card hides those rows)."""
+        """Context-meter payload, or None pre-turn.
+
+        Local has no prompt-cache billing, so cache_read/write are None (the card
+        hides those rows).
+        """
         if not self._last_prompt_tokens or not self._context_tokens:
             return None
         return {

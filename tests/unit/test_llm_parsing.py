@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import types
+from typing import Any, cast
 
 from autobot.core.types import ToolCall
 from autobot.llm.ollama_llm import (
@@ -73,7 +74,7 @@ def test_trim_history_zero_disables() -> None:
 def test_trim_history_starts_on_a_clean_user_turn() -> None:
     # A tail-slice could land mid tool-exchange; trim must skip leading
     # assistant/tool messages so a tool result never appears orphaned.
-    hist = [
+    hist: list[dict[str, Any]] = [
         {"role": "assistant", "content": "", "tool_calls": [{"function": {"name": "x"}}]},
         {"role": "tool", "tool_name": "x", "content": "ok"},
         {"role": "user", "content": "next"},
@@ -94,7 +95,12 @@ def test_ollama_persists_tool_exchange_in_history() -> None:
 
     reg = ToolRegistry()
     reg.register(
-        ToolSpec(name="open_app", description="", parameters={"type": "object"}, handler=lambda **k: "ok")
+        ToolSpec(
+            name="open_app",
+            description="",
+            parameters={"type": "object"},
+            handler=lambda **k: "ok",
+        )
     )
     tool_call = types.SimpleNamespace(
         function=types.SimpleNamespace(name="open_app", arguments={"name": "Safari"})
@@ -118,7 +124,7 @@ def test_ollama_persists_tool_exchange_in_history() -> None:
     m._registry = reg
     m._transcript = NullTranscript()
     m._memory = None
-    m._client = FakeClient()
+    m._client = cast(Any, FakeClient())
     m._history = []
     m._summary = ""
     m._last_prompt_tokens = 0
@@ -133,6 +139,7 @@ def test_ollama_persists_tool_exchange_in_history() -> None:
     # Local parity for the context meter: a usage payload with the local model and no
     # cache billing (cache_read/write are None — the dev card hides those rows).
     usage = m.context_usage()
+    assert usage is not None
     assert usage["used"] == 120 and usage["window"] == 8192
     assert usage["model"] == m._settings.llm_model
     assert usage["cache_read"] is None and usage["cache_write"] is None

@@ -86,6 +86,7 @@ def too_long_reply() -> str:
         "Try again, or start a fresh chat if you'd like a clean slate."
     )
 
+
 # Approximate list prices in USD per million tokens (input, output), for a *cost
 # estimate* in the log — this is debugging signal, not billing. Add/adjust entries
 # as Anthropic's pricing changes; unknown models simply log tokens without a cost.
@@ -202,10 +203,10 @@ def with_cache_breakpoint(messages: list[dict[str, Any]]) -> list[dict[str, Any]
         return messages
     last = dict(messages[-1])
     content = last.get("content")
-    blocks = (
+    blocks: list[dict[str, Any]] = (
         [{"type": "text", "text": content}]
         if isinstance(content, str)
-        else [dict(b) for b in content]
+        else [dict(b) for b in (content or [])]
     )
     if blocks:
         blocks[-1] = {**blocks[-1], "cache_control": {"type": "ephemeral"}}
@@ -242,7 +243,8 @@ def _first_pairing_problem(messages: list[dict[str, Any]]) -> str | None:
     pending: set[Any] | None = None  # tool_use ids that the next message must answer
     for i, msg in enumerate(messages):
         role = msg.get("role")
-        blocks = msg.get("content") if isinstance(msg.get("content"), list) else []
+        content = msg.get("content")
+        blocks = content if isinstance(content, list) else []
         results = {_get(b, "tool_use_id") for b in blocks if _get(b, "type") == "tool_result"}
         uses = {_get(b, "id") for b in blocks if _get(b, "type") == "tool_use"}
         if pending is not None:
@@ -454,10 +456,12 @@ class AnthropicLanguageModel:
         return False
 
     def _fit_to_budget(self, budget: int) -> None:
-        """Trim oldest turns only when over ``budget`` — and then down to a headroom
-        target, so we drop a chunk and leave room. This keeps the cached prefix stable
-        across many turns (cache hits) instead of trimming one message every turn
-        (which invalidates the cache every time)."""
+        """Trim oldest turns only when over ``budget``.
+
+        Trims down to a headroom target, so we drop a chunk and leave room. This keeps
+        the cached prefix stable across many turns (cache hits) instead of trimming one
+        message every turn (which invalidates the cache every time).
+        """
         if self._history_tokens() <= budget:
             return  # under budget: don't touch history, keep the cache warm
         target = int(budget * _TRIM_HEADROOM)
@@ -465,7 +469,7 @@ class AnthropicLanguageModel:
             pass
 
     def _budget(self, overhead: int) -> int:
-        """Token budget for history = window − reserved output − system/tools − safety.
+        """Token budget for history = window - reserved output - system/tools - safety.
 
         Reads ``self._window`` live so a window learned from an error tightens the
         budget on the very next attempt.
@@ -475,9 +479,11 @@ class AnthropicLanguageModel:
         )
 
     def _send(self, tools: list[dict[str, Any]], overhead: int) -> Any:
-        """Create one message, trimming to fit the (dynamic) window and retrying on a
-        'too long' rejection. Raises for any other error (or if it can't be made to
-        fit). Learns the real window from the rejection so any model is handled."""
+        """Create one message, trimming to fit the (dynamic) window.
+
+        Retries on a 'too long' rejection (learning the real window from it, so any
+        model is handled). Raises for any other error, or if it can't be made to fit.
+        """
         truncated = False
         for _ in range(8):
             self._fit_to_budget(self._budget(overhead))

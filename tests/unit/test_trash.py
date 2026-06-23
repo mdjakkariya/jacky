@@ -30,7 +30,12 @@ def test_empty_trash_counts_before_emptying() -> None:
     # The script must count items and only empty when there are some — that's what
     # prevents the already-empty -128.
     captured: list[list[str]] = []
-    empty_trash(runner=lambda a: (captured.append(a) or (0, "0")))
+
+    def runner(a: list[str]) -> tuple[int, str]:
+        captured.append(a)
+        return (0, "0")
+
+    empty_trash(runner=runner)
     script = captured[0][-1]
     assert "count of items in trash" in script
     assert "if _n > 0 then" in script
@@ -45,14 +50,23 @@ def test_empty_trash_disables_finders_warning_to_avoid_minus_128() -> None:
     # The script must turn off Finder's "are you sure?" warning (and restore it),
     # so `empty the trash` doesn't pop a dialog and return -128.
     captured: list[list[str]] = []
-    empty_trash(runner=lambda a: (captured.append(a) or (0, "")))
+
+    def runner(a: list[str]) -> tuple[int, str]:
+        captured.append(a)
+        return (0, "")
+
+    empty_trash(runner=runner)
     script = captured[0][-1]
     assert "warns before emptying of trash to false" in script
     assert "empty the trash" in script
 
 
 def test_empty_trash_reports_canceled_cleanly_on_minus_128() -> None:
-    err = "29:44: execution error: Finder got an error: The operation can’t be completed. (-128)"
+    # Real Finder error text; the apostrophe in "can't" is U+2019, matching the OS.
+    err = (
+        "29:44: execution error: Finder got an error: "
+        "The operation can’t be completed. (-128)"  # noqa: RUF001
+    )
     msg = empty_trash(runner=lambda _a: (1, err))
     assert "canceled" in msg.lower()
     assert "-128" not in msg and "execution error" not in msg  # no raw AppleScript noise

@@ -233,9 +233,12 @@ def _build_confirmer(
         return stt.transcribe(clip).text
 
     flush = getattr(audio, "flush", None)
+
     # In chat mode confirm by the card click only (no speaking / mic). Read live so a
     # runtime voice⇄chat switch is honoured.
-    is_chat = lambda: Settings.load().interaction_mode == "chat"  # noqa: E731
+    def is_chat() -> bool:
+        return Settings.load().interaction_mode == "chat"
+
     # Tag the broadcast card with the mode so the voice orb ignores chat-mode
     # confirmations (otherwise it pops up a duplicate card over the chat drawer).
     show = None
@@ -325,6 +328,9 @@ def build(
         poll_click: Optional source returning a clicked Yes/No (``True``/``False``)
             for a pending confirmation, or ``None``; lets a card click answer
             alongside voice. The daemon wires it to the confirmation inbox.
+        on_context: Optional sink fed the per-turn context-usage payload (used,
+            window, model, cache stats), so the chat meter can render it; the daemon
+            wires it to the bus's ``publish_context``.
 
     Returns:
         A ready-to-run orchestrator. Constructing it loads the STT model, opens

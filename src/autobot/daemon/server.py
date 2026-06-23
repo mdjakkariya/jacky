@@ -72,6 +72,10 @@ def create_app(
             engine can reload live (the orchestrator's ``mark_llm_dirty``).
         on_confirm_answer: Optional callback (bool) invoked when the user clicks
             Yes/No on a confirmation card, delivering the answer to the engine.
+        on_chat: Optional callback (str -> str) handling one typed turn and returning
+            the reply; wired to the orchestrator's ``run_text_turn``.
+        on_new_session: Optional callback invoked to discard the conversation and
+            start fresh; wired to the orchestrator's ``new_chat_session``.
 
     Returns:
         A FastAPI app: ``/healthz``, WebSocket ``/ws``, the settings API, and

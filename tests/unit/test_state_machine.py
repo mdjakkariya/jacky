@@ -149,9 +149,11 @@ def test_chat_turn_emits_context_usage() -> None:
     from autobot.orchestrator.wake_gate import PassThroughGate
     from autobot.tts.null_tts import NullTTS
 
+    usage = {"used": 12_000, "window": 200_000, "model": "m", "cache_read": 9_000, "cache_write": 0}
+
     class _UsageLLM(_EchoLLM):
         def context_usage(self) -> dict[str, object]:
-            return {"used": 12_000, "window": 200_000, "model": "m", "cache_read": 9_000, "cache_write": 0}
+            return usage
 
     seen: list[dict[str, object]] = []
     orch = Orchestrator(
@@ -165,7 +167,7 @@ def test_chat_turn_emits_context_usage() -> None:
         on_context=seen.append,
     )
     orch.run_text_turn("hello")
-    assert seen == [{"used": 12_000, "window": 200_000, "model": "m", "cache_read": 9_000, "cache_write": 0}]
+    assert seen == [usage]
 
 
 def test_new_chat_session_resets_llm_and_state() -> None:
@@ -487,7 +489,7 @@ def test_voice_and_chat_turns_do_not_interleave_state() -> None:
     def voice() -> None:
         try:
             orch.run_once()
-        except BaseException as exc:  # noqa: BLE001 - record for the assertion
+        except BaseException as exc:
             errors.append(exc)
 
     chat_reply: list[str] = []
@@ -495,7 +497,7 @@ def test_voice_and_chat_turns_do_not_interleave_state() -> None:
     def chat() -> None:
         try:
             chat_reply.append(orch.run_text_turn("hello from chat"))
-        except BaseException as exc:  # noqa: BLE001
+        except BaseException as exc:
             errors.append(exc)
 
     vt = threading.Thread(target=voice)
@@ -600,7 +602,6 @@ def test_typing_forces_chat_mode_and_silences_voice() -> None:
 
 
 def test_mode_toggle_does_not_reload_models(monkeypatch) -> None:  # type: ignore[no-untyped-def]
-    from autobot.orchestrator import state_machine as sm
     from autobot.orchestrator.wake_gate import PassThroughGate
     from autobot.tts.null_tts import NullTTS
 
@@ -625,14 +626,14 @@ def test_mode_toggle_does_not_reload_models(monkeypatch) -> None:  # type: ignor
     )
 
     # Mode-only change (drawer open/close): switch the mode, reload nothing.
-    monkeypatch.setattr(sm.Settings, "load", lambda: Settings(interaction_mode="chat"))
+    monkeypatch.setattr(Settings, "load", lambda: Settings(interaction_mode="chat"))
     orch.mark_settings_changed()
     assert calls == {"llm": 0, "stt": 0}
     assert orch._mode == "chat"
 
     # A real model change reloads just the LLM.
     monkeypatch.setattr(
-        sm.Settings, "load", lambda: Settings(interaction_mode="chat", anthropic_model="claude-x")
+        Settings, "load", lambda: Settings(interaction_mode="chat", anthropic_model="claude-x")
     )
     orch.mark_settings_changed()
     assert calls == {"llm": 1, "stt": 0}
