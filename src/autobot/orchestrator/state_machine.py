@@ -299,6 +299,10 @@ class Orchestrator:
         self._pending_started_at: float | None = None
         # The last reply text we spoke, so a barge-in that echoes it can be rejected.
         self._last_reply = ""
+        # "voice" or "chat". In chat mode the run loop idles (no mic) and turns come
+        # in as typed text via run_text_turn; replies are returned, not spoken.
+        self._mode = settings.interaction_mode
+        self._text_mode = False  # True while handling a typed turn (suppresses TTS)
 
     def _greeting(self) -> str:
         """The reply to a bare wake word — name-aware, and a first hello if new."""
@@ -334,9 +338,11 @@ class Orchestrator:
             reload_fn()
 
     def mark_settings_changed(self) -> None:
-        """Reload everything a settings change can affect (LLM + STT), no restart."""
+        """Reload everything a settings change can affect (LLM + STT + mode), no restart."""
         self.mark_llm_dirty()
         self.mark_stt_dirty()
+        # Pick up a voice⇄chat switch from the Settings view (applies next loop tick).
+        self._mode = Settings.load().interaction_mode
 
     def _execute(self, call: ToolCall) -> ToolResult:
         """Executor handed to the LLM: mark EXECUTING and run through the gate."""
@@ -347,7 +353,7 @@ class Orchestrator:
             self._dismissed = True
         # Acknowledge once per turn so a slow tool call isn't silent — phrased to
         # match the tool's nature (lookup vs action), from its risk level.
-        if self._settings.speak_acknowledgements and not self._acknowledged:
+        if self._settings.speak_acknowledgements and not self._acknowledged and not self._text_mode:
             self._acknowledged = True
             risk_of = getattr(self._gate, "risk_of", None)
             risk = risk_of(call.name) if callable(risk_of) else None
@@ -561,6 +567,36 @@ class Orchestrator:
             self._pending_started_at = getattr(self._audio, "last_speech_started_at", None)
         self._sm.transition(State.IDLE)
 
+    def run_text_turn(self, text: str) -> str:
+        """Handle one typed turn (chat mode): same LLM + gate, reply returned as text.
+
+        No mic, STT, or wake gate — typing is addressing Jack — and the reply is
+        returned for the chat UI rather than spoken. Tool calls and confirmations
+        still flow through the permission gate.
+        """
+        text = text.strip()
+        if not text:
+            return ""
+        self._text_mode = True
+        try:
+            self._transcript.user(text, 1.0)
+            self._sm.transition(State.LISTENING)
+            self._sm.transition(State.TRANSCRIBING)
+            self._sm.transition(State.PLANNING)
+            self._acknowledged = False
+            self._dismissed = False
+            started = time.perf_counter()
+            reply = self._llm.run_turn(text, self._execute)
+            elapsed_ms = int((time.perf_counter() - started) * 1000)
+            self._sm.transition(State.RESPONDING)
+            _log.info("chat replied chars=%d latency_ms=%d", len(reply), elapsed_ms)
+            self._transcript.assistant(reply)
+            self._last_reply = reply
+            self._sm.transition(State.IDLE)
+            return reply
+        finally:
+            self._text_mode = False
+
     def run(self) -> None:
         """Run the interaction loop until interrupted with Ctrl-C."""
         if self._settings.input_mode == "ptt":
@@ -579,6 +615,11 @@ class Orchestrator:
         print("=" * 60)
         while True:
             try:
+                if self._mode == "chat":
+                    # Chat mode: don't capture from the mic — typed turns arrive via
+                    # run_text_turn (driven by the daemon). Idle until switched back.
+                    time.sleep(0.2)
+                    continue
                 self.run_once()
             except KeyboardInterrupt:
                 print("\nBye.")

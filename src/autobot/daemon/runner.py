@@ -111,6 +111,7 @@ def serve(settings: Settings | None = None) -> None:
         settings.daemon_port,
         on_change=orchestrator.mark_settings_changed,
         on_confirm_answer=inbox.submit,
+        on_chat=orchestrator.run_text_turn,
     )
 
 

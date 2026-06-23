@@ -62,6 +62,64 @@ fn open_settings_window(app: tauri::AppHandle) {
     open_settings(&app, false);
 }
 
+/// Open (or focus) the chat drawer — a focusable, right-docked panel for typed
+/// chat mode. Unlike the orb it must take keyboard focus, so we switch to the
+/// regular activation policy while it's open (and back to accessory on close).
+#[tauri::command]
+fn open_chat(app: tauri::AppHandle) {
+    #[cfg(target_os = "macos")]
+    {
+        let _ = app.set_activation_policy(tauri::ActivationPolicy::Regular);
+        activate_app();
+    }
+    if let Some(win) = app.get_webview_window("chat") {
+        let _ = win.show();
+        let _ = win.set_focus();
+        return;
+    }
+    let width = 380.0;
+    let height = 640.0;
+    let handle = app.clone();
+    match WebviewWindowBuilder::new(&app, "chat", WebviewUrl::App("chat.html".into()))
+        .title("Jack — Chat")
+        .inner_size(width, height)
+        .resizable(true)
+        .transparent(true)
+        .always_on_top(true)
+        .build()
+    {
+        Ok(win) => {
+            // Dock to the right edge of the primary monitor.
+            if let Ok(Some(mon)) = app.primary_monitor() {
+                let size = mon.size().to_logical::<f64>(mon.scale_factor());
+                let _ = win.set_size(tauri::LogicalSize::new(width, size.height - 96.0));
+                let _ = win.set_position(tauri::LogicalPosition::new(size.width - width - 16.0, 48.0));
+            }
+            let _ = win.set_focus();
+            win.on_window_event(move |event| {
+                if matches!(
+                    event,
+                    tauri::WindowEvent::CloseRequested { .. } | tauri::WindowEvent::Destroyed
+                ) {
+                    #[cfg(target_os = "macos")]
+                    let _ = handle.set_activation_policy(tauri::ActivationPolicy::Accessory);
+                }
+            });
+        }
+        Err(e) => eprintln!("[jack] failed to open chat: {e}"),
+    }
+}
+
+/// Hide the chat drawer and return to the background (accessory) presence.
+#[tauri::command]
+fn close_chat(app: tauri::AppHandle) {
+    if let Some(win) = app.get_webview_window("chat") {
+        let _ = win.hide();
+    }
+    #[cfg(target_os = "macos")]
+    let _ = app.set_activation_policy(tauri::ActivationPolicy::Accessory);
+}
+
 /// Open a URL in the user's default browser (e.g. the prefilled GitHub issue form).
 /// Constrained to https links so it can only ever open the web, never run anything.
 #[tauri::command]
@@ -152,7 +210,9 @@ fn main() {
             open_settings_window,
             open_external,
             reveal_in_finder,
-            copy_to_clipboard
+            copy_to_clipboard,
+            open_chat,
+            close_chat
         ])
         .setup(|app| {
             // Bundled release: launch the embedded engine (the orb is its UI client).
@@ -193,6 +253,7 @@ fn main() {
             let large = MenuItem::with_id(app, "size_l", "Large", true, None::<&str>)?;
             let size = Submenu::with_items(app, "Size", true, &[&small, &medium, &large])?;
 
+            let chat = MenuItem::with_id(app, "chat", "Chat…", true, None::<&str>)?;
             let settings = MenuItem::with_id(app, "settings", "Settings…", true, None::<&str>)?;
             let report = MenuItem::with_id(app, "report", "Report an issue…", true, None::<&str>)?;
             let quit = MenuItem::with_id(app, "quit", "Quit Jack", true, None::<&str>)?;
@@ -204,10 +265,11 @@ fn main() {
             #[cfg(debug_assertions)]
             let menu = Menu::with_items(
                 app,
-                &[&cleanup, &view, &lock, &size, &settings, &report, &quit],
+                &[&cleanup, &chat, &view, &lock, &size, &settings, &report, &quit],
             )?;
             #[cfg(not(debug_assertions))]
-            let menu = Menu::with_items(app, &[&view, &lock, &size, &settings, &report, &quit])?;
+            let menu =
+                Menu::with_items(app, &[&chat, &view, &lock, &size, &settings, &report, &quit])?;
 
             let visible = Arc::new(AtomicBool::new(true));
             let locked = Arc::new(AtomicBool::new(false));
@@ -243,6 +305,7 @@ fn main() {
                     "size_s" => resize(app, SIZE_SMALL),
                     "size_m" => resize(app, SIZE_MEDIUM),
                     "size_l" => resize(app, SIZE_LARGE),
+                    "chat" => open_chat(app),
                     "settings" => open_settings(app, false),
                     "report" => open_settings(app, true),
                     #[cfg(debug_assertions)]

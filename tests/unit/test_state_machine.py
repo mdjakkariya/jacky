@@ -128,6 +128,30 @@ def test_reply_is_spoken_via_tts() -> None:
     assert tts.spoken[-1] == "done: ok"
 
 
+def test_text_turn_returns_reply_runs_tool_and_stays_silent() -> None:
+    tts = _RecordingTTS()
+    gate = _RecordingGate()
+    orch = _orchestrator("unused", gate, tts)
+    reply = orch.run_text_turn("create a file please")
+    assert reply == "done: ok"
+    assert gate.calls and gate.calls[0].name == "create_file"  # tools still run
+    assert tts.spoken == []  # chat mode: nothing spoken (no ack, no TTS reply)
+    assert orch._transitions == [  # type: ignore[attr-defined]
+        State.LISTENING,
+        State.TRANSCRIBING,
+        State.PLANNING,
+        State.EXECUTING,
+        State.RESPONDING,
+        State.IDLE,
+    ]
+    assert orch.state is State.IDLE
+
+
+def test_text_turn_ignores_blank_input() -> None:
+    orch = _orchestrator("unused", _RecordingGate(), _RecordingTTS())
+    assert orch.run_text_turn("   ") == ""
+
+
 def test_acknowledgement_matches_action_tool() -> None:
     from autobot.orchestrator.state_machine import _CONFIRMING_ACKS
 

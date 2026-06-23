@@ -132,6 +132,10 @@ class Settings:
     # on a connective word), briefly re-open the mic and append rather than answer a
     # half-sentence. A safety net on top of end_silence_ms.
     reopen_on_incomplete: bool = True
+    # How you interact: "voice" (hands-free wake word + speech, default) or "chat"
+    # (typed text in the orb's side drawer — mic off, replies shown not spoken).
+    # Switchable live from the orb; the voice loop idles while in chat mode.
+    interaction_mode: str = "voice"
     # --- voice output (Phase 3) ---
     tts_enabled: bool = True
     tts_voice: str = _DEFAULT_TTS_VOICE

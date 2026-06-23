@@ -59,6 +59,7 @@ def create_app(
     settings_path: str | Path | None = None,
     on_change: Any | None = None,
     on_confirm_answer: Any | None = None,
+    on_chat: Any | None = None,
 ) -> Any:
     """Build the FastAPI app: the event stream plus the Settings-view API.
 
@@ -224,6 +225,17 @@ def create_app(
             on_change()  # a new key takes effect on the next turn, no restart
         return {"ok": ok}
 
+    async def post_chat(request: Request) -> dict[str, Any]:
+        """Handle one typed turn (chat mode): run it on a worker thread, return reply."""
+        payload = await request.json()
+        text = payload.get("text") if isinstance(payload, dict) else None
+        if not text or on_chat is None:
+            return {"ok": False, "reply": "", "error": "no text / chat unavailable"}
+        # run_text_turn is blocking (LLM + tools); keep it off the event loop so the
+        # WebSocket and other clients stay responsive while Jack thinks.
+        reply = await asyncio.to_thread(on_chat, str(text))
+        return {"ok": True, "reply": reply}
+
     async def post_confirm(request: Request) -> dict[str, Any]:
         """Deliver a clicked Yes/No answer for a pending confirmation to the engine."""
         payload = await request.json()
@@ -247,6 +259,7 @@ def create_app(
     app.add_api_route("/permissions/open", post_permission_open, methods=["POST"])
     app.add_api_route("/secret", post_secret, methods=["POST"])
     app.add_api_route("/confirm", post_confirm, methods=["POST"])
+    app.add_api_route("/chat", post_chat, methods=["POST"])
     return app
 
 
@@ -256,6 +269,7 @@ def run_daemon(
     port: int,
     on_change: Any | None = None,
     on_confirm_answer: Any | None = None,
+    on_chat: Any | None = None,
 ) -> None:
     """Run the daemon server (blocking) on ``host:port``.
 
@@ -272,7 +286,9 @@ def run_daemon(
     # lifespan="off": we use no startup/shutdown events, and leaving it on emits a
     # noisy CancelledError traceback on Ctrl-C. KeyboardInterrupt is swallowed for
     # a clean exit.
-    app = create_app(bus, on_change=on_change, on_confirm_answer=on_confirm_answer)
+    app = create_app(
+        bus, on_change=on_change, on_confirm_answer=on_confirm_answer, on_chat=on_chat
+    )
     with contextlib.suppress(KeyboardInterrupt):
         uvicorn.run(app, host=host, port=port, log_level="warning", lifespan="off")
     print("\n[daemon] stopped.")
