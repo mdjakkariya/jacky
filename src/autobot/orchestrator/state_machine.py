@@ -15,6 +15,7 @@ import re
 import threading
 import time
 from collections.abc import Callable
+from typing import Any
 
 import numpy as np
 
@@ -303,6 +304,7 @@ class Orchestrator:
         transcript: Transcript | None = None,
         on_state: StateListener | None = _print_transition,
         memory: MemoryStore | None = None,
+        on_context: Callable[[dict[str, Any]], None] | None = None,
     ) -> None:
         self._settings = settings
         self._audio = audio
@@ -313,6 +315,8 @@ class Orchestrator:
         self._tts = tts
         self._transcript = transcript or NullTranscript()
         self._memory = memory
+        # Sink for per-turn context-window usage (drives the chat meter), if wired.
+        self._on_context = on_context
         self._sm = StateMachine(on_change=on_state)
         self._acknowledged = False  # spoke a filler this turn?
         self._dismissed = False  # did this turn call the dismiss tool ("go away")?
@@ -419,6 +423,16 @@ class Orchestrator:
         result = self._gate.execute(call)
         self._transcript.tool(call.name, call.arguments, result.ok, result.content)
         return result
+
+    def _emit_context(self) -> None:
+        """Publish this turn's context-window usage to the chat meter, if wired."""
+        if self._on_context is None:
+            return
+        usage = getattr(self._llm, "context_usage", None)
+        if callable(usage):
+            info = usage()
+            if info:
+                self._on_context(info)
 
     def _ack_for(self, call: ToolCall) -> str:
         """The spoken filler for a call: the tool's own ack, else a risk-based one.
@@ -700,6 +714,7 @@ class Orchestrator:
             _log.info("chat replied chars=%d latency_ms=%d", len(reply), elapsed_ms)
             self._transcript.assistant(reply)
             self._last_reply = reply
+            self._emit_context()  # update the chat context meter
             self._sm.reset(State.IDLE)
             return reply
         finally:

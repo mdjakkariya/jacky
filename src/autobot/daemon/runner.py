@@ -105,6 +105,9 @@ def serve(settings: Settings | None = None) -> None:
         orch = holder.get("orch")
         return bool(orch is not None and orch.in_chat_mode())  # type: ignore[union-attr]
 
+    def publish_context(info: dict[str, object]) -> None:
+        bus.publish_context(info, dev=settings.show_debug)
+
     orchestrator = build(
         settings,
         on_state=make_state_listener(bus, is_chat=_is_chat),
@@ -114,6 +117,7 @@ def serve(settings: Settings | None = None) -> None:
         on_confirm=bus.publish_confirm,
         on_confirm_clear=bus.publish_confirm_clear,
         poll_click=inbox.take,
+        on_context=publish_context,
     )
     holder["orch"] = orchestrator
     thread = threading.Thread(target=orchestrator.run, name="engine", daemon=True)

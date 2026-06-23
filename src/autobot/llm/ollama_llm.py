@@ -207,6 +207,7 @@ class OllamaLanguageModel:
         self._history: list[dict[str, Any]] = []
         self._summary = ""
         self._last_prompt_tokens = 0
+        self._last_eval_tokens = 0  # this turn's generated output (for the "This turn" line)
         self._context_tokens = self._resolve_context()
         _log.info("context window=%d tokens model=%s", self._context_tokens, settings.llm_model)
 
@@ -254,6 +255,7 @@ class OllamaLanguageModel:
         else:
             response = self._client.chat(**kwargs)
         self._last_prompt_tokens = int(_get(response, "prompt_eval_count") or 0)
+        self._last_eval_tokens = int(_get(response, "eval_count") or 0)
         return response
 
     def _assemble(self, user_msg: dict[str, Any]) -> list[dict[str, Any]]:
@@ -319,6 +321,23 @@ class OllamaLanguageModel:
         self._compact_if_needed(self._last_prompt_tokens, source="post-turn")
         self._report_usage()
         return reply
+
+    def context_usage(self) -> dict[str, Any] | None:
+        """Context-meter payload, or None pre-turn. Local has no prompt-cache billing,
+        so cache_read/write are None (the card hides those rows)."""
+        if not self._last_prompt_tokens or not self._context_tokens:
+            return None
+        return {
+            "used": self._last_prompt_tokens,
+            "window": self._context_tokens,
+            "cache_read": None,
+            "cache_write": None,
+            # Local has no prompt cache, so the whole prompt is processed each turn:
+            # "in" for the turn equals the prompt size.
+            "turn_in": self._last_prompt_tokens,
+            "turn_out": self._last_eval_tokens,
+            "model": self._settings.llm_model,
+        }
 
     def _report_usage(self) -> None:
         """Log/echo this turn's token usage for debugging."""

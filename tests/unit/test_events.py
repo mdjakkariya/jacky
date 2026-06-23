@@ -64,6 +64,36 @@ def test_publish_confirm_carries_mode_so_the_orb_can_ignore_chat_cards() -> None
     assert seen[-1] == {"type": "confirm", "text": "Empty the Trash?", "mode": "chat"}
 
 
+def test_publish_context_carries_pct_and_dev_flag() -> None:
+    bus = EventBus()
+    seen: list[dict[str, object]] = []
+    bus.subscribe(seen.append)
+    bus.publish_context(
+        {
+            "used": 50_000,
+            "window": 200_000,
+            "model": "claude-haiku-4-5",
+            "cache_read": 40_000,
+            "cache_write": 1_000,
+            "turn_in": 3_426,
+            "turn_out": 23,
+        },
+        dev=True,
+    )
+    assert seen[-1] == {
+        "type": "context",
+        "used": 50_000,
+        "window": 200_000,
+        "pct": 25,
+        "dev": True,
+        "model": "claude-haiku-4-5",
+        "cache_read": 40_000,
+        "cache_write": 1_000,
+        "turn_in": 3_426,
+        "turn_out": 23,
+    }
+
+
 def test_bus_broadcasts_state_to_subscribers_and_records_last() -> None:
     bus = EventBus()
     seen: list[dict[str, object]] = []

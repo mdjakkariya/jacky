@@ -16,9 +16,11 @@ from autobot.llm.anthropic_llm import (
     _first_pairing_problem,
     cloud_error_reply,
     estimate_cost_usd,
+    is_too_long_error,
     parse_tool_uses,
     text_from_content,
     to_anthropic_tools,
+    too_long_reply,
     trim_history,
     with_cache_breakpoint,
 )
@@ -182,6 +184,156 @@ def test_trim_history_starts_on_a_clean_user_turn() -> None:
     ]
     trimmed = trim_history(hist, 3)
     assert trimmed[0] == {"role": "user", "content": "next thing"}
+
+
+def test_is_too_long_error_matches_the_window_rejection() -> None:
+    assert is_too_long_error(RuntimeError("prompt is too long: 201704 tokens > 200000 maximum"))
+    assert not is_too_long_error(RuntimeError("Error code: 500 internal"))
+
+
+class _TooLongThenOk:
+    """Raises a 'prompt too long' error N times, then returns a normal response."""
+
+    def __init__(self, fail_times: int) -> None:
+        self.fail_times = fail_times
+        self.calls = 0
+
+    def create(self, **_kwargs: Any) -> Any:
+        self.calls += 1
+        if self.calls <= self.fail_times:
+            raise RuntimeError("prompt is too long: 250000 tokens > 200000 maximum")
+        return SimpleNamespace(
+            content=[_block(type="text", text="ok now")],
+            usage=SimpleNamespace(input_tokens=10, output_tokens=3),
+        )
+
+
+def test_recovers_from_prompt_too_long_by_trimming_and_retrying() -> None:
+    model = AnthropicLanguageModel(
+        Settings(llm_provider="anthropic"), _registry(), client=FakeClient([])
+    )
+    for i in range(6):  # several old turns to trim away
+        model._history.append({"role": "user", "content": f"old {i}"})
+        model._history.append({"role": "assistant", "content": [{"type": "text", "text": f"r{i}"}]})
+    msgs = _TooLongThenOk(fail_times=3)
+    model._client = SimpleNamespace(messages=msgs)
+
+    reply = model.run_turn("new question", lambda c: ToolResult(name=c.name, content=""))
+    assert reply == "ok now"  # recovered, not the error reply
+    assert msgs.calls == 4  # 3 rejections (each drops a turn) + 1 success
+    assert len(model._history) < 14  # oldest turns were trimmed away
+
+
+def test_proactive_trim_drops_a_giant_old_turn_before_sending() -> None:
+    responses = [
+        SimpleNamespace(
+            content=[_block(type="text", text="hi")],
+            usage=SimpleNamespace(input_tokens=10, output_tokens=2),
+        )
+    ]
+    model = AnthropicLanguageModel(
+        Settings(llm_provider="anthropic"), _registry(), client=FakeClient(responses)
+    )
+    model._history.append({"role": "user", "content": "x" * 1_000_000})  # ~250k tokens
+    model._history.append({"role": "assistant", "content": [{"type": "text", "text": "y"}]})
+
+    model.run_turn("hello", lambda c: ToolResult(name=c.name, content=""))
+    joined = "".join(str(m.get("content", "")) for m in model._history)
+    assert "x" * 1000 not in joined  # the giant turn was dropped to fit the window
+
+
+def test_window_resolves_per_model_and_override() -> None:
+    from autobot.llm.anthropic_llm import default_window_for, parse_window_limit
+
+    assert default_window_for("claude-haiku-4-5") == 200_000
+    assert default_window_for("some-unknown-future-model") == 200_000  # safe default
+    assert parse_window_limit(RuntimeError("prompt is too long: 40000 tokens > 32768 maximum")) == 32768
+    assert parse_window_limit(RuntimeError("nope")) is None
+    # Explicit settings override wins over the per-model default.
+    m = AnthropicLanguageModel(
+        Settings(anthropic_context_tokens=1_000_000), _registry(), client=FakeClient([])
+    )
+    assert m.context_window == 1_000_000
+
+
+def test_window_resolved_live_from_models_api() -> None:
+    # The Models API reports the real per-model limit, so a 1M model works with no
+    # code change; FakeClient (no .models) falls back to the per-model default.
+    class _Models:
+        def retrieve(self, _model: str) -> Any:
+            return SimpleNamespace(max_input_tokens=1_000_000)
+
+    client = SimpleNamespace(messages=FakeMessages([]), models=_Models())
+    m = AnthropicLanguageModel(Settings(llm_provider="anthropic"), _registry(), client=client)
+    assert m.context_window == 1_000_000
+
+
+def test_learns_smaller_window_from_error_then_fits() -> None:
+    # A model with a 32k window: first send is rejected; we learn 32768 from the
+    # error, trim, and the window adapts dynamically (no hardcoded 200k).
+    class _Small:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def create(self, **_kwargs: Any) -> Any:
+            self.calls += 1
+            if self.calls == 1:
+                raise RuntimeError("prompt is too long: 50000 tokens > 32768 maximum")
+            return SimpleNamespace(
+                content=[_block(type="text", text="ok")],
+                usage=SimpleNamespace(input_tokens=5, output_tokens=2),
+            )
+
+    model = AnthropicLanguageModel(
+        Settings(llm_provider="anthropic"), _registry(), client=FakeClient([])
+    )
+    for i in range(4):
+        model._history.append({"role": "user", "content": f"old {i}"})
+        model._history.append({"role": "assistant", "content": [{"type": "text", "text": "r"}]})
+    model._client = SimpleNamespace(messages=_Small())
+    reply = model.run_turn("hi", lambda c: ToolResult(name=c.name, content=""))
+    assert reply == "ok"
+    assert model.context_window == 32768  # learned from the rejection, not hardcoded
+
+
+def test_compaction_summarizes_older_turns_and_keeps_recent() -> None:
+    # When a turn's prompt crosses compact_at, older turns are summarized (kept in the
+    # system prompt) and the recent turns stay verbatim — instead of being dropped.
+    turn = SimpleNamespace(
+        content=[_block(type="text", text="ok")],
+        usage=SimpleNamespace(
+            input_tokens=3, output_tokens=2, cache_read_input_tokens=180_000, cache_creation_input_tokens=0
+        ),
+    )
+    summ = SimpleNamespace(
+        content=[_block(type="text", text="OLDER STUFF SUMMARY")],
+        usage=SimpleNamespace(input_tokens=5, output_tokens=3),
+    )
+    model = AnthropicLanguageModel(
+        Settings(llm_provider="anthropic"), _registry(), client=FakeClient([turn, summ])
+    )
+    for i in range(30):  # plenty of older turns to compact
+        model._history.append({"role": "user", "content": f"u{i}"})
+        model._history.append({"role": "assistant", "content": [{"type": "text", "text": f"a{i}"}]})
+
+    reply = model.run_turn("now", lambda c: ToolResult(name=c.name, content=""))
+    assert reply == "ok"
+    assert model._summary == "OLDER STUFF SUMMARY"  # older turns folded into a summary
+    assert len(model._history) <= 21  # only the recent tail kept verbatim
+    assert "OLDER STUFF SUMMARY" in model._system()  # summary injected into the system prompt
+
+
+def test_too_long_even_after_trim_returns_calm_reply_and_rolls_back() -> None:
+    class _AlwaysTooLong:
+        def create(self, **_kwargs: Any) -> Any:
+            raise RuntimeError("prompt is too long: 300000 tokens > 200000 maximum")
+
+    model = AnthropicLanguageModel(
+        Settings(llm_provider="anthropic"), _registry(), client=SimpleNamespace(messages=_AlwaysTooLong())
+    )
+    reply = model.run_turn("hi", lambda c: ToolResult(name=c.name, content=""))
+    assert reply == too_long_reply()
+    assert model._history == []  # the half-built turn was rolled back
 
 
 def test_run_turn_no_tools_returns_text() -> None:

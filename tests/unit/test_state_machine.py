@@ -145,6 +145,29 @@ def test_text_turn_returns_reply_runs_tool_and_stays_silent() -> None:
     assert orch.state is State.IDLE
 
 
+def test_chat_turn_emits_context_usage() -> None:
+    from autobot.orchestrator.wake_gate import PassThroughGate
+    from autobot.tts.null_tts import NullTTS
+
+    class _UsageLLM(_EchoLLM):
+        def context_usage(self) -> dict[str, object]:
+            return {"used": 12_000, "window": 200_000, "model": "m", "cache_read": 9_000, "cache_write": 0}
+
+    seen: list[dict[str, object]] = []
+    orch = Orchestrator(
+        settings=Settings(),
+        audio=_FakeAudio(),
+        stt=_FakeSTT("unused"),
+        llm=_UsageLLM(),
+        gate=_RecordingGate(),  # type: ignore[arg-type]
+        wake_gate=PassThroughGate(),
+        tts=NullTTS(),
+        on_context=seen.append,
+    )
+    orch.run_text_turn("hello")
+    assert seen == [{"used": 12_000, "window": 200_000, "model": "m", "cache_read": 9_000, "cache_write": 0}]
+
+
 def test_text_turn_ignores_blank_input() -> None:
     orch = _orchestrator("unused", _RecordingGate(), _RecordingTTS())
     assert orch.run_text_turn("   ") == ""

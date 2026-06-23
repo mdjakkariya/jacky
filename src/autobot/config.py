@@ -84,6 +84,11 @@ class Settings:
     ollama_host: str = _DEFAULT_OLLAMA_HOST
     anthropic_model: str = _DEFAULT_ANTHROPIC_MODEL
     anthropic_max_tokens: int = 512
+    # Cloud context window (prompt-token budget). 0 -> resolve from a per-model
+    # default and self-correct from the API's "… > N maximum" error, so a 200k,
+    # 1M, or smaller model is all handled without hand-tuning. Local (Ollama) is
+    # auto-detected separately via context_tokens.
+    anthropic_context_tokens: int = 0
     llm_temperature: float = 0.0
     llm_max_tokens: int = _DEFAULT_LLM_MAX_TOKENS
     # qwen3 reasoning. ON makes tool-calling far more reliable (the model decides

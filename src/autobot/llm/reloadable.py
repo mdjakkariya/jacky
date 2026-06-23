@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import threading
 from collections.abc import Callable
+from typing import Any
 
 from autobot.core.interfaces import LanguageModel
 from autobot.core.types import ToolExecutor
@@ -51,3 +52,8 @@ class ReloadableLanguageModel:
                 self._dirty = False
             inner = self._inner
         return inner.run_turn(user_text, execute)
+
+    def context_usage(self) -> dict[str, Any] | None:
+        """Delegate the context-meter usage to the active inner model (if it has it)."""
+        fn = getattr(self._inner, "context_usage", None)
+        return fn() if callable(fn) else None

@@ -136,6 +136,40 @@ class AmplitudeEvent:
         return {"type": "amplitude", "value": self.value}
 
 
+@dataclass(frozen=True, slots=True)
+class ContextEvent:
+    """Per-session context-window usage, for the chat meter.
+
+    ``used`` is the real prompt size (input + cached tokens), ``window`` the model's
+    limit. ``dev`` gates the detailed breakdown to dev builds. Sent after each turn.
+    """
+
+    used: int
+    window: int
+    dev: bool = False
+    model: str = ""
+    cache_read: int | None = None
+    cache_write: int | None = None
+    turn_in: int = 0
+    turn_out: int = 0
+
+    def message(self) -> dict[str, object]:
+        """Serialize to the wire shape clients consume."""
+        pct = round(100 * self.used / self.window) if self.window else 0
+        return {
+            "type": "context",
+            "used": self.used,
+            "window": self.window,
+            "pct": pct,
+            "dev": self.dev,
+            "model": self.model,
+            "cache_read": self.cache_read,
+            "cache_write": self.cache_write,
+            "turn_in": self.turn_in,
+            "turn_out": self.turn_out,
+        }
+
+
 Subscriber = Callable[[dict[str, object]], None]
 """Called with each event's wire message. Must not block (drop/queue instead)."""
 
@@ -208,6 +242,25 @@ class EventBus:
     def publish_confirm_clear(self) -> None:
         """Broadcast that the pending confirmation was resolved (hide the card)."""
         self._emit(ConfirmClearEvent().message())
+
+    def publish_context(self, info: dict[str, object], dev: bool = False) -> None:
+        """Broadcast this turn's context-window usage (drives the chat meter).
+
+        ``info`` is the model's :meth:`context_usage` payload: used, window, model,
+        and (cloud only) cache_read / cache_write.
+        """
+        self._emit(
+            ContextEvent(
+                used=int(info.get("used", 0) or 0),
+                window=int(info.get("window", 0) or 0),
+                dev=dev,
+                model=str(info.get("model", "") or ""),
+                cache_read=info.get("cache_read"),  # type: ignore[arg-type]
+                cache_write=info.get("cache_write"),  # type: ignore[arg-type]
+                turn_in=int(info.get("turn_in", 0) or 0),
+                turn_out=int(info.get("turn_out", 0) or 0),
+            ).message()
+        )
 
     def _emit(self, message: dict[str, object]) -> None:
         with self._lock:

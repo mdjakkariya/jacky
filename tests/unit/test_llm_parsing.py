@@ -130,6 +130,15 @@ def test_ollama_persists_tool_exchange_in_history() -> None:
     assert "tool" in roles  # the tool result is persisted, not dropped
     assert roles[0] == "user" and roles[-1] == "assistant"
 
+    # Local parity for the context meter: a usage payload with the local model and no
+    # cache billing (cache_read/write are None — the dev card hides those rows).
+    usage = m.context_usage()
+    assert usage["used"] == 120 and usage["window"] == 8192
+    assert usage["model"] == m._settings.llm_model
+    assert usage["cache_read"] is None and usage["cache_write"] is None
+    # "This turn": prompt size in, generated tokens out (local has no cache, so in == used).
+    assert usage["turn_in"] == 120 and usage["turn_out"] == 0
+
 
 def test_pick_context_length_finds_arch_specific_key() -> None:
     info = {"general.architecture": "qwen2", "qwen2.context_length": 32768, "x": 1}

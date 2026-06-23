@@ -300,6 +300,7 @@ def build(
     on_confirm: Callable[[str, bool], None] | None = None,
     on_confirm_clear: Callable[[], None] | None = None,
     poll_click: Callable[[], bool | None] | None = None,
+    on_context: Callable[[dict[str, object]], None] | None = None,
 ) -> Orchestrator:
     """Compose a fully wired :class:`Orchestrator`.
 
@@ -474,6 +475,7 @@ def build(
         transcript=transcript,
         on_state=on_state or _print_transition,
         memory=memory,
+        on_context=on_context,
     )
 
 

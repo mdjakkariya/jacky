@@ -22,7 +22,7 @@
   *{box-sizing:border-box}
   html,body{margin:0;height:100%}
   html{background:transparent}
-  body{background:var(--bg);color:var(--text);display:flex;flex-direction:column;height:100vh;
+  body{background:var(--bg);color:var(--text);display:flex;flex-direction:column;height:100vh;position:relative;
     border-radius:14px;overflow:hidden;border:.5px solid var(--line);
     font:13px/1.5 -apple-system,BlinkMacSystemFont,"SF Pro Text",system-ui,sans-serif;-webkit-font-smoothing:antialiased;}
   header{display:flex;align-items:center;justify-content:space-between;padding:10px 12px;border-bottom:.5px solid var(--line);cursor:grab;user-select:none;-webkit-user-select:none;}
@@ -31,11 +31,31 @@
   header .seg button{border:none;background:transparent;color:var(--muted);font-size:12px;padding:4px 10px;border-radius:6px;cursor:pointer;}
   header .seg button.on{background:var(--accent-bg);color:var(--accent);font-weight:500;}
   header .title{font-weight:500;font-size:14px;}
+  .ctx{display:none;align-items:center;gap:5px;margin-left:12px;-webkit-app-region:no-drag;}
+  .ctx.show{display:inline-flex;} .ctx svg{display:block;width:14px;height:14px;}
+  .ctx.dev{cursor:pointer;} .ctx .pct{font-size:11px;line-height:1;color:var(--muted);}
+  .ctx-detail{position:absolute;top:46px;left:12px;z-index:6;background:var(--panel);border:.5px solid var(--field-line);
+    border-radius:10px;padding:9px 11px;min-width:180px;box-shadow:0 6px 20px rgba(0,0,0,.35);}
+  .ctx-detail .t{display:flex;align-items:center;gap:6px;font-size:12px;font-weight:600;color:var(--text);margin-bottom:7px;}
+  .ctx-detail .t svg{width:14px;height:14px;flex:none;opacity:.85;}
+  .ctx-detail .r{display:flex;justify-content:space-between;font-size:11.5px;color:var(--muted);gap:14px;margin-top:3px;}
+  .ctx-detail .r b{font-weight:500;color:var(--text);font-variant-numeric:tabular-nums;}
+  .ctx-detail .note{font-size:11px;color:var(--muted);margin-top:8px;opacity:.8;}
   header .x{border:none;background:transparent;color:var(--muted);font-size:16px;cursor:pointer;-webkit-app-region:no-drag;}
   #log{flex:1;overflow-y:auto;padding:14px 12px;display:flex;flex-direction:column;gap:10px;}
+  #log > *{flex-shrink:0;}
   .msg{max-width:82%;font-size:15px;line-height:1.55;padding:10px 13px;border-radius:16px;white-space:pre-wrap;word-wrap:break-word;}
   .me{align-self:flex-end;background:var(--accent-bg);color:var(--accent);border-top-right-radius:4px;}
   .jack{align-self:flex-start;background:var(--bubble);color:var(--text);border-top-left-radius:4px;}
+  .msg.clamped{position:relative;max-height:150px;overflow:hidden;}
+  .msg.clamped::after{content:"";position:absolute;left:0;right:0;bottom:0;height:34px;pointer-events:none;
+    background:linear-gradient(transparent,rgba(0,0,0,.32));border-radius:0 0 16px 16px;}
+  .more{border:none;background:none;color:var(--accent);font-size:12px;cursor:pointer;padding:0 2px;margin-top:-3px;align-self:flex-end;}
+  .counter{position:absolute;top:-22px;left:50%;transform:translateX(-50%);font-size:11px;color:var(--muted);background:var(--panel);
+    border:.5px solid var(--field-line);border-radius:10px;padding:2px 8px;display:none;}
+  .counter.show{display:block;} .counter.warn{color:var(--danger);border-color:var(--danger);}
+  .jump{position:absolute;left:50%;transform:translateX(-50%);bottom:82px;width:32px;height:32px;border-radius:50%;border:.5px solid var(--field-line);
+    background:var(--panel);color:var(--text);font-size:16px;cursor:pointer;display:flex;align-items:center;justify-content:center;}
   .typing{align-self:flex-start;background:var(--bubble);border-radius:16px;border-top-left-radius:4px;
     padding:13px 14px;display:flex;align-items:center;gap:5px;}
   .typing span{width:7px;height:7px;border-radius:50%;background:var(--muted);display:inline-block;
@@ -49,7 +69,7 @@
   .confirm .row{display:flex;gap:8px;justify-content:flex-end;}
   .btn{font-size:12px;padding:5px 12px;border-radius:7px;border:.5px solid var(--field-line);background:transparent;color:var(--text);cursor:pointer;}
   .btn.danger{border-color:var(--danger);background:var(--danger-bg);color:var(--danger);}
-  footer{padding:12px 14px 14px;border-top:.5px solid var(--line);}
+  footer{padding:12px 14px 14px;border-top:.5px solid var(--line);position:relative;}
   .inbar{display:flex;align-items:center;gap:8px;background:var(--field);border:1px solid var(--field-line);border-radius:24px;padding:7px 7px 7px 18px;transition:border-color .15s;}
   .inbar:focus-within{border-color:var(--accent);}
   #box{flex:1;min-width:0;border:none;background:transparent;color:var(--text);font-size:15px;line-height:26px;resize:none;height:26px;min-height:26px;max-height:130px;outline:none;padding:0;margin:0;display:block;}
@@ -64,7 +84,11 @@
 <body>
   <header>
     <span class="title">Jack</span>
-    <div style="display:flex;align-items:center;gap:8px;">
+    <span id="ctx" class="ctx" aria-label="Context used">
+      <svg width="16" height="16" viewBox="0 0 36 36" aria-hidden="true"><circle cx="18" cy="18" r="15" fill="none" stroke="var(--field-line)" stroke-width="5"/><circle id="ctxArc" cx="18" cy="18" r="15" fill="none" stroke="#7fb87a" stroke-width="5" stroke-linecap="round" stroke-dasharray="94.2" stroke-dashoffset="94.2" transform="rotate(-90 18 18)"/></svg>
+      <span id="ctxPct" class="pct">0%</span>
+    </span>
+    <div style="display:flex;align-items:center;gap:8px;margin-left:auto;">
       <div class="seg">
         <button id="m-voice">Voice</button>
         <button id="m-chat" class="on">Chat</button>
@@ -72,12 +96,15 @@
       <button class="x" id="close" aria-label="Hide">✕</button>
     </div>
   </header>
+  <div id="ctxDetail" class="ctx-detail hidden"></div>
   <div id="log"></div>
+  <button id="jump" class="jump hidden" aria-label="Jump to latest">↓</button>
   <footer>
     <div class="inbar">
-      <textarea id="box" rows="1" placeholder="⌘⌃J summon · Esc to close"></textarea>
+      <textarea id="box" rows="1" maxlength="4000" placeholder="⌘⌃J summon · Esc to close"></textarea>
       <button id="send" aria-label="Send" disabled>↑</button>
     </div>
+    <div id="counter" class="counter"></div>
   </footer>
 <script>
 (function(){
@@ -86,10 +113,31 @@
   var $ = function(id){ return document.getElementById(id); };
   var log = $("log"), box = $("box"), send = $("send");
 
-  function scroll(){ log.scrollTop = log.scrollHeight; }
+  // Smart scroll: only follow new messages when already near the bottom, so reading
+  // history isn't yanked away. A "jump to latest" button appears when scrolled up.
+  var jump = $("jump");
+  function nearBottom(){ return log.scrollHeight - log.scrollTop - log.clientHeight < 80; }
+  function updateJump(){ jump.classList.toggle("hidden", nearBottom()); }
+  function toBottom(){ log.scrollTop = log.scrollHeight; updateJump(); }
+  function scroll(){ if(nearBottom()) log.scrollTop = log.scrollHeight; updateJump(); }
+
+  // Collapse very long messages behind a "Show more" so one big paste doesn't fill
+  // the whole drawer.
+  function clampIfLong(d, cls){
+    if(cls !== "me") return;  // only collapse long user pastes; never Jack's replies
+    if(d.scrollHeight <= 160) return;  // measure natural height first; short -> leave it
+    d.classList.add("clamped");
+    var b = document.createElement("button"); b.className = "more"; b.textContent = "Show more";
+    b.addEventListener("click", function(){
+      var clamped = d.classList.toggle("clamped");
+      b.textContent = clamped ? "Show more" : "Show less";
+      updateJump();
+    });
+    d.insertAdjacentElement("afterend", b);
+  }
   function bubble(cls, text){
     var d = document.createElement("div"); d.className = "msg " + cls; d.textContent = text;
-    log.appendChild(d); scroll(); return d;
+    log.appendChild(d); clampIfLong(d, cls); scroll(); return d;
   }
   // A single, shared typing indicator (never more than one).
   var typingEl = null;
@@ -109,8 +157,9 @@
   async function submit(){
     var text = box.value.trim();
     if(busy || !text) return;
-    box.value = ""; resize();
+    box.value = ""; resize(); updateCounter();
     bubble("me", text);
+    toBottom();
     lockInput(true);
     showTyping();
     try {
@@ -126,11 +175,23 @@
   }
 
   function resize(){ box.style.height = "26px"; box.style.height = Math.min(130, box.scrollHeight) + "px"; }
-  box.addEventListener("input", function(){ resize(); send.disabled = busy || !box.value.trim(); });
+  // Char counter: only appears as you approach the cap (the textarea's maxlength
+  // hard-stops at 4000), so a single paste can't blow past the model's context.
+  var MAXLEN = 4000, WARN_AT = 200, counter = $("counter");
+  function updateCounter(){
+    var left = MAXLEN - box.value.length;
+    if(left > WARN_AT){ counter.classList.remove("show"); return; }  // hidden until near the cap
+    counter.classList.add("show");
+    counter.classList.toggle("warn", left <= 0);
+    counter.textContent = left > 0 ? (left + " left") : "Limit reached";
+  }
+  box.addEventListener("input", function(){ resize(); updateCounter(); send.disabled = busy || !box.value.trim(); });
   box.addEventListener("keydown", function(e){
     if(e.key === "Enter" && !e.shiftKey){ e.preventDefault(); submit(); }
   });
   send.addEventListener("click", submit);
+  jump.addEventListener("click", toBottom);
+  log.addEventListener("scroll", updateJump);
 
   // Confirmation cards arrive over the WebSocket. The loading dots keep running
   // underneath (the turn is still in flight); the input stays locked, so the card's
@@ -155,6 +216,56 @@
     try { await fetch(API + "/confirm", {method:"POST", headers:{"content-type":"application/json"}, body: JSON.stringify({answer: ok})}); } catch(e){}
   }
 
+  // Per-session context meter in the header (percent ring; in dev builds, tap the
+  // ring to expand a detail card). Driven by the engine's "context" event each turn.
+  var CTX_CIRC = 94.2, lastCtx = null;
+  function renderContext(m){
+    var wrap = $("ctx"), arc = $("ctxArc"), pctEl = $("ctxPct");
+    if(!wrap) return;
+    lastCtx = m;
+    var p = Math.max(0, Math.min(100, Math.round(m.pct || 0)));
+    var c = p > 85 ? "var(--danger)" : (p > 60 ? "#e7b15a" : "#7fb87a");
+    wrap.classList.add("show");
+    wrap.classList.toggle("dev", !!m.dev);
+    arc.setAttribute("stroke", c);
+    arc.setAttribute("stroke-dashoffset", (CTX_CIRC * (1 - p / 100)).toFixed(1));
+    pctEl.textContent = p + "%";
+    pctEl.style.color = p > 85 ? "var(--danger)" : "var(--muted)";
+    wrap.title = "Context " + p + "% used this session" + (m.dev ? " — tap for detail" : "");
+    if(!$("ctxDetail").classList.contains("hidden")) renderCtxDetail();  // live-update if open
+  }
+  // Compact token counts: 36000 -> "36.0k", 200000 -> "200k", <1000 stays exact.
+  function fmtK(n){
+    n = n || 0;
+    if(n < 1000) return n.toLocaleString();
+    var k = n / 1000;
+    return (k >= 100 ? Math.round(k) : k.toFixed(1)) + "k";
+  }
+  // Friendlier model label: "claude-haiku-4-5" -> "haiku-4.5"; locals (e.g. qwen3:8b) pass through.
+  function fmtModel(m){ return (m || "—").replace(/^claude-/, "").replace(/-(\d+)-(\d+)$/, "-$1.$2"); }
+  var CTX_ICON = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 14l4-4"/><path d="M5.6 18.5a9 9 0 1 1 12.8 0"/></svg>';
+  function renderCtxDetail(){
+    var d = $("ctxDetail"); if(!lastCtx) return;
+    var p = Math.max(0, Math.min(100, Math.round(lastCtx.pct || 0)));
+    var rows = '<div class="t">' + CTX_ICON + '<span>Session context</span></div>'
+      + '<div class="r"><span>Used</span><b>' + fmtK(lastCtx.used) + ' / ' + fmtK(lastCtx.window) + '</b></div>'
+      + '<div class="r"><span>Window</span><b>' + p + '%</b></div>'
+      + '<div class="r"><span>This turn</span><b>' + fmtK(lastCtx.turn_in) + ' in · ' + fmtK(lastCtx.turn_out) + ' out</b></div>';
+    if(lastCtx.cache_read != null || lastCtx.cache_write != null){  // cloud only
+      rows += '<div class="r"><span>Cache read</span><b>' + fmtK(lastCtx.cache_read) + '</b></div>'
+        + '<div class="r"><span>Cache write</span><b>' + fmtK(lastCtx.cache_write) + '</b></div>';
+    }
+    rows += '<div class="r"><span>Model</span><b>' + fmtModel(lastCtx.model) + '</b></div>';
+    var note = p > 85 ? "Compacting soon." : (p > 60 ? "Filling up." : "Plenty of room.");
+    rows += '<div class="note">' + note + '</div>';
+    d.innerHTML = rows;
+  }
+  $("ctx").addEventListener("click", function(){
+    if(!lastCtx || !lastCtx.dev) return;  // detail is dev-only
+    var d = $("ctxDetail"), hidden = d.classList.toggle("hidden");
+    if(!hidden) renderCtxDetail();
+  });
+
   function connect(){
     try {
       var ws = new WebSocket(WS_URL);
@@ -162,6 +273,7 @@
         var m; try { m = JSON.parse(ev.data); } catch(e){ return; }
         if(m.type === "confirm") showConfirm(m.text);
         else if(m.type === "confirm_clear") clearConfirm();
+        else if(m.type === "context") renderContext(m);
       };
       ws.onclose = function(){ setTimeout(connect, 1500); };
     } catch(e){ setTimeout(connect, 1500); }
