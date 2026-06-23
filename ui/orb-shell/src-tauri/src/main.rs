@@ -72,6 +72,11 @@ fn open_chat(app: tauri::AppHandle) {
         let _ = app.set_activation_policy(tauri::ActivationPolicy::Regular);
         activate_app();
     }
+    // Chat and voice are one-at-a-time: hide the orb while the chat drawer is open
+    // (close_chat shows it again), so they never overlap.
+    with_orb(&app, |w| {
+        let _ = w.hide();
+    });
     if let Some(win) = app.get_webview_window("chat") {
         let _ = win.show();
         let _ = win.set_focus();
@@ -85,6 +90,7 @@ fn open_chat(app: tauri::AppHandle) {
         .inner_size(width, height)
         .resizable(true)
         .transparent(true)
+        .decorations(false)
         .always_on_top(true)
         .build()
     {
@@ -110,12 +116,16 @@ fn open_chat(app: tauri::AppHandle) {
     }
 }
 
-/// Hide the chat drawer and return to the background (accessory) presence.
+/// Hide the chat drawer, bring the orb back, and return to the background presence.
 #[tauri::command]
 fn close_chat(app: tauri::AppHandle) {
     if let Some(win) = app.get_webview_window("chat") {
         let _ = win.hide();
     }
+    // Switching back to voice: the orb must reappear (it was hidden for chat).
+    with_orb(&app, |w| {
+        let _ = w.show();
+    });
     #[cfg(target_os = "macos")]
     let _ = app.set_activation_policy(tauri::ActivationPolicy::Accessory);
 }

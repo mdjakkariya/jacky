@@ -479,6 +479,12 @@ class Orchestrator:
             self._set_awake(self._awake)
             self._sm.transition(State.LISTENING)
             audio = self._audio.record_clip()
+            # If we switched to chat mode while this capture was blocking, abandon the
+            # voice turn cleanly — a chat turn shares the state machine and may have
+            # reset it underneath us (otherwise: 'idle -> transcribing').
+            if self._mode == "chat":
+                self._sm.reset(State.IDLE)
+                return
             # When this utterance *began* — judge the follow-up window against speech
             # start, not end-of-capture, so a long phrase isn't dropped.
             started_at = getattr(self._audio, "last_speech_started_at", None)
