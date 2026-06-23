@@ -78,6 +78,22 @@
   #send{border:none;width:38px;height:38px;border-radius:50%;background:var(--accent);color:#fff;font-size:18px;display:inline-flex;align-items:center;justify-content:center;cursor:pointer;flex:none;transition:opacity .15s,transform .08s;}
   #send:disabled{opacity:.35;cursor:default;}
   #send:not(:disabled):active{transform:scale(.94);}
+  /* Fresh-session welcome: a greeting + tappable suggestion chips, so the first
+     thing you see isn't a blank pane. Removed the moment a message is sent. */
+  .empty{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;padding:32px 24px;}
+  .empty .mark{width:48px;height:48px;border-radius:50%;background:var(--accent-bg);display:flex;align-items:center;justify-content:center;margin-bottom:20px;}
+  .empty .mark svg{width:24px;height:24px;color:var(--accent);}
+  .empty h2{font-size:17px;font-weight:600;margin:0 0 8px;color:var(--text);}
+  .empty p{font-size:12.5px;color:var(--muted);line-height:1.5;max-width:230px;margin:0 0 32px;}
+  .empty-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px;width:100%;max-width:300px;}
+  .chip{display:flex;flex-direction:column;align-items:flex-start;background:var(--bubble);border:.5px solid var(--field-line);
+    border-radius:12px;padding:14px;text-align:left;cursor:pointer;color:var(--text);font:inherit;transition:border-color .12s,background .12s;}
+  .chip:hover{border-color:var(--accent);background:var(--accent-bg);}
+  .chip .ci{width:20px;height:20px;color:var(--accent);margin-bottom:11px;}
+  .chip .cl{display:-webkit-box;-webkit-line-clamp:2;line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;
+    width:100%;font-size:13px;font-weight:500;line-height:1.25;}
+  .chip .ce{display:block;width:100%;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
+    font-size:11.5px;color:var(--muted);margin-top:4px;line-height:1.25;}
   .hidden{display:none !important;}
 </style>
 </head>
@@ -97,7 +113,33 @@
     </div>
   </header>
   <div id="ctxDetail" class="ctx-detail hidden"></div>
-  <div id="log"></div>
+  <div id="log">
+    <div id="empty" class="empty">
+      <div class="mark" aria-hidden="true">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l1.6 4.4L18 9l-4.4 1.6L12 15l-1.6-4.4L6 9l4.4-1.6z"/><path d="M18 14l.8 2.2L21 17l-2.2.8L18 20l-.8-2.2L15 17l2.2-.8z"/></svg>
+      </div>
+      <h2>Hey, I'm Jack</h2>
+      <p>Your on-device assistant. Ask me anything, or start with one of these.</p>
+      <div class="empty-grid">
+        <button class="chip" data-send="Open GitHub in my browser">
+          <svg class="ci" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a14 14 0 0 1 0 18M12 3a14 14 0 0 0 0 18"/></svg>
+          <span class="cl">Open a website</span><span class="ce">"open GitHub"</span>
+        </button>
+        <button class="chip" data-send="How's my battery?">
+          <svg class="ci" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="8" width="15" height="8" rx="2"/><path d="M21 11v2"/><path d="M7 11v2M10 11v2"/></svg>
+          <span class="cl">Check my system</span><span class="ce">"how's my battery?"</span>
+        </button>
+        <button class="chip" data-send="Remember that I prefer concise answers">
+          <svg class="ci" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 4h12a1 1 0 0 1 1 1v15l-7-4-7 4V5a1 1 0 0 1 1-1z"/></svg>
+          <span class="cl">In memory</span><span class="ce">"remember a fact"</span>
+        </button>
+        <button class="chip" data-send="Search the web for what's new in AI">
+          <svg class="ci" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg>
+          <span class="cl">Search the web</span><span class="ce">"what's new in…"</span>
+        </button>
+      </div>
+    </div>
+  </div>
   <button id="jump" class="jump hidden" aria-label="Jump to latest">↓</button>
   <footer>
     <div class="inbar">
@@ -135,10 +177,22 @@
     });
     d.insertAdjacentElement("afterend", b);
   }
+  // The fresh-session welcome lives in #log; drop it as soon as the conversation
+  // starts (a bubble or the typing indicator), and bring it back if the log empties.
+  function removeEmpty(){ var e = $("empty"); if(e) e.remove(); }
   function bubble(cls, text){
+    removeEmpty();
     var d = document.createElement("div"); d.className = "msg " + cls; d.textContent = text;
     log.appendChild(d); clampIfLong(d, cls); scroll(); return d;
   }
+  // Tap a suggestion chip to send its example prompt.
+  Array.prototype.forEach.call(document.querySelectorAll(".chip"), function(chip){
+    chip.addEventListener("click", function(){
+      if(busy) return;
+      box.value = chip.getAttribute("data-send") || "";
+      resize(); updateCounter(); submit();
+    });
+  });
   // A single, shared typing indicator (never more than one).
   var typingEl = null;
   function showTyping(){ if(!typingEl){ typingEl = document.createElement("div"); typingEl.className = "typing"; typingEl.setAttribute("aria-label", "Jack is typing"); typingEl.innerHTML = "<span></span><span></span><span></span>"; log.appendChild(typingEl); } scroll(); }
