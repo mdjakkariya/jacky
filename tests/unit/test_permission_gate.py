@@ -34,6 +34,39 @@ def _gate_with(tool: _SpyTool, name: str, confirmer: object) -> tuple[Permission
     return gate, audit
 
 
+class _RecordingConfirmer:
+    """Captures the prompt it's asked to confirm; always declines."""
+
+    def __init__(self) -> None:
+        self.prompts: list[str] = []
+
+    def confirm(self, prompt: str) -> bool:
+        self.prompts.append(prompt)
+        return False
+
+
+def test_confirm_prompt_is_friendly_and_names_the_target() -> None:
+    tool = _SpyTool(Risk.DESTRUCTIVE)
+    confirmer = _RecordingConfirmer()
+    gate, _ = _gate_with(tool, "delete_file", confirmer)
+    gate.execute(ToolCall(name="delete_file", arguments={"path": "notes.txt"}))
+    (prompt,) = confirmer.prompts
+    assert "notes.txt" in prompt  # the actual target, not a generic line
+    assert "delete_file" not in prompt and "DESTRUCTIVE" not in prompt  # no jargon
+    assert "{" not in prompt  # never a raw args dict
+    assert not tool.ran  # declined -> not executed
+
+
+def test_generic_confirm_prompt_has_no_jargon() -> None:
+    tool = _SpyTool(Risk.DESTRUCTIVE)
+    confirmer = _RecordingConfirmer()
+    gate, _ = _gate_with(tool, "some_tool", confirmer)
+    gate.execute(ToolCall(name="some_tool", arguments={"x": 1}))
+    (prompt,) = confirmer.prompts
+    assert "some_tool" not in prompt and "DESTRUCTIVE" not in prompt
+    assert "x: 1" in prompt  # the argument is spelled out readably
+
+
 def _gate_requiring(tool: _SpyTool, perm: str, status: str, opened: list[str]) -> PermissionGate:
     registry = ToolRegistry()
     registry.register(

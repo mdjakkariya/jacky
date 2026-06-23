@@ -97,6 +97,36 @@ def test_pipertts_routes_audio_to_injected_player() -> None:
     assert isinstance(SoundDevicePlayer(), AudioPlayer)
 
 
+def test_strip_for_speech_removes_emoji_but_keeps_words() -> None:
+    from autobot.tts.piper_tts import _strip_for_speech
+
+    assert _strip_for_speech("🗑️ Empty the Trash?") == "Empty the Trash?"
+    assert _strip_for_speech("🔐 Grant access ✅") == "Grant access"
+    assert _strip_for_speech("plain text") == "plain text"
+    # An emoji-only string speaks nothing (so speak() short-circuits).
+    assert _strip_for_speech("👍🎉") == ""
+
+
+def test_speak_strips_emoji_before_synthesis() -> None:
+    from autobot.tts.piper_tts import PiperTTS
+
+    seen: list[str] = []
+
+    class _RecordingVoice:
+        def synthesize(self, text: str) -> object:
+            seen.append(text)
+            return iter([_Chunk(np.array([1], dtype=np.int16), 22_050)])
+
+    tts = object.__new__(PiperTTS)
+    tts._voice = cast(Any, _RecordingVoice())
+    tts._player = cast(Any, _FakePlayer())
+    tts._on_level = None
+    tts._cancel = threading.Event()
+
+    tts.speak("🗑️ Empty the Trash?")
+    assert seen == ["Empty the Trash?"]  # emoji never reached the synthesizer
+
+
 def test_plays_to_completion_when_not_cancelled() -> None:
     audio = np.zeros(16_000, dtype=np.int16)  # 1s @ 16k
     stream = _FakeStream()

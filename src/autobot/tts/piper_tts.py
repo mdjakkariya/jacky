@@ -9,6 +9,7 @@ class with the same :meth:`speak` method — nothing else changes.
 
 from __future__ import annotations
 
+import re
 import threading
 from pathlib import Path
 from typing import Any, Protocol, runtime_checkable
@@ -22,6 +23,22 @@ from autobot.io.endpointing import rms_level
 from autobot.logging_setup import get_logger
 
 _log = get_logger("tts")
+
+# Emoji and other pictographs read fine in chat but make Piper stumble (or voice a
+# literal name). Strip them before synthesis so the same text can be friendly on
+# screen and clean when spoken.
+_EMOJI = re.compile(
+    "[\U0001f000-\U0001faff"  # emoji & pictographs
+    "\U00002600-\U000027bf"  # misc symbols & dingbats
+    "\U00002190-\U000021ff"  # arrows
+    "\U00002300-\U000023ff"  # technical (incl. ⏳ ⌀)
+    "\U0000fe0f\U0000200d]"  # variation selector + zero-width joiner
+)
+
+
+def _strip_for_speech(text: str) -> str:
+    """Remove emoji/pictographs and tidy whitespace so TTS speaks clean prose."""
+    return re.sub(r"\s{2,}", " ", _EMOJI.sub("", text)).strip()
 
 
 @runtime_checkable
@@ -122,7 +139,8 @@ class PiperTTS:
 
     def speak(self, text: str) -> None:
         """Synthesize ``text`` and play it; interruptible via :meth:`stop`."""
-        if not text.strip():
+        text = _strip_for_speech(text)
+        if not text:
             return
         self._cancel.clear()  # fresh reply — clear any leftover interrupt
         # piper>=1.2: synthesize() yields one AudioChunk per sentence, each with

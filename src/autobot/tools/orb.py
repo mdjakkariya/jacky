@@ -43,5 +43,6 @@ def register_orb_tools(registry: ToolRegistry, hide: Callable[[], None]) -> None
             parameters={"type": "object", "properties": {}},
             handler=dismiss,
             risk=Risk.WRITE,
+            ack="",  # silent — the warm goodbye reply is the response, not a filler
         )
     )

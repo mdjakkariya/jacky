@@ -35,7 +35,13 @@
   .msg{max-width:82%;font-size:15px;line-height:1.55;padding:10px 13px;border-radius:16px;white-space:pre-wrap;word-wrap:break-word;}
   .me{align-self:flex-end;background:var(--accent-bg);color:var(--accent);border-top-right-radius:4px;}
   .jack{align-self:flex-start;background:var(--bubble);color:var(--text);border-top-left-radius:4px;}
-  .typing{align-self:flex-start;color:var(--muted);font-size:12px;padding:4px 2px;}
+  .typing{align-self:flex-start;background:var(--bubble);border-radius:16px;border-top-left-radius:4px;
+    padding:13px 14px;display:flex;align-items:center;gap:5px;}
+  .typing span{width:7px;height:7px;border-radius:50%;background:var(--muted);display:inline-block;
+    animation:tdot 1.3s infinite ease-in-out;}
+  .typing span:nth-child(2){animation-delay:.18s;}
+  .typing span:nth-child(3){animation-delay:.36s;}
+  @keyframes tdot{0%,70%,100%{transform:translateY(0);opacity:.35;}35%{transform:translateY(-5px);opacity:1;}}
   .confirm{align-self:stretch;background:var(--panel);border:.5px solid var(--field-line);border-radius:8px;padding:11px 12px;}
   .confirm .h{display:flex;align-items:center;gap:6px;font-size:12.5px;font-weight:500;color:var(--danger);margin-bottom:4px;}
   .confirm .b{font-size:12.5px;color:var(--muted);line-height:1.5;margin-bottom:10px;}
@@ -84,7 +90,9 @@
     log.appendChild(d); scroll(); return d;
   }
   function typing(){
-    var d = document.createElement("div"); d.className = "typing"; d.textContent = "Jack is thinking…";
+    var d = document.createElement("div"); d.className = "typing";
+    d.setAttribute("aria-label", "Jack is typing");
+    d.innerHTML = "<span></span><span></span><span></span>";
     log.appendChild(d); scroll(); return d;
   }
 
@@ -114,10 +122,10 @@
   // Confirmation cards arrive over the WebSocket (same events the orb uses).
   function showConfirm(prompt){
     var card = document.createElement("div"); card.className = "confirm"; card.id = "confirm-card";
-    card.innerHTML = '<div class="h">Confirm action</div><div class="b"></div>'
+    card.innerHTML = '<div class="h">⚠️ Just checking</div><div class="b"></div>'
       + '<div class="row"><button class="btn" data-a="0">Cancel</button>'
-      + '<button class="btn danger" data-a="1">Proceed</button></div>';
-    card.querySelector(".b").textContent = prompt || "Proceed with this action?";
+      + '<button class="btn danger" data-a="1">Yes, do it</button></div>';
+    card.querySelector(".b").textContent = prompt || "Do you want me to go ahead with this?";
     card.querySelectorAll("button").forEach(function(b){
       b.addEventListener("click", function(){
         answer(b.getAttribute("data-a") === "1"); card.remove();
@@ -135,7 +143,7 @@
       var ws = new WebSocket(WS_URL);
       ws.onmessage = function(ev){
         var m; try { m = JSON.parse(ev.data); } catch(e){ return; }
-        if(m.type === "confirm") showConfirm(m.prompt);
+        if(m.type === "confirm") showConfirm(m.text);
         else if(m.type === "confirm_clear") clearConfirm();
       };
       ws.onclose = function(){ setTimeout(connect, 1500); };
@@ -143,23 +151,40 @@
   }
   connect();
 
-  // Mode switch: persist interaction_mode; switching to Voice closes the drawer.
+  // Engine interaction_mode tracks the drawer: chat while it's open (so the voice
+  // loop idles and the confirmer is click-only), voice once it closes (so the orb
+  // listens again). This is what stops the voice loop and a chat turn from both
+  // grabbing the mic at once.
   async function setMode(mode){
     try {
       await fetch(API + "/settings", {method:"POST", headers:{"content-type":"application/json"}, body: JSON.stringify({interaction_mode: mode})});
     } catch(e){}
-    if(mode === "voice"){ closeDrawer(); }
   }
-  $("m-voice").addEventListener("click", function(){ setMode("voice"); });
-  $("m-chat").addEventListener("click", function(){ setMode("chat"); });
 
-  function closeDrawer(){
+  // Restore voice mode *before* the orb comes back, then hide the drawer.
+  async function closeDrawer(){
+    await setMode("voice");
     if(window.__TAURI__ && window.__TAURI__.core){
       window.__TAURI__.core.invoke("close_chat").catch(function(){});
     }
   }
+
+  $("m-voice").addEventListener("click", closeDrawer);
+  $("m-chat").addEventListener("click", function(){ setMode("chat"); });
   $("close").addEventListener("click", closeDrawer);
 
+  // Opening the drawer = entering chat mode (pauses the voice loop). Re-assert on
+  // focus too, in case a mode POST was missed while the window was hidden.
+  setMode("chat");
+  window.addEventListener("focus", function(){ setMode("chat"); });
+  // If the window goes away by any route (OS close, reload), restore voice so the
+  // orb starts listening again — keepalive lets the request finish during unload.
+  window.addEventListener("pagehide", function(){
+    try {
+      fetch(API + "/settings", {method:"POST", headers:{"content-type":"application/json"},
+        body: JSON.stringify({interaction_mode:"voice"}), keepalive:true});
+    } catch(e){}
+  });
   box.focus();
 })();
 </script>

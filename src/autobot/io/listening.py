@@ -23,6 +23,7 @@ are injected (see :class:`FrameSource`), so the loop is tested with fakes.
 from __future__ import annotations
 
 import queue
+import threading
 import time
 from collections.abc import Callable, Iterator, Sequence
 from typing import Protocol, runtime_checkable
@@ -221,6 +222,9 @@ class WakeWordVadRecorder:
         self._awake = False
         self._reload = reload
         self._frames: Iterator[AudioClip] | None = None
+        # Serialise frame pulls: the one source generator must only ever be advanced
+        # by one thread at a time, or CPython raises "generator already executing".
+        self._frames_lock = threading.Lock()
         self._max_wait_frames = max(1, round(_MAX_WAIT_FOR_SPEECH_S * 1000 / _FRAME_MS))
         self._refresh_tunables()
         # After a turn we stay "open" for a follow-up without the wake word.
@@ -254,9 +258,10 @@ class WakeWordVadRecorder:
 
     def _next_frame(self) -> AudioClip | None:
         """Pull the next frame from the (persistent) source, or ``None`` if ended."""
-        if self._frames is None:
-            self._frames = iter(self._source.frames())
-        return next(self._frames, None)
+        with self._frames_lock:
+            if self._frames is None:
+                self._frames = iter(self._source.frames())
+            return next(self._frames, None)
 
     def _mark_speech_start(self) -> None:
         self._last_speech_started_at = time.monotonic()
@@ -435,6 +440,9 @@ class VadRecorder:
         self._awake = False
         self._reload = reload
         self._frames: Iterator[AudioClip] | None = None
+        # Serialise frame pulls (see WakeWordVadRecorder): one thread at a time, or
+        # CPython raises "generator already executing".
+        self._frames_lock = threading.Lock()
         self._last_speech_started_at: float | None = None
         self._refresh_tunables()
 
@@ -483,9 +491,10 @@ class VadRecorder:
         self._vad.reset()
 
     def _next_frame(self) -> AudioClip | None:
-        if self._frames is None:
-            self._frames = iter(self._source.frames())
-        return next(self._frames, None)
+        with self._frames_lock:
+            if self._frames is None:
+                self._frames = iter(self._source.frames())
+            return next(self._frames, None)
 
     def record_clip(self) -> AudioClip:
         """Wait for the next spoken phrase and return it (VAD-delimited)."""

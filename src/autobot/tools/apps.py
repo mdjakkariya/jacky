@@ -349,6 +349,7 @@ class AppTools:
                 parameters=name_param,
                 handler=self.open_app,
                 risk=Risk.WRITE,
+                ack="Opening {target}.",
             ),
             ToolSpec(
                 name="open_website",
@@ -371,6 +372,7 @@ class AppTools:
                 },
                 handler=self.open_website,
                 risk=Risk.WRITE,
+                ack="Opening {target}.",
             ),
             ToolSpec(
                 name="close_website",
@@ -394,6 +396,7 @@ class AppTools:
                 handler=self.close_website,
                 risk=Risk.WRITE,
                 requires=AUTOMATION,
+                ack="Closing {target}.",
             ),
             ToolSpec(
                 name="focus_app",
@@ -405,6 +408,7 @@ class AppTools:
                 parameters=name_param,
                 handler=self.focus_app,
                 risk=Risk.WRITE,
+                ack="Switching to {target}.",
             ),
             ToolSpec(
                 name="hide_app",
@@ -413,6 +417,7 @@ class AppTools:
                 handler=self.hide_app,
                 risk=Risk.WRITE,
                 requires=AUTOMATION,
+                ack="Hiding {target}.",
             ),
             ToolSpec(
                 name="minimize_app",
@@ -421,6 +426,7 @@ class AppTools:
                 handler=self.minimize_app,
                 risk=Risk.WRITE,
                 requires=AUTOMATION,
+                ack="Minimizing {target}.",
             ),
             ToolSpec(
                 name="maximize_app",
@@ -429,6 +435,7 @@ class AppTools:
                 handler=self.maximize_app,
                 risk=Risk.WRITE,
                 requires=AUTOMATION,
+                ack="Maximizing {target}.",
             ),
             ToolSpec(
                 name="quit_app",
@@ -442,6 +449,7 @@ class AppTools:
                 handler=self.quit_app,
                 risk=Risk.WRITE,
                 requires=AUTOMATION,
+                ack="Closing {target}.",
             ),
             ToolSpec(
                 name="list_apps",
@@ -461,6 +469,7 @@ class AppTools:
                 handler=self.uninstall_app,
                 risk=Risk.DESTRUCTIVE,
                 requires=AUTOMATION,
+                ack="Removing {target}.",
             ),
         ]
 

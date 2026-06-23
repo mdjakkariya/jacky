@@ -90,6 +90,16 @@ class PermissionGate:
         spec = self._registry.get(name)
         return spec.risk if spec is not None else None
 
+    def ack_of(self, name: str) -> str | None:
+        """This tool's spoken-ack hint: text, ``""`` (silent), or ``None`` (use a pool).
+
+        Lets the orchestrator say something that fits the action ("Opening that")
+        rather than a generic risk-based filler — and stay quiet for tools like
+        dismiss where a filler would be jarring.
+        """
+        spec = self._registry.get(name)
+        return spec.ack if spec is not None else None
+
     def execute(self, call: ToolCall) -> ToolResult:
         """Run one tool call through the gate; see the module docstring for policy."""
         spec = self._registry.get(call.name)
@@ -185,5 +195,24 @@ class PermissionGate:
 
     @staticmethod
     def _format_prompt(name: str, risk: Risk, arguments: dict[str, object]) -> str:
-        """Build the human-readable confirmation prompt for a risky call."""
-        return f"⚠ '{name}' ({risk.name}) will run with {arguments}. Proceed?"
+        """Build a clear, human-readable confirmation prompt for a risky call.
+
+        Plain language about *what* will happen (with the actual target), so the
+        person can decide — never the tool name, risk enum, or a raw args dict.
+        Emoji are decorative on screen and stripped before the prompt is spoken.
+        """
+        if name == "delete_file":
+            target = str(arguments.get("path", "this file"))
+            return f"🗑️ Delete “{target}”? This permanently removes it — it can't be undone."
+        if name == "uninstall_app":
+            target = str(arguments.get("name", "this app"))
+            return f"🗑️ Uninstall {target}? It'll be moved to the Trash."
+        if name == "move_file":
+            src = str(arguments.get("source", "a file"))
+            dst = str(arguments.get("destination", "a new location"))
+            return f"📦 Move “{src}” to “{dst}”?"
+        # Generic fallback — readable, with the targets spelled out.
+        detail = ", ".join(f"{k}: {v}" for k, v in arguments.items())
+        suffix = f" ({detail})" if detail else ""
+        verb = "permanently change things on" if risk is Risk.DESTRUCTIVE else "make changes to"
+        return f"⚠️ This will {verb} your Mac{suffix}. Want me to go ahead?"

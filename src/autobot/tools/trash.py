@@ -67,6 +67,7 @@ def register_trash_tools(registry: ToolRegistry, runner: Runner | None = None) -
             parameters={"type": "object", "properties": {}},
             handler=lambda: empty_trash(runner),
             risk=Risk.DESTRUCTIVE,
-            confirm_prompt="Empty the Trash? This permanently deletes everything in it.",
+            confirm_prompt="🗑️ Empty the Trash? This permanently deletes everything in it.",
+            ack="Emptying the Trash.",
         )
     )

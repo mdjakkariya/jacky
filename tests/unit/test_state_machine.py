@@ -393,6 +393,194 @@ def test_no_barge_in_when_input_is_not_echo_cancelled() -> None:
     assert orch._pending_audio is None
 
 
+def test_voice_and_chat_turns_do_not_interleave_state() -> None:
+    """A chat turn arriving mid voice-turn must wait, not corrupt the state machine.
+
+    Regression for the cross-thread crashes ("listening -> executing",
+    "planning -> transcribing"): the voice loop and a chat turn share one state
+    machine, so they must run one at a time under the turn lock.
+    """
+    import threading
+
+    from autobot.orchestrator.wake_gate import PassThroughGate
+    from autobot.tts.null_tts import NullTTS
+
+    entered = threading.Event()  # the voice turn is parked inside the LLM call
+    release = threading.Event()  # let the voice turn finish
+
+    class _BlockingLLM:
+        def run_turn(self, user_text: str, execute) -> str:  # type: ignore[no-untyped-def]
+            execute(ToolCall(name="create_file", arguments={"path": "x"}))
+            entered.set()
+            release.wait(timeout=5)
+            return user_text
+
+    orch = Orchestrator(
+        settings=Settings(),
+        audio=_FakeAudio(),
+        stt=_FakeSTT("open spotify"),
+        llm=_BlockingLLM(),
+        gate=_RecordingGate(),  # type: ignore[arg-type]
+        wake_gate=PassThroughGate(),
+        tts=NullTTS(),
+    )
+
+    errors: list[BaseException] = []
+
+    def voice() -> None:
+        try:
+            orch.run_once()
+        except BaseException as exc:  # noqa: BLE001 - record for the assertion
+            errors.append(exc)
+
+    chat_reply: list[str] = []
+
+    def chat() -> None:
+        try:
+            chat_reply.append(orch.run_text_turn("hello from chat"))
+        except BaseException as exc:  # noqa: BLE001
+            errors.append(exc)
+
+    vt = threading.Thread(target=voice)
+    vt.start()
+    assert entered.wait(timeout=5), "voice turn never reached the LLM call"
+
+    # The voice turn now holds the turn lock; a chat turn must block, not interleave.
+    ct = threading.Thread(target=chat)
+    ct.start()
+    ct.join(timeout=0.3)
+    assert ct.is_alive(), "chat turn ran while a voice turn held the lock"
+
+    release.set()  # let the voice turn finish; the chat turn then proceeds
+    vt.join(timeout=5)
+    ct.join(timeout=5)
+
+    assert not errors, f"turns crashed: {errors}"
+    assert chat_reply == ["hello from chat"]
+    assert orch.state is State.IDLE
+
+
+class _AckGate(_RecordingGate):
+    """A gate that also exposes per-tool ack hints (like the real PermissionGate)."""
+
+    def __init__(self, acks: dict[str, str]) -> None:
+        super().__init__()
+        self._acks = acks
+
+    def ack_of(self, name: str) -> str | None:
+        return self._acks.get(name)
+
+
+def test_format_ack_fills_or_drops_the_target() -> None:
+    from autobot.orchestrator.state_machine import _format_ack
+
+    assert _format_ack("Opening {target}.", {"name": "Spotify"}) == "Opening Spotify."
+    assert _format_ack("Opening {target}.", {}) == "Opening that."  # no arg -> generic
+    assert _format_ack("Emptying the Trash.", {}) == "Emptying the Trash."  # no placeholder
+
+
+def test_ack_uses_the_tools_own_phrase_with_the_argument() -> None:
+    tts = _RecordingTTS()
+    gate = _AckGate({"create_file": "Opening {target}."})
+    orch = _orchestrator("create a file", gate, tts)
+    orch.run_once()
+    assert "Opening x." in tts.spoken  # the tool's ack, filled with its path arg
+
+
+def test_silent_ack_speaks_no_filler() -> None:
+    tts = _RecordingTTS()
+    gate = _AckGate({"create_file": ""})  # explicitly silent, like dismiss
+    orch = _orchestrator("create a file", gate, tts)
+    orch.run_once()
+    assert tts.spoken == ["done: ok"]  # only the reply — no filler ack before it
+
+
+class _DismissLLM:
+    """Runs the dismiss tool, then returns no text (as the model sometimes does)."""
+
+    def run_turn(self, user_text: str, execute) -> str:  # type: ignore[no-untyped-def]
+        execute(ToolCall(name="dismiss", arguments={}))
+        return ""
+
+
+def _chat_orch(llm: object) -> Orchestrator:
+    from autobot.orchestrator.wake_gate import PassThroughGate
+    from autobot.tts.null_tts import NullTTS
+
+    return Orchestrator(
+        settings=Settings(),
+        audio=_FakeAudio(),
+        stt=_FakeSTT("unused"),
+        llm=llm,  # type: ignore[arg-type]
+        gate=_RecordingGate(),  # type: ignore[arg-type]
+        wake_gate=PassThroughGate(),
+        tts=NullTTS(),
+    )
+
+
+def test_chat_turn_never_returns_empty_reply() -> None:
+    # dismiss with no trailing text -> a warm goodbye, not an empty bubble.
+    assert _chat_orch(_DismissLLM()).run_text_turn("go away") == "Talk soon! 👋"
+
+    class _SilentLLM:
+        def run_turn(self, user_text: str, execute) -> str:  # type: ignore[no-untyped-def]
+            return ""
+
+    # A non-dismiss empty reply -> a neutral acknowledgement.
+    assert _chat_orch(_SilentLLM()).run_text_turn("hi") == "Done. ✅"
+
+
+def test_typing_forces_chat_mode_and_silences_voice() -> None:
+    # Regression: chat + voice ran at once because the engine stayed in voice mode
+    # while the drawer was open. Typing must force chat mode and cut off any spoken
+    # reply, so the mic loop goes quiet immediately — independent of the UI's POST.
+    tts = _RecordingTTS()
+    orch = _orchestrator("unused", _RecordingGate(), tts)
+    orch._mode = "voice"  # as if the open-mode POST was missed
+    orch.run_text_turn("hey")
+    assert orch._mode == "chat"  # forced by the act of typing
+    assert tts.stopped is True  # any in-progress voice reply was interrupted
+
+
+def test_mode_toggle_does_not_reload_models(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    from autobot.orchestrator import state_machine as sm
+    from autobot.orchestrator.wake_gate import PassThroughGate
+    from autobot.tts.null_tts import NullTTS
+
+    calls = {"llm": 0, "stt": 0}
+
+    class _ReloadLLM(_ToolingLLM):
+        def mark_dirty(self) -> None:
+            calls["llm"] += 1
+
+    class _ReloadSTT(_FakeSTT):
+        def mark_dirty(self) -> None:
+            calls["stt"] += 1
+
+    orch = Orchestrator(
+        settings=Settings(),
+        audio=_FakeAudio(),
+        stt=_ReloadSTT("x"),
+        llm=_ReloadLLM(),
+        gate=_RecordingGate(),  # type: ignore[arg-type]
+        wake_gate=PassThroughGate(),
+        tts=NullTTS(),
+    )
+
+    # Mode-only change (drawer open/close): switch the mode, reload nothing.
+    monkeypatch.setattr(sm.Settings, "load", lambda: Settings(interaction_mode="chat"))
+    orch.mark_settings_changed()
+    assert calls == {"llm": 0, "stt": 0}
+    assert orch._mode == "chat"
+
+    # A real model change reloads just the LLM.
+    monkeypatch.setattr(
+        sm.Settings, "load", lambda: Settings(interaction_mode="chat", anthropic_model="claude-x")
+    )
+    orch.mark_settings_changed()
+    assert calls == {"llm": 1, "stt": 0}
+
+
 def test_ack_phrase_maps_risk_to_the_right_pool() -> None:
     from autobot.orchestrator.state_machine import (
         _CONFIRMING_ACKS,

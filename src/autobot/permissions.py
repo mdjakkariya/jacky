@@ -185,6 +185,6 @@ def needed_message(key: str) -> str:
     """The spoken reply when a tool is blocked by a missing permission."""
     label = _LABEL.get(key, key)
     return (
-        f"I don't have {label} permission yet, so I can't do that. I've opened the "
-        f"right Settings pane — switch it on for Jack and ask me again."
+        f"🔐 I don't have {label} permission yet, so I can't do that just yet. I've "
+        f"opened the right Settings pane for you — flip it on for Jack and ask me again!"
     )

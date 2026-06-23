@@ -272,6 +272,22 @@ def _ack_phrase(risk: Risk | None) -> str:
     return random.choice(pool)
 
 
+def _format_ack(template: str, arguments: dict[str, object]) -> str:
+    """Fill a tool's ack ``{target}`` with the call's main argument, or drop it.
+
+    "Opening {target}." + ``{"name": "Spotify"}`` → "Opening Spotify."; with no
+    usable argument it reads "Opening that." An empty template stays empty (silent).
+    """
+    if "{target}" not in template:
+        return template
+    target = next(
+        (v.strip() for v in arguments.values() if isinstance(v, str) and v.strip()), None
+    )
+    if target:
+        return template.replace("{target}", target)
+    return re.sub(r"\s{2,}", " ", template.replace("{target}", "that")).strip()
+
+
 class Orchestrator:
     """Drives one interaction turn through the components and the permission gate."""
 
@@ -314,6 +330,16 @@ class Orchestrator:
         # in as typed text via run_text_turn; replies are returned, not spoken.
         self._mode = settings.interaction_mode
         self._text_mode = False  # True while handling a typed turn (suppresses TTS)
+        # Snapshot the settings that actually require a model reload, so a frequent,
+        # cheap change (toggling voice⇄chat when the drawer opens/closes) doesn't
+        # needlessly reconnect the cloud LLM or reload the STT model every time.
+        self._llm_keys = (settings.llm_provider, settings.llm_model, settings.anthropic_model)
+        self._stt_keys = (settings.stt_engine, settings.stt_model)
+        # One turn at a time. The voice loop (this thread) and chat turns (the daemon
+        # worker thread) share one state machine; without this they interleave their
+        # transitions and crash ("listening -> executing", "planning -> transcribing").
+        # Re-entrant so a turn can call helpers that also take it.
+        self._turn_lock = threading.RLock()
 
     def _greeting(self) -> str:
         """The reply to a bare wake word — name-aware, and a first hello if new."""
@@ -349,11 +375,23 @@ class Orchestrator:
             reload_fn()
 
     def mark_settings_changed(self) -> None:
-        """Reload everything a settings change can affect (LLM + STT + mode), no restart."""
-        self.mark_llm_dirty()
-        self.mark_stt_dirty()
-        # Pick up a voice⇄chat switch from the Settings view (applies next loop tick).
-        self._mode = Settings.load().interaction_mode
+        """Apply a settings change with no restart — reloading *only* what changed.
+
+        Reloads the LLM or STT model only when their settings actually differ from
+        what's loaded, so the frequent voice⇄chat toggle (every drawer open/close)
+        doesn't reconnect the cloud LLM or reload the STT model for nothing.
+        """
+        new = Settings.load()
+        llm_keys = (new.llm_provider, new.llm_model, new.anthropic_model)
+        if llm_keys != self._llm_keys:
+            self._llm_keys = llm_keys
+            self.mark_llm_dirty()
+        stt_keys = (new.stt_engine, new.stt_model)
+        if stt_keys != self._stt_keys:
+            self._stt_keys = stt_keys
+            self.mark_stt_dirty()
+        # Pick up a voice⇄chat switch (applies next loop tick) — always cheap.
+        self._mode = new.interaction_mode
 
     def _execute(self, call: ToolCall) -> ToolResult:
         """Executor handed to the LLM: mark EXECUTING and run through the gate."""
@@ -362,16 +400,31 @@ class Orchestrator:
             # The user asked Jack to go away: don't keep a follow-up window open —
             # require the wake word to come back (handled after the turn).
             self._dismissed = True
-        # Acknowledge once per turn so a slow tool call isn't silent — phrased to
-        # match the tool's nature (lookup vs action), from its risk level.
+        # Acknowledge once per turn so a slow tool call isn't silent — phrased to fit
+        # the actual action (e.g. "Opening that"), staying silent for tools like
+        # dismiss where a filler would be jarring.
         if self._settings.speak_acknowledgements and not self._acknowledged and not self._text_mode:
             self._acknowledged = True
-            risk_of = getattr(self._gate, "risk_of", None)
-            risk = risk_of(call.name) if callable(risk_of) else None
-            self._tts.speak(_ack_phrase(risk))
+            phrase = self._ack_for(call)
+            if phrase:
+                self._tts.speak(phrase)
         result = self._gate.execute(call)
         self._transcript.tool(call.name, call.arguments, result.ok, result.content)
         return result
+
+    def _ack_for(self, call: ToolCall) -> str:
+        """The spoken filler for a call: the tool's own ack, else a risk-based one.
+
+        A tool's ``ack`` of ``""`` means stay silent; ``None`` (or an unknown tool)
+        falls back to a generic phrase chosen by risk level.
+        """
+        ack_of = getattr(self._gate, "ack_of", None)
+        ack = ack_of(call.name) if callable(ack_of) else None
+        if ack is not None:
+            return _format_ack(ack, call.arguments)
+        risk_of = getattr(self._gate, "risk_of", None)
+        risk = risk_of(call.name) if callable(risk_of) else None
+        return _ack_phrase(risk)
 
     def _reopen(
         self, audio: AudioClip, transcription: Transcription
@@ -472,23 +525,34 @@ class Orchestrator:
             audio, started_at = pending, self._pending_started_at
             self._pending_audio = self._pending_started_at = None
             self._set_awake(True)
-            self._sm.transition(State.LISTENING)
-            self._sm.transition(State.TRANSCRIBING)
         else:
             # Only show the "listening" cue if we're engaged; passive capture is idle.
             self._set_awake(self._awake)
-            self._sm.transition(State.LISTENING)
+            self._sm.reset(State.LISTENING)
+            # Capture is lock-free on purpose: in wake mode record_clip blocks until
+            # the wake word, possibly forever, so holding the turn lock here would
+            # let a chat turn wait indefinitely. We take the lock only once we have
+            # audio to process.
             audio = self._audio.record_clip()
-            # If we switched to chat mode while this capture was blocking, abandon the
-            # voice turn cleanly — a chat turn shares the state machine and may have
-            # reset it underneath us (otherwise: 'idle -> transcribing').
-            if self._mode == "chat":
-                self._sm.reset(State.IDLE)
-                return
             # When this utterance *began* — judge the follow-up window against speech
             # start, not end-of-capture, so a long phrase isn't dropped.
             started_at = getattr(self._audio, "last_speech_started_at", None)
-            self._sm.transition(State.TRANSCRIBING)
+        # Process this turn under the turn lock so its state-machine transitions can't
+        # interleave with a chat turn's (which would crash, e.g. "planning ->
+        # transcribing"). reset() forces us into TRANSCRIBING regardless of any state a
+        # chat turn left behind while we were capturing.
+        with self._turn_lock:
+            if self._mode == "chat":
+                # Switched to chat while capturing — abandon this voice turn cleanly.
+                self._sm.reset(State.IDLE)
+                return
+            self._sm.reset(State.TRANSCRIBING)
+            self._process_voice_turn(audio, started_at, from_barge)
+
+    def _process_voice_turn(
+        self, audio: AudioClip, started_at: float | None, from_barge: bool
+    ) -> None:
+        """Transcribe, gate the wake word, plan, and respond — under the turn lock."""
         transcription = self._stt.transcribe(audio)
         if self._settings.save_audio and audio.size:
             from autobot.io.audio import save_wav
@@ -594,6 +658,20 @@ class Orchestrator:
         text = text.strip()
         if not text:
             return ""
+        # Typing *is* chat. Force chat mode now (don't rely on the UI's mode POST,
+        # which can be missed — then the voice loop keeps listening to the room and
+        # speaking while you type) and cut off any reply Jack is mid-sentence on, so
+        # the mic loop goes quiet immediately. The voice loop sees _mode next tick
+        # and idles; closing the drawer restores voice via mark_settings_changed.
+        self._mode = "chat"
+        self._tts.stop()
+        # Serialise against the voice loop: wait for any in-flight voice turn to
+        # finish before driving the shared state machine (and vice versa).
+        with self._turn_lock:
+            return self._run_text_turn_locked(text)
+
+    def _run_text_turn_locked(self, text: str) -> str:
+        """Body of :meth:`run_text_turn`, run while holding the turn lock."""
         self._text_mode = True
         try:
             self._transcript.user(text, 1.0)
@@ -605,6 +683,11 @@ class Orchestrator:
             started = time.perf_counter()
             reply = self._llm.run_turn(text, self._execute)
             elapsed_ms = int((time.perf_counter() - started) * 1000)
+            # The model sometimes runs a tool and returns no trailing text (notably
+            # dismiss). Never show the chat an empty bubble — fall back to a short,
+            # fitting line so a typed turn always gets a reply.
+            if not reply.strip():
+                reply = "Talk soon! 👋" if self._dismissed else "Done. ✅"
             self._sm.reset(State.RESPONDING)
             _log.info("chat replied chars=%d latency_ms=%d", len(reply), elapsed_ms)
             self._transcript.assistant(reply)

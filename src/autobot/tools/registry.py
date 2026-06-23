@@ -31,6 +31,12 @@ class ToolSpec:
     # (e.g. "Empty the Trash? This permanently deletes everything in it."). Falls
     # back to a generic prompt when unset.
     confirm_prompt: str | None = None
+    # Short spoken filler said (voice mode) right before this tool runs, so a slow
+    # call isn't dead air. ``None`` → a generic phrase chosen by risk level; ``""``
+    # → stay silent (e.g. dismiss, where the reply itself is the goodbye); any text
+    # → spoken as-is, with ``{target}`` replaced by the call's main argument
+    # (e.g. "Opening {target}." → "Opening Spotify.").
+    ack: str | None = None
     # macOS permission this tool needs (see autobot.permissions): "automation",
     # "accessibility", "microphone". The gate refuses (and opens Settings) when it's
     # known to be missing, rather than letting the tool fail deep in AppleScript.
