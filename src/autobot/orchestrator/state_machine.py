@@ -82,6 +82,17 @@ class StateMachine:
         if self._on_change is not None:
             self._on_change(old, to)
 
+    def reset(self, to: State = State.IDLE) -> None:
+        """Force the state to ``to``, bypassing the transition graph.
+
+        For entering a turn from an unknown state (e.g. a typed chat turn while the
+        voice loop left the machine in LISTENING) where the strict graph doesn't
+        apply. Notifies the listener only when the state actually changes.
+        """
+        old, self._state = self._state, to
+        if old is not to and self._on_change is not None:
+            self._on_change(old, to)
+
 
 def _print_transition(_old: State, new: State) -> None:
     """Default listener: show the state the assistant is entering."""
@@ -580,19 +591,19 @@ class Orchestrator:
         self._text_mode = True
         try:
             self._transcript.user(text, 1.0)
-            self._sm.transition(State.LISTENING)
-            self._sm.transition(State.TRANSCRIBING)
-            self._sm.transition(State.PLANNING)
+            # Force the state (the voice loop, paused in chat mode, may have left the
+            # machine in LISTENING) — go straight to "thinking" for a typed turn.
+            self._sm.reset(State.PLANNING)
             self._acknowledged = False
             self._dismissed = False
             started = time.perf_counter()
             reply = self._llm.run_turn(text, self._execute)
             elapsed_ms = int((time.perf_counter() - started) * 1000)
-            self._sm.transition(State.RESPONDING)
+            self._sm.reset(State.RESPONDING)
             _log.info("chat replied chars=%d latency_ms=%d", len(reply), elapsed_ms)
             self._transcript.assistant(reply)
             self._last_reply = reply
-            self._sm.transition(State.IDLE)
+            self._sm.reset(State.IDLE)
             return reply
         finally:
             self._text_mode = False

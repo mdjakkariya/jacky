@@ -137,9 +137,7 @@ def test_text_turn_returns_reply_runs_tool_and_stays_silent() -> None:
     assert gate.calls and gate.calls[0].name == "create_file"  # tools still run
     assert tts.spoken == []  # chat mode: nothing spoken (no ack, no TTS reply)
     assert orch._transitions == [  # type: ignore[attr-defined]
-        State.LISTENING,
-        State.TRANSCRIBING,
-        State.PLANNING,
+        State.PLANNING,  # forced "thinking" (no mic/listening for a typed turn)
         State.EXECUTING,
         State.RESPONDING,
         State.IDLE,
