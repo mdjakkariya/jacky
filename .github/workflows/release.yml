@@ -50,7 +50,7 @@ jobs:
             dist/*.whl
             dist/*.tar.gz
           body: |
-            ### Autobot ${{ github.ref_name }}
+            ### Jack ${{ github.ref_name }}
 
             **Orb app (macOS):** the `.dmg` is uploaded separately (built locally).
             It's an **unsigned dev preview** — first launch, right-click the app →

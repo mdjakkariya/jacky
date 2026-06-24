@@ -98,9 +98,9 @@ publish-orb: ## Upload the .dmg to the GitHub release with auto-generated notes:
 	@dmg=$$(find $(ORB_BUNDLE)/dmg -name '*.dmg' 2>/dev/null | head -1); \
 	if [ -z "$$dmg" ]; then echo "No .dmg found — run 'make package-orb' first."; exit 1; fi; \
 	notes=$$(mktemp); \
-	printf 'Autobot **v%s** — dev preview. The .dmg is unsigned: right-click **Jack** → **Open**.\n\n' "$(VERSION)" > "$$notes"; \
+	printf 'Jack **v%s** — dev preview. The .dmg is unsigned: right-click **Jack** → **Open**.\n\n' "$(VERSION)" > "$$notes"; \
 	if command -v git-cliff >/dev/null 2>&1; then \
-	  git-cliff --unreleased --tag "v$(VERSION)" --strip header >> "$$notes" 2>/dev/null || true; \
+	  git-cliff --latest --strip header >> "$$notes" || git-cliff --unreleased --tag "v$(VERSION)" --strip header >> "$$notes" || true; \
 	else \
 	  echo "(install git-cliff for auto-generated release notes)"; \
 	fi; \
