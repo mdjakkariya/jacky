@@ -4,8 +4,8 @@ version = "0.4.0"
 description = "A local, privacy-first, English-only voice assistant."
 readme = "README.md"
 requires-python = ">=3.11"
-license = { text = "MIT" }
-authors = [{ name = "MD" }]
+license = { text = "Apache-2.0" }
+authors = [{ name = "Mohamed Jakkariya" }]
 keywords = ["voice-assistant", "local", "privacy", "stt", "llm", "ollama"]
 
 # Runtime dependencies. Heavy model runtimes are imported lazily in their

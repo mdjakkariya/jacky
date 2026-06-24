@@ -1,0 +1,12 @@
+cff-version: 1.2.0
+message: "If you use Jack, please cite it using the metadata below."
+title: "Jack"
+abstract: "A local, privacy-first, English-only macOS voice assistant."
+type: software
+authors:
+  - given-names: Mohamed
+    family-names: Jakkariya
+    alias: mdjakkariya
+repository-code: "https://github.com/mdjakkariya/jacky"
+license: Apache-2.0
+version: "0.4.0"

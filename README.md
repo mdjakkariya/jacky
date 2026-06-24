@@ -324,3 +324,26 @@ The file always captures DEBUG; to also surface it on the console set
   `"input_mode": "ptt"`.
 - **A daemon keeps running after quit** → the orb stops its engine on exit; if one
   lingers, `pkill -if autobot-daemon`.
+
+---
+
+## Contributing
+
+Contributions are welcome — see [`CONTRIBUTING.md`](CONTRIBUTING.md) for the workflow
+(open an issue first, `make check`, Conventional Commits, DCO sign-off) and
+[`CODE_OF_CONDUCT.md`](CODE_OF_CONDUCT.md). [`CLAUDE.md`](CLAUDE.md) explains how the
+project is built and the constraints to stay within.
+
+## Sponsor
+
+Jack is built in my free time. If it's useful to you, sponsoring helps me keep
+improving it:
+
+- **GitHub Sponsors** — https://github.com/sponsors/mdjakkariya
+- **Buy Me a Coffee** — https://www.buymeacoffee.com/mdjakkariya
+
+## Credits & license
+
+Created and maintained by **Mohamed Jakkariya** ([@mdjakkariya](https://github.com/mdjakkariya)).
+Licensed under **Apache-2.0** — see [`LICENSE`](LICENSE) and [`NOTICE`](NOTICE). You're
+free to use, modify, and build on Jack; please keep the attribution.
