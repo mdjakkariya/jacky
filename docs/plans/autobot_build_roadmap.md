@@ -40,7 +40,7 @@ A privacy-first, zero-cost, on-device personal assistant. Reference to follow du
 - [x] Put it behind the **permission gate**: classify risk → confirm destructive actions → sandbox → write to an audit log (SQLite) — `tools/permission.py` + `tools/sandbox.py` (path-jail) + `tools/audit.py`
 - [x] **Done when:** a destructive action prompts for confirmation, executes only on yes, and leaves an audit-log entry. ✅ Verified 2026-06-19 (40 unit tests + integration smoke: WRITE runs unprompted, DESTRUCTIVE blocked unless confirmed, sandbox escape refused, all four audited).
 
-> Confirmation policy: destructive-only (READ_ONLY + WRITE run directly but are still audited). Sandbox: path-jail to `~/.autobot/workspace` (`AUTOBOT_SANDBOX_DIR`). Audit DB: `~/.autobot/audit.db` (`AUTOBOT_AUDIT_DB`). The gate sits between *planning* and *executing* — the LLM never touches side effects directly; it calls an injected executor wired to the gate.
+> Confirmation policy: destructive-only (READ_ONLY + WRITE run directly but are still audited). Sandbox: path-jail to `~/.autobot/workspace`; audit DB: `~/.autobot/audit.db`. All config lives in `~/.autobot/settings.json` (defaults in `config.py`) — no env vars. The gate sits between *planning* and *executing* — the LLM never touches side effects directly; it calls an injected executor wired to the gate.
 
 ---
 
@@ -49,37 +49,25 @@ A privacy-first, zero-cost, on-device personal assistant. Reference to follow du
 **Goal:** Replace push-to-talk with hands-free wake. This is the real-time audio / threading risk — prove it in isolation now that the rest works.
 
 - [x] Mic capture into a ring buffer (sounddevice / PortAudio) — `io/listening.py` `MicFrameSource` (persistent stream → queue, 512-sample frames) + `FramePrebuffer` pre-roll
-- [x] Wake-word detection (openWakeWord, ONNX) — `io/wake_vad.py` `OpenWakeWord`; defaults to the pretrained `hey_jarvis` model (custom "Autobot" phrase needs offline training — see README)
+- [x] Wake-word detection (openWakeWord, ONNX) — `io/wake_vad.py` `OpenWakeWord`; defaults to the pretrained `hey_jarvis` model (a custom "Jack" phrase needs offline training — see README)
 - [x] VAD (silero-vad) to detect end-of-speech and cut the clip — `io/wake_vad.py` `SileroVad` + the pure `TrailingSilenceEndpointer`
 - [x] Wire: wake word fires → capture until VAD endpoint → hand clip to the Phase 0/1 pipeline — `io/listening.py` `WakeWordVadRecorder` (same `AudioSource` contract, so orchestrator/STT/gate unchanged)
 - [x] **Done when:** saying the wake word, then a command, runs the full loop with no keypress. ✅ Logic verified 2026-06-19 (49 unit tests incl. wake-gating, pre-roll, VAD endpointing, max-utterance cap, with fakes). Live mic/model run is user-side.
 
 > Gate STT strictly on VAD-detected speech. This also neutralizes Whisper's silence-hallucination problem.
 
-> Hands-free is the default (`AUTOBOT_INPUT=wake`); push-to-talk remains via `AUTOBOT_INPUT=ptt`. The wake/VAD models are an optional install (`uv sync --extra wake`) so the core stays light. Real-time logic (endpointing, pre-roll) is split from the mic/models and unit-tested; the model wrappers and mic are injected, so the loop is testable without hardware.
+> **Chat** is the default mode (`interaction_mode: chat`); voice is opt-in. Within voice, hands-free (`input_mode: wake`) is the default and push-to-talk is `input_mode: ptt`. Config is `settings.json`, not env vars. The wake/VAD models are an optional install (`uv sync --extra wake`) so the core stays light. Real-time logic (endpointing, pre-roll) is split from the mic/models and unit-tested; the model wrappers and mic are injected, so the loop is testable without hardware.
 
 ---
 
-## Phase 3 — Voice output + terminal UI
+## Phase 3 — Voice output + UI ✅ DONE
 
-- [x] TTS: Piper (CPU/fast tier), Kokoro (GPU quality tier) — behind the TTS interface — **Phase 3a done (2026-06-19):** `TextToSpeech` protocol + `tts/piper_tts.py` (Piper) + `NullTTS` fallback; orchestrator speaks replies; `AUTOBOT_TTS` / `AUTOBOT_TTS_VOICE`; optional `tts` extra.
-- [~] Terminal client (Textual) connecting to the daemon API; add the animation here — **Phase 3b in progress:** the headless daemon exists — `daemon/server.py` (FastAPI + localhost-only WebSocket `/ws`, `/healthz`), `core/events.py` (`OrbState` + `orb_state_for` + thread-safe `EventBus`), wired via `app.build(on_state=…, amplitude_sink=…)` and `daemon/runner.py` (`serve` / `serve_demo`); run with `python -m autobot.daemon [--demo]`, optional `daemon` extra. State transitions AND live amplitude stream: mic RMS while listening (`io/listening.capture_utterance` → `rms_level`), TTS RMS while talking (`tts/piper_tts` block playback). **Still pending:** the Textual terminal thin client (the `ui/orb/index.html` web client already consumes the stream).
-- [ ] **Done when:** the assistant speaks its replies and the terminal shows live state. (Speaks ✅; daemon + state + amplitude stream ✅; Textual terminal UI pending.)
+- [x] **TTS** — `TextToSpeech` protocol + `tts/piper_tts.py` (Piper) + `NullTTS` fallback; orchestrator speaks replies. Config: `tts_enabled` / `tts_voice` in settings.json; optional `tts` extra.
+- [x] **Headless daemon** — `daemon/server.py` (FastAPI + localhost-only WebSocket `/ws`, `/healthz`), `core/events.py` (`OrbState` + thread-safe `EventBus`), `daemon/runner.py`. Streams `{state, amplitude}`: mic RMS while listening, TTS RMS while talking.
+- [x] **Floating orb + chat drawer ("Jack")** — a **Tauri** shell (Rust + system webview) is the product surface, not the originally-planned Textual TUI (which was dropped). The orb (`ui/orb/index.html`, WebGL) floats over apps/Spaces, never steals focus, reacts to state; a right-docked **chat drawer** (`ui/orb/chat.html`) is the default typed UI. Global shortcuts (⌘⌃J summon, ⌘⌃C chat, ⌘⌃V voice, …), tray menu, Settings view.
+- [x] **Done when:** speaking drives the orb idle→listening→thinking→talking with live reactive motion, it survives app/Space switches, and chat works without voice. ✅ Shipped (v0.4.0).
 
-### Phase 3c — Floating orb desktop UI ("Jack") — PLANNED
-
-The product surface: an always-available, terminal-free **floating energy-orb**
-that lives over every app/Space and reacts to Jack's state. Pulled ahead of
-Phase 4 at the user's request. Depends on the Phase 3b daemon (the orb is a thin
-client of the same `{state, amplitude}` stream). Tech: **Tauri** (lightweight Rust
-shell + system webview rendering a WebGL orb).
-
-- Locked visual reference: `docs/ui/jack_orb_prototype.html`
-- Full plan: `docs/plans/autobot_floating_orb_ui_plan.md`
-- **Done when:** speaking to Jack drives the orb idle→listening→thinking→talking
-  with live mic/TTS-reactive motion, it stays visible across app switches /
-  Spaces / full-screen apps, never steals focus or shows a Dock icon, and the
-  terminal can be fully hidden.
+> Visual reference: `docs/ui/jack_orb_prototype.html`. Full plan: `docs/plans/autobot_floating_orb_ui_plan.md`.
 
 ---
 
@@ -95,18 +83,30 @@ shell + system webview rendering a WebGL orb).
 - [ ] Episodic memory: embed past interactions (sqlite-vec) for semantic recall —
   deferred until the flat profile outgrows direct injection (RAG-ready).
 - [x] **Done when:** the assistant recalls a fact from a previous session. ✅
-  (name + facts persist across restarts; behind `AUTOBOT_ALLOW_MEMORY`).
+  (name + facts persist across restarts; behind `allow_memory` in settings.json).
 
 ---
 
-## Phase 5 — Hardware tiering, hardening, packaging
+## Shipped beyond the original phases
 
-- [ ] Hardware profiler: detect RAM/VRAM at install, pick model tier (STT + LLM + TTS) automatically
-- [ ] Tier presets (see table) selectable via config
-- [ ] Error handling, graceful degradation, logging
-- [ ] Package the daemon + clients for distribution
-- [ ] (Optional) Add the desktop client (Tauri) — just another thin client of the same daemon
-- [ ] **Done when:** a fresh machine runs the right models for its specs with no manual tuning.
+Decisions made during the build that aren't captured above:
+
+- **Optional cloud LLM (Anthropic)** behind the same `LanguageModel` interface — prompt caching, dynamic per-model context window, summarization compaction, a dev context meter. Local Ollama stays the default.
+- **Chat-first product** — chat is the default mode; the orb stays hidden until voice is enabled. Typed turns, "New chat", welcome screen, rotating input hints.
+- **On-demand voice + small build** — the Piper voice is no longer bundled (~115MB off the `.dmg`); voice/STT/wake download on demand via `voice_setup.py` (`/voice/status`, `/voice/download`) with progress in Settings. STT/mic/TTS build lazily on first voice use.
+- **Release automation** — git-cliff changelog + GitHub release notes; `make bundle` / `make publish-orb`; in-app update-available banner (GitHub Releases). `multiprocessing.freeze_support()` guards the frozen entry.
+
+---
+
+## Next directions
+
+Pick per priority; not strictly ordered.
+
+- **Capability growth (tools).** More of what Jack can *do*: calendar/reminders, notes, clipboard, screenshots, file search, richer web/app actions; multi-step plans.
+- **Memory depth.** Episodic/semantic recall (sqlite-vec RAG) so Jack remembers past conversations, not just a flat profile (the deferred Phase 4 item).
+- **Conversation & voice polish.** Streaming replies + markdown in chat, stop/copy; a voice picker (multiple Piper voices); push-to-talk toggle; barge-in tuning.
+- **Hardening & tiering.** Hardware profiler (auto STT/LLM/TTS tier by RAM/GPU), graceful degradation, more UI tests.
+- **Distribution & trust — DEFERRED** (needs an Apple Developer ID, not available yet). When resourced: code signing + notarization (removes the Gatekeeper warning, fixes the Accessibility/Automation "Unknown", and unlocks real in-place auto-update via the Tauri updater, replacing the notify-only banner).
 
 ---
 

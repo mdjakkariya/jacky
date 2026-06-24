@@ -1,11 +1,15 @@
-# Autobot — Floating Orb UI Plan ("Jack")
+# Jack — Floating Orb UI Plan
 
-Plan for Autobot's always-available visual presence: a floating energy-orb that
-lives on screen across every app and Space, driven by the headless engine. This
-slots in **after Phase 3a (TTS, done)** and **before Phase 4 (memory)**, and it
-**depends on the Phase 3b daemon** (the orb is a thin client of it).
+> **Status: SHIPPED (v0.4.0).** The floating orb and the right-docked chat drawer
+> are live in `ui/orb-shell` (Tauri shell) + `ui/orb/index.html` (WebGL orb) and
+> `ui/orb/chat.html` (chat). This doc is kept as the design record; the build steps
+> below are done.
 
-Design is **locked** — see the canonical reference: `docs/ui/jack_orb_prototype.html`.
+Jack's always-available visual presence: a floating energy-orb that lives on screen
+across every app and Space, driven by the headless daemon (the orb is a thin client
+of it).
+
+Design reference: `docs/ui/jack_orb_prototype.html`.
 
 ---
 
@@ -134,7 +138,10 @@ Notes:
 
 ---
 
-## Build steps (risk-ordered, each ends with something that runs)
+## Build steps (risk-ordered) — all complete
+
+> These shipped as written (the Textual/CLI references below were the interim
+> subscriber during bring-up; the product surface is the Tauri orb + chat drawer).
 
 1. **Daemon skeleton (Phase 3b).** FastAPI + localhost WebSocket; emit `state`
    transitions from the orchestrator. Done when the existing Textual/CLI run can

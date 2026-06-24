@@ -1,4 +1,4 @@
-# Releasing Autobot
+# Releasing Jack
 
 Releases are **tag-driven**. Pushing a `vX.Y.Z` tag makes CI (Linux only) build the
 Python **engine** (wheel + sdist) and create the GitHub Release. The macOS **orb

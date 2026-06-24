@@ -1,4 +1,4 @@
-# Packaging Autobot as a single .dmg (the "wizard")
+# Packaging Jack as a single .dmg (the "wizard")
 
 Goal: a developer downloads **one `.dmg`**, drags Jack to Applications, and a
 **first-run wizard** handles the rest — no Python, `uv`, wheels, or manual model
@@ -9,13 +9,12 @@ embedded **Tauri sidecar**.
 
 ```
 Jack.app
- ├─ the orb UI (Tauri webview)
- ├─ autobot-daemon            ← frozen engine binary (PyInstaller), a Tauri sidecar
- │     the orb spawns it on launch, talks to it over ws://127.0.0.1:8765,
- │     and kills it on quit
- └─ Resources/
-       └─ voice/…onnx         ← bundled Piper voice (small)
-   (the STT model is downloaded on first run — too big to bundle)
+ ├─ the orb UI + chat drawer (Tauri webview: index.html + chat.html)
+ └─ autobot-daemon            ← frozen engine binary (PyInstaller), a Tauri sidecar
+       the orb spawns it on launch, talks to it over ws://127.0.0.1:8765,
+       and kills it on quit
+   (no models are bundled — the Piper voice / STT / wake models download on
+    demand the first time voice is enabled; see voice_setup.py)
 ```
 
 Three build steps, each its own task:

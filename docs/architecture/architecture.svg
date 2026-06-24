@@ -1,0 +1,97 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 700" font-family="-apple-system, Segoe UI, Helvetica, Arial, sans-serif" role="img" aria-label="Jack architecture: Tauri orb and chat UI talk over a localhost WebSocket/HTTP to a headless Python daemon and orchestrator; tools run behind a permission gate; the LLM is local Ollama or optional cloud Anthropic; voice models load on demand.">
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 z" fill="#6b6b70"/>
+    </marker>
+  </defs>
+
+  <rect x="0" y="0" width="960" height="700" fill="#ffffff"/>
+  <text x="480" y="34" text-anchor="middle" font-size="20" font-weight="600" fill="#1d1d1f">Jack — architecture</text>
+  <text x="480" y="54" text-anchor="middle" font-size="12" fill="#86868b">macOS app (Tauri) · thin UI clients over a localhost daemon · everything on-device</text>
+
+  <!-- UI layer -->
+  <text x="40" y="86" font-size="12" font-weight="600" fill="#86868b">UI — Tauri shell ("Jack")</text>
+  <g>
+    <rect x="40" y="96" width="270" height="60" rx="10" fill="#e6f1fb" stroke="#378add" stroke-width="1"/>
+    <text x="175" y="122" text-anchor="middle" font-size="14" font-weight="600" fill="#0c447c">Floating orb</text>
+    <text x="175" y="140" text-anchor="middle" font-size="11.5" fill="#185fa5">index.html · WebGL · state-reactive</text>
+
+    <rect x="345" y="96" width="270" height="60" rx="10" fill="#e6f1fb" stroke="#378add" stroke-width="1"/>
+    <text x="480" y="122" text-anchor="middle" font-size="14" font-weight="600" fill="#0c447c">Chat drawer (default)</text>
+    <text x="480" y="140" text-anchor="middle" font-size="11.5" fill="#185fa5">chat.html · typed turns</text>
+
+    <rect x="650" y="96" width="270" height="60" rx="10" fill="#e6f1fb" stroke="#378add" stroke-width="1"/>
+    <text x="785" y="122" text-anchor="middle" font-size="14" font-weight="600" fill="#0c447c">Settings</text>
+    <text x="785" y="140" text-anchor="middle" font-size="11.5" fill="#185fa5">provider · voice download · perms</text>
+  </g>
+
+  <!-- transport -->
+  <line x1="480" y1="156" x2="480" y2="196" stroke="#6b6b70" stroke-width="1.5" marker-end="url(#arrow)" marker-start="url(#arrow)"/>
+  <rect x="300" y="166" width="360" height="22" rx="6" fill="#ffffff"/>
+  <text x="480" y="181" text-anchor="middle" font-size="11" fill="#5f5e5a">localhost 127.0.0.1:8765 · WebSocket /ws + HTTP</text>
+
+  <!-- on-device boundary -->
+  <rect x="28" y="202" width="904" height="446" rx="14" fill="none" stroke="#b4b2a9" stroke-width="1" stroke-dasharray="6 5"/>
+  <text x="44" y="222" font-size="11.5" font-weight="600" fill="#5f5e5a">On-device boundary — no audio, text, or memory leaves the machine</text>
+
+  <!-- daemon -->
+  <rect x="48" y="236" width="864" height="56" rx="10" fill="#f1efe8" stroke="#b4b2a9" stroke-width="1"/>
+  <text x="68" y="262" font-size="14" font-weight="600" fill="#2c2c2a">Headless daemon (FastAPI) + EventBus</text>
+  <text x="68" y="280" font-size="11.5" fill="#5f5e5a">/ws events: state · amplitude · context · confirm · voice_download   ·   POST /chat · /voice/download · GET /voice/status · /healthz</text>
+
+  <line x1="480" y1="292" x2="480" y2="318" stroke="#6b6b70" stroke-width="1.5" marker-end="url(#arrow)"/>
+
+  <!-- engine / orchestrator -->
+  <rect x="48" y="320" width="864" height="150" rx="10" fill="#eeedfe" stroke="#7f77dd" stroke-width="1"/>
+  <text x="68" y="344" font-size="14" font-weight="600" fill="#3c3489">Engine — Orchestrator (state machine)</text>
+  <text x="68" y="362" font-size="11.5" fill="#534ab7">idle → listening → transcribing → planning → executing → responding   (voice + typed turns)</text>
+
+  <!-- pipeline boxes inside engine -->
+  <rect x="68" y="380" width="180" height="40" rx="8" fill="#ffffff" stroke="#7f77dd"/>
+  <text x="158" y="404" text-anchor="middle" font-size="12" fill="#3c3489">SpeechToText</text>
+  <line x1="248" y1="400" x2="290" y2="400" stroke="#6b6b70" stroke-width="1.3" marker-end="url(#arrow)"/>
+
+  <rect x="290" y="380" width="180" height="40" rx="8" fill="#ffffff" stroke="#7f77dd"/>
+  <text x="380" y="404" text-anchor="middle" font-size="12" fill="#3c3489">LanguageModel</text>
+  <line x1="470" y1="400" x2="512" y2="400" stroke="#6b6b70" stroke-width="1.3" marker-end="url(#arrow)"/>
+
+  <rect x="512" y="380" width="190" height="40" rx="8" fill="#fff" stroke="#d85a30"/>
+  <text x="607" y="398" text-anchor="middle" font-size="12" font-weight="600" fill="#993c1d">Permission gate</text>
+  <text x="607" y="413" text-anchor="middle" font-size="10.5" fill="#993c1d">risk · confirm · sandbox · audit</text>
+  <line x1="702" y1="400" x2="744" y2="400" stroke="#6b6b70" stroke-width="1.3" marker-end="url(#arrow)"/>
+
+  <rect x="744" y="380" width="148" height="40" rx="8" fill="#ffffff" stroke="#7f77dd"/>
+  <text x="818" y="404" text-anchor="middle" font-size="12" fill="#3c3489">Tools (registry)</text>
+
+  <text x="68" y="448" font-size="11.5" fill="#534ab7">Memory (SQLite profile) · session transcript · audit log — all under ~/.autobot</text>
+
+  <line x1="240" y1="470" x2="240" y2="500" stroke="#6b6b70" stroke-width="1.5" marker-end="url(#arrow)" marker-start="url(#arrow)"/>
+  <line x1="700" y1="470" x2="700" y2="500" stroke="#6b6b70" stroke-width="1.5" marker-end="url(#arrow)" marker-start="url(#arrow)"/>
+
+  <!-- LLM providers -->
+  <rect x="48" y="502" width="384" height="120" rx="10" fill="#e1f5ee" stroke="#1d9e75" stroke-width="1"/>
+  <text x="68" y="526" font-size="13" font-weight="600" fill="#0f6e56">LLM provider (swappable)</text>
+  <rect x="68" y="540" width="170" height="62" rx="8" fill="#ffffff" stroke="#1d9e75"/>
+  <text x="153" y="564" text-anchor="middle" font-size="12.5" font-weight="600" fill="#0f6e56">Ollama (local)</text>
+  <text x="153" y="582" text-anchor="middle" font-size="11" fill="#0f6e56">default · on-device</text>
+  <rect x="248" y="540" width="170" height="62" rx="8" fill="#ffffff" stroke="#854f0b"/>
+  <text x="333" y="560" text-anchor="middle" font-size="12.5" font-weight="600" fill="#633806">Anthropic (cloud)</text>
+  <text x="333" y="577" text-anchor="middle" font-size="10.5" fill="#633806">opt-in · key in Keychain</text>
+  <text x="333" y="592" text-anchor="middle" font-size="10.5" fill="#633806">caching · compaction</text>
+
+  <!-- Voice IO -->
+  <rect x="528" y="502" width="384" height="120" rx="10" fill="#fbeaf0" stroke="#d4537e" stroke-width="1"/>
+  <text x="548" y="526" font-size="13" font-weight="600" fill="#993556">Voice I/O — lazy, downloaded on demand</text>
+  <rect x="548" y="540" width="110" height="62" rx="8" fill="#ffffff" stroke="#d4537e"/>
+  <text x="603" y="566" text-anchor="middle" font-size="12" fill="#993556">Mic (AEC)</text>
+  <text x="603" y="582" text-anchor="middle" font-size="10.5" fill="#993556">wake · VAD</text>
+  <rect x="668" y="540" width="120" height="62" rx="8" fill="#ffffff" stroke="#d4537e"/>
+  <text x="728" y="566" text-anchor="middle" font-size="12" fill="#993556">STT</text>
+  <text x="728" y="582" text-anchor="middle" font-size="10.5" fill="#993556">whisper(.cpp)</text>
+  <rect x="798" y="540" width="94" height="62" rx="8" fill="#ffffff" stroke="#d4537e"/>
+  <text x="845" y="566" text-anchor="middle" font-size="12" fill="#993556">TTS</text>
+  <text x="845" y="582" text-anchor="middle" font-size="10.5" fill="#993556">Piper</text>
+
+  <!-- disclosed exceptions -->
+  <text x="480" y="676" text-anchor="middle" font-size="11.5" fill="#854f0b">Only two disclosed, opt-in exceptions leave the device: web_search (query only) · cloud LLM (conversation + memory, never audio/actions)</text>
+</svg>

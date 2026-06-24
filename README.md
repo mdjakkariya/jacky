@@ -15,9 +15,10 @@ conventions live in [`CLAUDE.md`](CLAUDE.md); the build history is in
 
 ## What it can do
 
-- **Hands-free** — say **"jack, …"** and it listens, transcribes, and acts. Or
-  push-to-talk.
-- **Talks back** — on-device Piper text-to-speech, with a bundled default voice.
+- **Chat or voice** — type in the chat drawer (the default), or enable voice and
+  say **"jack, …"** for hands-free (or push-to-talk).
+- **Talks back** — on-device Piper text-to-speech; the voice model downloads on
+  demand the first time you enable voice (it isn't bundled).
 - **Barge-in** — talk over Jack to interrupt it (full-duplex when echo
   cancellation is available; otherwise it finishes speaking, then listens).
 - **Acts through tools, never blindly** — every action runs through a permission
@@ -32,9 +33,10 @@ conventions live in [`CLAUDE.md`](CLAUDE.md); the build history is in
 
 ## Try it (dev preview)
 
-Grab the latest [GitHub Release](../../releases) and download the **`.dmg`** — it's
-a single, self-contained app: the orb plus the embedded engine and a default
-voice. Drag **Jack** to Applications.
+Grab the latest [GitHub Release](../../releases) and download the **`.dmg`** — a
+single, self-contained app: the orb + chat drawer plus the embedded engine. (Voice
+models download on demand when you first enable voice, so the app stays small.) Drag
+**Jack** to Applications.
 
 It's an **unsigned dev preview**, so the first launch is: right-click **Jack** →
 **Open** → **Open** (after that it launches normally).
@@ -131,9 +133,9 @@ Tested target: MacBook Air M2, 16 GB, macOS 15.
    > on its own (it drops the others). `make setup`/`make install` sync the whole
    > set. Push-to-talk needs no extras (`"input_mode": "ptt"`).
 
-4. **Download a Piper voice** (voice output is on by default; the default is the
-   male "Ryan" voice). The bundled `.dmg` ships this automatically — for a source
-   run, fetch it once:
+4. **Voice models (only if you use voice).** In the `.dmg` app they download on
+   demand the first time you enable voice (Settings → Listening). For a source run,
+   fetch the default "Ryan" voice once:
 
    ```bash
    mkdir -p ~/.autobot/voices && cd ~/.autobot/voices
@@ -151,18 +153,23 @@ Tested target: MacBook Air M2, 16 GB, macOS 15.
    ```
 
    In dev the engine runs on its own; build/run the orb separately from
-   `ui/orb-shell` (`cargo tauri dev`). The first run prompts for **Microphone**
-   permission and downloads the STT weights.
+   `ui/orb-shell` (`cargo tauri dev`). It opens in chat mode; the first time you
+   enable **voice** it prompts for **Microphone** permission and downloads the STT
+   weights.
 
 ---
 
 ## Talking to Jack
 
-**Hands-free (default):** start with **"jack"** — *"jack, what's the time"* — said
-naturally, fast or with a pause. Jack transcribes each phrase and, if the wake word
-appears, strips it and runs the rest. "jack" is used because the STT model
-transcribes it reliably; matching is on the text, not an acoustic threshold, so
-continuous speech works. VAD ends the clip when you stop.
+**Chat (default):** type in the right-docked chat drawer; replies show as text and
+the mic stays off. Voice is off until you enable it (Settings → Listening), which
+downloads the speech models the first time.
+
+**Hands-free (once voice is enabled):** start with **"jack"** — *"jack, what's the
+time"* — said naturally, fast or with a pause. Jack transcribes each phrase and, if
+the wake word appears, strips it and runs the rest. "jack" is used because the STT
+model transcribes it reliably; matching is on the text, not an acoustic threshold,
+so continuous speech works. VAD ends the clip when you stop.
 
 **Follow-ups:** after a reply Jack keeps listening **without** the wake word for a
 window (default **30s**, measured from when it finishes speaking; each turn resets

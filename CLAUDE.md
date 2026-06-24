@@ -1,19 +1,24 @@
 # CLAUDE.md
 
-Instructions for AI assistants (and humans) working in this repo. Keep this file
-updated as the project grows — it is the single source of truth for *how* we build.
+Guidelines for AI assistants (and humans) working in this repo — the single source
+of truth for *how* we build here. (For *what's planned*, see the roadmap; this file
+holds no status.)
 
 ## What this is
 
-**Autobot** — a local, privacy-first, **English-only** voice assistant (Jarvis-style).
-Everything runs on-device; no audio, text, or memory ever leaves the machine.
+**Jack** — a local, privacy-first, **English-only** macOS voice assistant. (The
+codebase and Python package are named `autobot`; "Jack" is the product the user
+sees.) Everything runs on-device; no audio, text, or memory leaves the machine
+except the two disclosed, opt-in exceptions below.
 
-- Full build plan: `docs/plans/autobot_build_roadmap.md` (6 risk-ordered phases).
-- Architecture diagram: `docs/architecture/`.
-- **Current status: Phase 3a complete** (voice output via Piper TTS, behind a
-  swappable `TextToSpeech` interface). On top of Phase 2 (wake word + VAD), Phase 1
-  (orchestrator + permission gate), Phase 0 spine. Next: Phase 3b — headless
-  daemon + Textual terminal UI.
+The product is a floating **orb** plus a right-docked **chat drawer** (a Tauri shell
+over a system webview) that are thin clients of a **headless Python daemon**. **Chat
+is the default**; voice is opt-in, and the speech models download on demand the first
+time it's enabled (they're not bundled). The LLM is local (Ollama) by default, with
+an optional cloud provider (Anthropic).
+
+- Roadmap (forward plan): `docs/plans/autobot_build_roadmap.md`.
+- Architecture diagram: `docs/architecture/architecture.svg`.
 
 ## Non-negotiable constraints
 
@@ -32,8 +37,8 @@ Everything runs on-device; no audio, text, or memory ever leaves the machine.
    multilingual options.
 3. **The permission gate is not optional.** Any genuinely-acting tool (write,
    delete, network, shell) must go through the registry's risk classification and
-   the Phase 1 gate. Never let the LLM execute side effects unguarded.
-4. **Engine stays headless** (from Phase 3 on). UIs are thin clients of a daemon
+   the permission gate. Never let the LLM execute side effects unguarded.
+4. **Engine stays headless.** UIs (orb, chat drawer) are thin clients of the daemon
    API; never build the assistant *as* a UI app.
 
 ## Architecture in one paragraph

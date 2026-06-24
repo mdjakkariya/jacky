@@ -1,4 +1,4 @@
-# Autobot — Settings View, Config Overhaul & Optional Cloud LLM
+# Jack — Settings View, Config Overhaul & Optional Cloud LLM
 
 Two linked goals:
 
