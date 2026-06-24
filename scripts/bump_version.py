@@ -1,8 +1,10 @@
 """Bump (or verify) the project version across every manifest.
 
-The version lives in three files — ``pyproject.toml`` (engine), ``src-tauri/
-Cargo.toml`` and ``src-tauri/tauri.conf.json`` (orb app) — and they must always
-agree, because the release workflow checks them against the pushed git tag.
+The version lives in ``pyproject.toml`` (engine), ``src-tauri/Cargo.toml`` and
+``src-tauri/tauri.conf.json`` (orb app), and they must always agree because the
+release workflow checks them against the pushed git tag. We also rewrite the
+``jack-orb`` entry in ``src-tauri/Cargo.lock`` so a later ``cargo`` build doesn't
+re-touch the lockfile and force a stray, changelog-polluting follow-up commit.
 
 Usage::
 
@@ -29,6 +31,13 @@ _FILES: dict[str, tuple[re.Pattern[str], str]] = {
     "ui/orb-shell/src-tauri/tauri.conf.json": (
         re.compile(r'"version": "[^"]+"'),
         '"version": "{v}"',
+    ),
+    # The orb crate's own entry in the lockfile — pinned by name so we never touch a
+    # dependency's version. Keeping it in sync here means `cargo tauri build` won't
+    # rewrite Cargo.lock after the release commit (which created the maintenance noise).
+    "ui/orb-shell/src-tauri/Cargo.lock": (
+        re.compile(r'name = "jack-orb"\nversion = "[^"]+"'),
+        'name = "jack-orb"\nversion = "{v}"',
     ),
 }
 
