@@ -101,6 +101,11 @@
     width:100%;font-size:13px;font-weight:500;line-height:1.25;}
   .chip .ce{display:block;width:100%;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
     font-size:11.5px;color:var(--muted);margin-top:4px;line-height:1.25;}
+  .upd{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:8px 14px;background:var(--accent-bg);
+    color:var(--accent);font-size:12.5px;border-bottom:.5px solid var(--line);}
+  .upd .u-actions{display:flex;gap:4px;flex:none;}
+  .upd button{border:none;background:none;color:var(--accent);font-size:12.5px;cursor:pointer;padding:2px 6px;border-radius:6px;}
+  .upd .u-dismiss{color:var(--muted);}
   .spinner{width:24px;height:24px;border-radius:50%;border:2.5px solid var(--field-line);border-top-color:var(--accent);animation:spin .8s linear infinite;}
   @keyframes spin{to{transform:rotate(360deg);}}
   .hidden{display:none !important;}
@@ -126,6 +131,10 @@
       <button class="x" id="close" aria-label="Hide">✕</button>
     </div>
   </header>
+  <div id="updateBanner" class="upd hidden">
+    <span class="u-text"></span>
+    <span class="u-actions"><button class="u-link">What's new ↗</button><button class="u-dismiss">Later</button></span>
+  </div>
   <div id="ctxDetail" class="ctx-detail hidden"></div>
   <div id="log">
     <div id="empty" class="empty">
@@ -405,6 +414,47 @@
     } catch(e){ setTimeout(connect, 1500); }
   }
   connect();
+
+  // --- update notify (Phase 0) ----------------------------------------------
+  // Checks GitHub Releases for a newer version and shows a one-line banner. Anonymous
+  // (public repos only), no install — just a link to the release. No user data sent.
+  // The repo is public, so the anonymous check works with no token. The banner shows
+  // only when a release newer than the running version is published.
+  var UPDATE_NOTIFY = true;
+  var UPDATE_REPO = "mdjakkariya/jacky";
+  function cmpVer(a, b){
+    var pa = String(a).split("."), pb = String(b).split(".");
+    for(var i = 0; i < Math.max(pa.length, pb.length); i++){
+      var x = parseInt(pa[i] || "0", 10), y = parseInt(pb[i] || "0", 10);
+      if(x > y) return 1; if(x < y) return -1;
+    }
+    return 0;
+  }
+  async function appVersion(){
+    try { return await window.__TAURI__.app.getVersion(); } catch(e){ return "0.0.0"; }
+  }
+  function showUpdateBanner(latest, url){
+    var b = $("updateBanner");
+    b.querySelector(".u-text").textContent = "Jack " + latest + " is available";
+    b.querySelector(".u-link").onclick = function(){ if(tauri()) tauri().invoke("open_external", {url: url}); };
+    b.querySelector(".u-dismiss").onclick = function(){
+      b.classList.add("hidden");
+      try { localStorage.setItem("jackUpdateDismissed", latest); } catch(e){}
+    };
+    b.classList.remove("hidden");
+  }
+  async function checkForUpdate(){
+    if(!UPDATE_NOTIFY) return;
+    var cur = await appVersion(), rel;
+    try { rel = await (await fetch("https://api.github.com/repos/" + UPDATE_REPO + "/releases/latest")).json(); }
+    catch(e){ return; }
+    if(!rel || !rel.tag_name) return;
+    var latest = String(rel.tag_name).replace(/^v/, "");
+    if(cmpVer(latest, cur) <= 0) return;  // already current
+    try { if(localStorage.getItem("jackUpdateDismissed") === latest) return; } catch(e){}
+    showUpdateBanner(latest, rel.html_url || ("https://github.com/" + UPDATE_REPO + "/releases/latest"));
+  }
+  checkForUpdate();
 
   // Engine interaction_mode tracks the drawer: chat while it's open (so the voice
   // loop idles and the confirmer is click-only), voice once it closes (so the orb
