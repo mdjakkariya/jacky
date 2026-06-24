@@ -1,6 +1,6 @@
 [package]
 name = "jack-orb"
-version = "0.3.0"
+version = "0.4.0"
 description = "Jack — floating voice-assistant orb (thin Tauri client of the autobot daemon)"
 edition = "2021"
 rust-version = "1.77"
