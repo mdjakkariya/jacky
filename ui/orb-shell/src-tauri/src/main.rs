@@ -167,6 +167,18 @@ fn hide_chat(app: tauri::AppHandle) {
     let _ = app.set_activation_policy(tauri::ActivationPolicy::Accessory);
 }
 
+/// Switch to voice (⌘⌃V). Reuses the chat UI's gated flow: if the voice models are
+/// present it enables voice and shows the orb; if not, it opens the download in
+/// Settings. The chat window always exists (created at launch), so we drive its JS;
+/// if it somehow doesn't, fall back to opening the Settings voice section directly.
+fn request_voice(app: &tauri::AppHandle) {
+    if let Some(chat) = app.get_webview_window("chat") {
+        let _ = chat.eval("window.__enableVoice && window.__enableVoice()");
+    } else {
+        open_settings(app, "voice");
+    }
+}
+
 /// Open a URL in the user's default browser (e.g. the prefilled GitHub issue form).
 /// Constrained to https links so it can only ever open the web, never run anything.
 #[tauri::command]
@@ -313,6 +325,7 @@ fn main() {
             let size = Submenu::with_items(app, "Size", true, &[&small, &medium, &large])?;
 
             let chat = MenuItem::with_id(app, "chat", "Chat…", true, Some("Command+Control+C"))?;
+            let voice = MenuItem::with_id(app, "voice", "Voice…", true, Some("Command+Control+V"))?;
             let settings =
                 MenuItem::with_id(app, "settings", "Settings…", true, Some("Command+Control+S"))?;
             let report =
@@ -326,11 +339,13 @@ fn main() {
             #[cfg(debug_assertions)]
             let menu = Menu::with_items(
                 app,
-                &[&cleanup, &chat, &view, &lock, &size, &settings, &report, &quit],
+                &[&cleanup, &chat, &voice, &view, &lock, &size, &settings, &report, &quit],
             )?;
             #[cfg(not(debug_assertions))]
-            let menu =
-                Menu::with_items(app, &[&chat, &view, &lock, &size, &settings, &report, &quit])?;
+            let menu = Menu::with_items(
+                app,
+                &[&chat, &voice, &view, &lock, &size, &settings, &report, &quit],
+            )?;
 
             let visible = Arc::new(AtomicBool::new(false));  // launch hidden (chat-first)
             let locked = Arc::new(AtomicBool::new(false));
@@ -370,6 +385,7 @@ fn main() {
                     "size_m" => resize(app, SIZE_MEDIUM),
                     "size_l" => resize(app, SIZE_LARGE),
                     "chat" => open_chat(app.clone()),
+                    "voice" => request_voice(app),
                     "settings" => open_settings(app, ""),
                     "report" => open_settings(app, "report"),
                     #[cfg(debug_assertions)]
@@ -404,6 +420,11 @@ fn main() {
                 reg!("Command+Control+C", |app, _s, e| {
                     if e.state() == ShortcutState::Pressed {
                         open_chat(app.clone());
+                    }
+                });
+                reg!("Command+Control+V", |app, _s, e| {
+                    if e.state() == ShortcutState::Pressed {
+                        request_voice(app);
                     }
                 });
                 reg!("Command+Control+S", |app, _s, e| {
