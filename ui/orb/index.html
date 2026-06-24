@@ -185,17 +185,10 @@
     ws.onclose=function(){scheduleReconnect();};
     ws.onerror=function(){try{ws.close();}catch(e){}};
   }
-  // First run: if the engine has no settings yet, open Settings so the user can
-  // pick a provider + paste a key. Runs once, the first time we connect.
-  var _setupChecked=false;
-  function checkSetup(){
-    if(_setupChecked) return; _setupChecked=true;
-    fetch(API_BASE+"/setup").then(function(r){return r.json();}).then(function(s){
-      if(s && s.needs_setup && window.__TAURI__ && window.__TAURI__.core){
-        try{ window.__TAURI__.core.invoke("open_settings_window"); }catch(e){}
-      }
-    }).catch(function(){});
-  }
+  // First run is chat-first: we do NOT auto-open Settings anymore. A fresh install
+  // should land in the chat drawer only; Settings stays available from the tray menu
+  // (and the Voice toggle routes there when voice models need downloading).
+  function checkSetup(){ /* intentionally a no-op — see note above */ }
 
   function scheduleReconnect(){
     conn.textContent="reconnecting…";
@@ -286,7 +279,10 @@
   }
   function showOrb(){
     clearTimeout(idleTimer); idleTimer=null;
-    if(!tauriWin||!orbHidden) return;
+    // Always (re)show — the global shortcut / tray can hide the window at the OS
+    // level without going through hideOrb(), leaving orbHidden stale; trusting that
+    // flag would make a voice wake fail to bring the orb back.
+    if(!tauriWin) return;
     orbHidden=false;
     if(tauriWin.show) tauriWin.show();
     // Re-assert floating behavior in case show() reset it.

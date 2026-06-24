@@ -84,11 +84,11 @@ voice: ## Download the bundled default Piper voice into the orb resources dir
 	[ -f "$(VOICE_DIR)/$(VOICE)" ] || curl -fSL "$(VOICE_URL)/$(VOICE)" -o "$(VOICE_DIR)/$(VOICE)"
 	[ -f "$(VOICE_DIR)/$(VOICE).json" ] || curl -fSL "$(VOICE_URL)/$(VOICE).json" -o "$(VOICE_DIR)/$(VOICE).json"
 
-bundle: freeze voice ## Build the full single .dmg: freeze engine -> sidecar -> voice -> tauri build
+bundle: freeze ## Build the single .dmg: freeze engine -> sidecar -> tauri build (voice is NOT bundled — downloaded on demand when the user enables voice, ~115MB off the build)
 	mkdir -p $(SIDECAR_DIR)
 	cp dist/autobot-daemon "$(SIDECAR_DIR)/autobot-daemon-$(TARGET_TRIPLE)"
 	cd ui/orb-shell && cargo tauri build
-	@echo "Bundle (orb + engine + voice) at $(ORB_BUNDLE)/dmg/"
+	@echo "Bundle (orb + engine, voice downloaded on demand) at $(ORB_BUNDLE)/dmg/"
 
 package-orb: ## Build only the orb .dmg (assumes the sidecar is already in place)
 	cd ui/orb-shell && cargo tauri build

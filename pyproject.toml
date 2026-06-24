@@ -156,6 +156,7 @@ files = ["src", "tests"]
 [[tool.mypy.overrides]]
 module = [
     "faster_whisper.*",
+    "huggingface_hub.*",
     "sounddevice.*",
     "ollama.*",
     "openwakeword.*",

@@ -422,10 +422,23 @@ def build(
     # from the mic — that's what makes full-duplex barge-in safe on speakers. If AEC
     # isn't available it's a plain mic with no play(), so TTS uses the system output
     # and we run half-duplex.
-    mic = _build_mic_source(settings)
-    aec_player = mic if getattr(mic, "aec_active", False) and hasattr(mic, "play") else None
-    tts = _build_tts(settings, amplitude_sink, player=aec_player)
-    audio = _build_audio_source(settings, amplitude_sink, on_voice, source=mic)
+    # Chat-first: don't open the mic or load the voice model at startup. Build the
+    # whole voice I/O (mic + TTS + recorder, together, to keep AEC routing) lazily on
+    # first use — which only happens in voice mode. So a chat-default launch is
+    # instant, mic-free (no permission prompt), and never downloads STT until voice
+    # is actually enabled.
+    from autobot.io.lazy_voice import LazyVoiceIO
+
+    def _build_voice_io() -> tuple[AudioSource, TextToSpeech]:
+        mic = _build_mic_source(settings)
+        aec_player = mic if getattr(mic, "aec_active", False) and hasattr(mic, "play") else None
+        tts_ = _build_tts(settings, amplitude_sink, player=aec_player)
+        audio_ = _build_audio_source(settings, amplitude_sink, on_voice, source=mic)
+        return audio_, tts_
+
+    _voice_io = LazyVoiceIO(_build_voice_io)
+    audio = _voice_io.audio
+    tts = _voice_io.tts
 
     # Reloadable STT: rebuilt (new model loaded) when the Settings view changes
     # the speech model — no restart needed (applies on the next transcription).
@@ -457,18 +470,11 @@ def build(
 
     llm = ReloadableLanguageModel(lambda: _build_llm(Settings.load(), registry, transcript, memory))
 
-    # Make barge-in readiness obvious at startup: it engages only when the user
-    # wants it AND the mic is echo-cancelled (so Jack can't interrupt itself).
-    aec_on = bool(getattr(audio, "aec_active", False))
-    if settings.barge_in and aec_on:
-        log.info("barge-in READY (aec_active=True) — talk over Jack to interrupt")
-        print("[barge-in] READY — you can talk over Jack to interrupt it.")
-    elif settings.barge_in:
-        log.warning("barge-in requested but INACTIVE: aec_active=False (AEC off/failed)")
-        print(
-            "[barge-in] INACTIVE — echo cancellation isn't active, so barge-in is off "
-            "(enable AEC + restart; check the [mic] line above)."
-        )
+    # Barge-in engages in voice mode when the user wants it AND the mic is
+    # echo-cancelled. The voice I/O is built lazily (chat-first), so we can't probe
+    # the live AEC state here without forcing the mic open — just note the intent.
+    if settings.barge_in:
+        log.info("barge-in enabled — engages when voice starts (if AEC is active)")
 
     return Orchestrator(
         settings=settings,
@@ -482,6 +488,8 @@ def build(
         on_state=on_state or _print_transition,
         memory=memory,
         on_context=on_context,
+        # Re-show the orb when a voice turn addresses Jack (it may be hidden).
+        on_show=(lambda: on_visibility(True)) if on_visibility is not None else None,
     )
 
 

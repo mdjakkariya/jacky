@@ -19,9 +19,17 @@ class FakeSTT:
 _CLIP: AudioClip = np.zeros(16, dtype=np.float32)
 
 
-def test_builds_eagerly_and_delegates() -> None:
-    stt = ReloadableSTT(lambda: FakeSTT("v1"))
+def test_builds_lazily_on_first_transcribe() -> None:
+    built = {"n": 0}
+
+    def factory() -> FakeSTT:
+        built["n"] += 1
+        return FakeSTT("v1")
+
+    stt = ReloadableSTT(factory)
+    assert built["n"] == 0  # not loaded at construction (chat-first: no model load at startup)
     assert stt.transcribe(_CLIP).text == "v1"
+    assert built["n"] == 1  # built on first use, then cached
 
 
 def test_rebuilds_only_after_mark_dirty() -> None:

@@ -210,7 +210,7 @@ def build_report(
     count_str = " · ".join(f"{lvl}={n}" for lvl, n in sorted(counts.items())) or "none"
 
     parts: list[str] = []
-    parts.append("# Autobot debug report")
+    parts.append("# Jack debug report")
     parts.append(f"_generated {now:%Y-%m-%d %H:%M:%S}_\n")
     parts.append(
         f"**App** v{_app_version()} · {platform.platform()} · "

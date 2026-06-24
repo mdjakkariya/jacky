@@ -303,6 +303,7 @@ class Orchestrator:
         on_state: StateListener | None = _print_transition,
         memory: MemoryStore | None = None,
         on_context: Callable[[dict[str, Any]], None] | None = None,
+        on_show: Callable[[], None] | None = None,
     ) -> None:
         self._settings = settings
         self._audio = audio
@@ -315,6 +316,9 @@ class Orchestrator:
         self._memory = memory
         # Sink for per-turn context-window usage (drives the chat meter), if wired.
         self._on_context = on_context
+        # Asks the UI to re-show the orb (voice UI). Fired when a voice turn is
+        # addressed to Jack while the orb may be hidden, so "Jack, …" brings it back.
+        self._on_show = on_show
         self._sm = StateMachine(on_change=on_state)
         self._acknowledged = False  # spoke a filler this turn?
         self._dismissed = False  # did this turn call the dismiss tool ("go away")?
@@ -482,6 +486,16 @@ class Orchestrator:
         _log.info("re-opened text=%r", new_transcription.text)
         return combined, new_transcription
 
+    def _show_orb(self) -> None:
+        """Ask the UI to bring the voice orb back (it may have been hidden).
+
+        A voice turn only runs while we're in voice mode, so being addressed by
+        voice should always surface the orb — even if the user tucked it away with
+        the global shortcut or the tray, where the engine never learned it hid.
+        """
+        if self._on_show is not None:
+            self._on_show()
+
     def _set_awake(self, awake: bool) -> None:
         """Track conversation state and tell the recorder (drives the orb's listening)."""
         self._awake = awake
@@ -633,6 +647,10 @@ class Orchestrator:
             self._sm.transition(State.IDLE)
             return
 
+        # Addressed to Jack (a greeting or a command): we're engaged by voice, so make
+        # sure the orb is visible — it may have been hidden via the shortcut/tray.
+        self._show_orb()
+
         if result.address is Address.GREETED:
             # Wake word with no command — acknowledge and open the follow-up window.
             _log.info("greeted text=%r", transcription.text)
@@ -742,7 +760,7 @@ class Orchestrator:
         else:
             trigger = f'hands-free (say "{self._settings.wake_phrase}, …")'
         print("=" * 60)
-        print(" Autobot — orchestrator + guarded tools")
+        print(" Jack — orchestrator + guarded tools")
         print(f" STT: {self._settings.stt_model}   LLM: {self._settings.llm_model}")
         print(f" Input: {trigger}")
         print(f" Workspace: {self._settings.sandbox_dir}")

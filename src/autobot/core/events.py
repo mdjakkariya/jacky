@@ -171,6 +171,34 @@ class ContextEvent:
         }
 
 
+@dataclass(frozen=True, slots=True)
+class VoiceDownloadEvent:
+    """Progress of the on-demand voice-model download (drives the Settings bar).
+
+    ``fraction`` is 0..1 overall; ``stage`` is a short human label ("Downloading
+    voice…", "Ready"); ``done`` flips true on the final frame, and ``error`` carries
+    a short message if the download failed.
+    """
+
+    fraction: float
+    stage: str
+    done: bool = False
+    error: str = ""
+
+    def message(self) -> dict[str, object]:
+        """Serialize to the wire shape clients consume."""
+        clamped = 0.0 if self.fraction < 0 else 1.0 if self.fraction > 1 else self.fraction
+        pct = round(100 * clamped)
+        return {
+            "type": "voice_download",
+            "fraction": self.fraction,
+            "pct": pct,
+            "stage": self.stage,
+            "done": self.done,
+            "error": self.error,
+        }
+
+
 Subscriber = Callable[[dict[str, object]], None]
 """Called with each event's wire message. Must not block (drop/queue instead)."""
 
@@ -262,6 +290,12 @@ class EventBus:
                 turn_out=int(info.get("turn_out", 0) or 0),
             ).message()
         )
+
+    def publish_voice_download(
+        self, fraction: float, stage: str, done: bool = False, error: str = ""
+    ) -> None:
+        """Broadcast voice-download progress (the Settings view renders a bar)."""
+        self._emit(VoiceDownloadEvent(fraction, stage, done=done, error=error).message())
 
     def _emit(self, message: dict[str, object]) -> None:
         with self._lock:

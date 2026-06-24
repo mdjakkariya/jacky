@@ -26,6 +26,7 @@
     border-radius:14px;overflow:hidden;border:.5px solid var(--line);
     font:13px/1.5 -apple-system,BlinkMacSystemFont,"SF Pro Text",system-ui,sans-serif;-webkit-font-smoothing:antialiased;}
   header{display:flex;align-items:center;justify-content:space-between;padding:10px 12px;border-bottom:.5px solid var(--line);cursor:grab;user-select:none;-webkit-user-select:none;}
+  header .hgroup{display:flex;align-items:center;gap:8px;}
   header:active{cursor:grabbing;}
   header .seg{display:inline-flex;background:var(--seg);border-radius:8px;padding:2px;-webkit-app-region:no-drag;}
   header .seg button{border:none;background:transparent;color:var(--muted);font-size:12px;padding:4px 10px;border-radius:6px;cursor:pointer;}
@@ -44,7 +45,6 @@
   header .x{border:none;background:transparent;color:var(--muted);font-size:16px;cursor:pointer;-webkit-app-region:no-drag;display:inline-flex;align-items:center;}
   header .x:hover{color:var(--text);}
   header .x svg{width:16px;height:16px;display:block;}
-  header #newchat{margin-left:8px;}
   #log{flex:1;overflow-y:auto;padding:14px 12px;display:flex;flex-direction:column;gap:10px;}
   #log > *{flex-shrink:0;}
   .msg{max-width:82%;font-size:15px;line-height:1.55;padding:10px 13px;border-radius:16px;white-space:pre-wrap;word-wrap:break-word;}
@@ -97,20 +97,24 @@
     width:100%;font-size:13px;font-weight:500;line-height:1.25;}
   .chip .ce{display:block;width:100%;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
     font-size:11.5px;color:var(--muted);margin-top:4px;line-height:1.25;}
+  .spinner{width:24px;height:24px;border-radius:50%;border:2.5px solid var(--field-line);border-top-color:var(--accent);animation:spin .8s linear infinite;}
+  @keyframes spin{to{transform:rotate(360deg);}}
   .hidden{display:none !important;}
 </style>
 </head>
 <body>
   <header>
-    <span class="title">Jack</span>
-    <button class="x" id="newchat" aria-label="New chat" title="New chat">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 4H6a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-6"/><path d="M18.4 2.6a2 2 0 0 1 2.8 2.8L12.5 14l-3.7 1 1-3.7z"/></svg>
-    </button>
-    <span id="ctx" class="ctx" aria-label="Context used">
-      <svg width="16" height="16" viewBox="0 0 36 36" aria-hidden="true"><circle cx="18" cy="18" r="15" fill="none" stroke="var(--field-line)" stroke-width="5"/><circle id="ctxArc" cx="18" cy="18" r="15" fill="none" stroke="#7fb87a" stroke-width="5" stroke-linecap="round" stroke-dasharray="94.2" stroke-dashoffset="94.2" transform="rotate(-90 18 18)"/></svg>
-      <span id="ctxPct" class="pct">0%</span>
-    </span>
-    <div style="display:flex;align-items:center;gap:8px;margin-left:auto;">
+    <div class="hgroup">
+      <span class="title">Jack</span>
+      <button class="x" id="newchat" aria-label="New chat" title="New chat">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 4H6a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-6"/><path d="M18.4 2.6a2 2 0 0 1 2.8 2.8L12.5 14l-3.7 1 1-3.7z"/></svg>
+      </button>
+      <span id="ctx" class="ctx" aria-label="Context used">
+        <svg width="16" height="16" viewBox="0 0 36 36" aria-hidden="true"><circle cx="18" cy="18" r="15" fill="none" stroke="var(--field-line)" stroke-width="5"/><circle id="ctxArc" cx="18" cy="18" r="15" fill="none" stroke="#7fb87a" stroke-width="5" stroke-linecap="round" stroke-dasharray="94.2" stroke-dashoffset="94.2" transform="rotate(-90 18 18)"/></svg>
+        <span id="ctxPct" class="pct">0%</span>
+      </span>
+    </div>
+    <div class="hgroup">
       <div class="seg">
         <button id="m-voice">Voice</button>
         <button id="m-chat" class="on">Chat</button>
@@ -200,6 +204,15 @@
     log.innerHTML = "";
     var n = emptyTpl.cloneNode(true);
     log.appendChild(n); bindChips(n);
+  }
+  // Startup: the daemon takes a moment to come up. Show a centered "Starting…" and
+  // keep the composer disabled until /healthz answers, instead of letting a typed
+  // message fail with "Jack isn't running".
+  function showInitializing(){
+    log.innerHTML = '<div class="empty">'
+      + '<div class="spinner" aria-hidden="true" style="margin-bottom:16px"></div>'
+      + '<h2>Starting Jack…</h2>'
+      + '<p>Getting things ready — just a moment.</p></div>';
   }
   function bubble(cls, text){
     removeEmpty();
@@ -378,15 +391,35 @@
     } catch(e){}
   }
 
-  // Restore voice mode *before* the orb comes back, then hide the drawer.
-  async function closeDrawer(){
-    await setMode("voice");
-    if(window.__TAURI__ && window.__TAURI__.core){
-      window.__TAURI__.core.invoke("close_chat").catch(function(){});
+  // Voice is gated on the speech models being downloaded — we never surface the orb
+  // without them (it'd be useless). Ask the engine whether voice is ready.
+  async function voiceReady(){
+    try { return !!(await (await fetch(API + "/voice/status")).json()).ready; }
+    catch(e){ return false; }
+  }
+  function tauri(){ return window.__TAURI__ && window.__TAURI__.core; }
+
+  // The "Voice" toggle: switch to voice + bring the orb back ONLY if the models are
+  // present; otherwise send the user to Settings to download them (with progress).
+  async function enableVoice(){
+    if(await voiceReady()){
+      await setMode("voice");
+      if(tauri()) tauri().invoke("close_chat").catch(function(){});
+    } else if(tauri()){
+      tauri().invoke("open_settings_voice").catch(function(){});  // deep-link to the voice download
     }
   }
 
-  $("m-voice").addEventListener("click", closeDrawer);
+  // Closing the drawer (✕) means hide/close — nothing else. Clear separation from the
+  // Voice toggle: ✕ never switches to voice or surfaces the orb, it just tucks the
+  // chat away (staying in chat mode). Summon it back with ⌘⌃J, which restores the
+  // last surface (chat).
+  async function closeDrawer(){
+    await setMode("chat");
+    if(tauri()) tauri().invoke("hide_chat").catch(function(){});
+  }
+
+  $("m-voice").addEventListener("click", enableVoice);
   $("m-chat").addEventListener("click", function(){ setMode("chat"); });
   $("close").addEventListener("click", closeDrawer);
 
@@ -410,18 +443,26 @@
   }
 
   // Opening the drawer = entering chat mode (pauses the voice loop). Re-assert on
-  // focus too, in case a mode POST was missed while the window was hidden.
+  // focus too, in case a mode POST was missed while the window was hidden. Chat is
+  // the default, so we no longer force voice on unload — switching to voice is an
+  // explicit, gated action (it needs the downloaded models).
   setMode("chat");
   window.addEventListener("focus", function(){ setMode("chat"); });
-  // If the window goes away by any route (OS close, reload), restore voice so the
-  // orb starts listening again — keepalive lets the request finish during unload.
-  window.addEventListener("pagehide", function(){
-    try {
-      fetch(API + "/settings", {method:"POST", headers:{"content-type":"application/json"},
-        body: JSON.stringify({interaction_mode:"voice"}), keepalive:true});
-    } catch(e){}
-  });
-  box.focus();
+
+  // Gate input on the daemon being up: show "Starting…" and keep the composer
+  // disabled until /healthz answers, then reveal the welcome and focus the box.
+  async function waitForReady(){
+    showInitializing();
+    lockInput(true);
+    for(var i = 0; i < 600; i++){  // ~8 min ceiling; the daemon normally answers in <2s
+      try { if((await fetch(API + "/healthz")).ok){ break; } } catch(e){}
+      await new Promise(function(res){ setTimeout(res, 800); });
+    }
+    showEmpty();
+    lockInput(false);
+    box.focus();
+  }
+  waitForReady();
 })();
 </script>
 </body>

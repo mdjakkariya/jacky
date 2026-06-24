@@ -148,18 +148,12 @@
             <option value="ollama">Local (Ollama)</option>
             <option value="anthropic">Claude (cloud)</option>
           </select></div>
-      </div>
-
-      <div id="local-box">
-        <div class="card" style="margin-top:14px">
+        <div id="local-box">
           <div class="stack"><label for="ollamaModel">Local model</label>
             <select id="ollamaModel"></select>
             <div class="hint" id="ollamaNote"></div></div>
         </div>
-      </div>
-
-      <div id="cloud-box" class="hidden">
-        <div class="card" style="margin-top:14px">
+        <div id="cloud-box" class="hidden">
           <div class="stack"><label for="anthropicModel">Claude model</label>
             <select id="anthropicModel"></select>
             <input type="text" id="anthropicModelCustom" class="hidden" placeholder="model id, e.g. claude-haiku-4-5" style="margin-top:8px" /></div>
@@ -167,6 +161,8 @@
             <input type="password" id="anthropicKey" placeholder="sk-ant-…" autocomplete="off" />
             <div class="hint">Stored securely in your macOS Keychain.</div></div>
         </div>
+      </div>
+      <div id="cloud-note-box" class="hidden">
         <div class="note">Cloud mode sends your requests and what Jack remembers about you to Anthropic. Nothing else leaves your device — your voice stays local and actions run on your Mac.</div>
       </div>
     </section>
@@ -206,9 +202,21 @@
 
     <!-- LISTENING -->
     <section class="panel" id="tab-listen">
-      <div class="card">
-        <div class="row"><span class="grow"><span class="label">Wake word</span><div class="desc">What you say to summon Jack</div></span>
-          <input type="text" id="wake_phrase" style="width:140px" /></div>
+      <div class="card" id="voiceSetupCard">
+        <div class="row">
+          <span class="grow"><span class="label">Voice models</span>
+            <div class="desc" id="voiceStatusDesc">Checking…</div></span>
+          <span class="badge" id="voiceBadge">…</span>
+          <button class="btn" id="voiceDownloadBtn" style="display:none">Download</button>
+        </div>
+        <div class="row" id="voiceProgressRow" style="display:none">
+          <span class="grow">
+            <div class="desc" id="voiceProgressLabel"></div>
+            <div style="height:6px;background:var(--line);border-radius:3px;overflow:hidden;margin-top:8px">
+              <div id="voiceProgressBar" style="height:100%;width:0%;background:#0a84ff;transition:width .2s"></div>
+            </div>
+          </span>
+        </div>
         <div class="row"><span class="grow"><span class="label">Follow-up window</span><div class="desc">Seconds to keep listening (0 = always need wake word)</div></span>
           <input type="number" id="follow_up_window_s" min="0" max="120" step="1" /></div>
         <div class="row"><span class="grow"><span class="label">End-of-speech pause</span><div class="desc">Milliseconds of silence before Jack treats you as done (higher = won't cut you off mid-sentence)</div></span>
@@ -273,16 +281,63 @@
       document.querySelectorAll(".panel").forEach(function(p){p.classList.remove("active");});
       b.classList.add("active"); $("tab-" + b.dataset.tab).classList.add("active");
       if(b.dataset.tab === "perms") loadPermissions();
+      if(b.dataset.tab === "listen") loadVoiceStatus();
     });
   });
 
+  // Voice models: show whether they're downloaded, and offer an on-demand download
+  // with a live progress bar (the engine streams `voice_download` over the WS).
+  var WS_URL = API.replace(/^http/, "ws") + "/ws", _voiceWs = null, _voiceDownloading = false;
+  async function loadVoiceStatus(){
+    var desc = $("voiceStatusDesc"), badge = $("voiceBadge"), btn = $("voiceDownloadBtn");
+    // The progress row is only for an in-flight download — keep it hidden otherwise so
+    // "Starting…" never shows on its own.
+    if(!_voiceDownloading){ $("voiceProgressRow").style.display = "none"; }
+    var s;
+    try { s = await (await fetch(API + "/voice/status")).json(); }
+    catch(e){ desc.textContent = "Couldn't reach Jack — is it running?"; badge.textContent = "—"; return; }
+    if(s.ready){
+      badge.textContent = "Ready"; badge.className = "badge granted";
+      desc.textContent = "Downloaded — voice is ready to use.";
+      btn.style.display = "none";
+    } else {
+      var models = s.models || {}, miss = (s.needed || []).filter(function(k){ return !models[k]; });
+      badge.textContent = "Not installed"; badge.className = "badge needed";
+      desc.textContent = "Needs downloading: " + (miss.join(", ") || "voice models") + ". Download to enable voice.";
+      btn.style.display = "";
+    }
+  }
+  function startVoiceDownload(){
+    var btn = $("voiceDownloadBtn"), row = $("voiceProgressRow"), bar = $("voiceProgressBar"), lbl = $("voiceProgressLabel");
+    _voiceDownloading = true;
+    btn.disabled = true; row.style.display = "flex"; bar.style.width = "0%"; lbl.textContent = "Starting…";
+    try { fetch(API + "/voice/download", {method:"POST"}); } catch(e){}
+    try { _voiceWs = new WebSocket(WS_URL); } catch(e){ lbl.textContent = "Couldn't connect for progress."; return; }
+    _voiceWs.onmessage = function(ev){
+      var m; try { m = JSON.parse(ev.data); } catch(e){ return; }
+      if(m.type !== "voice_download") return;
+      bar.style.width = (m.pct || 0) + "%";
+      lbl.textContent = m.error ? ("Failed: " + m.error) : (m.stage || "Downloading…");
+      if(m.done){
+        try { _voiceWs.close(); } catch(e){} _voiceWs = null;
+        _voiceDownloading = false; btn.disabled = false;
+        setTimeout(function(){ if(!m.error) row.style.display = "none"; loadVoiceStatus(); }, 600);
+      }
+    };
+  }
+  $("voiceDownloadBtn").addEventListener("click", startVoiceDownload);
+
   var _PERM_LABEL = {granted: "Granted", needed: "Needed", unknown: "Unknown"};
+  var _permsLoading = false;
   async function loadPermissions(){
     var box = $("permsList");
-    box.textContent = "";
+    if(_permsLoading) return;  // guard against overlapping refreshes stacking rows
+    _permsLoading = true;
     var rows = [];
     try { rows = ((await (await fetch(API + "/permissions")).json()).permissions) || []; }
-    catch(e){ box.innerHTML = '<div class="perm-row"><span class="desc">Couldn\'t load — is Jack running?</span></div>'; return; }
+    catch(e){ box.innerHTML = '<div class="perm-row"><span class="desc">Couldn\'t load — is Jack running?</span></div>'; _permsLoading = false; return; }
+    finally { _permsLoading = false; }
+    box.textContent = "";  // clear right before render (after the await) so concurrent calls can't stack
     rows.forEach(function(p){
       var row = document.createElement("div"); row.className = "perm-row";
       var info = document.createElement("span"); info.className = "grow";
@@ -325,6 +380,7 @@
 
   function setProviderUI(p){
     $("cloud-box").classList.toggle("hidden", p !== "anthropic");
+    $("cloud-note-box").classList.toggle("hidden", p !== "anthropic");
     $("local-box").classList.toggle("hidden", p === "anthropic");
     $("providerDesc").textContent = p === "anthropic"
       ? "Faster, but your requests are sent to Anthropic."
@@ -391,15 +447,20 @@
 
   async function load(){
     $("status").textContent = ""; $("banner").classList.remove("show");
-    var s;
-    try { s = await (await fetch(API + "/settings")).json(); }
-    catch(e){ $("banner").classList.add("show"); setEnabled(false); return; }
+    // The daemon may still be starting — retry briefly before declaring it down, so
+    // a freshly-launched app doesn't flash "Jack isn't running."
+    var s = null;
+    for(var i = 0; i < 12; i++){
+      try { s = await (await fetch(API + "/settings")).json(); break; } catch(e){}
+      setEnabled(false);
+      await new Promise(function(res){ setTimeout(res, 800); });
+    }
+    if(s === null){ $("banner").classList.add("show"); setEnabled(false); return; }
     setEnabled(true);
     var provider = s.llm_provider || "ollama";
     $("provider").value = provider;
     setProviderUI(provider);
     populateClaudeModels(s.anthropic_model || "");
-    $("wake_phrase").value = s.wake_phrase || "";
     $("follow_up_window_s").value = s.follow_up_window_s != null ? s.follow_up_window_s : 30;
     $("end_silence_ms").value = s.end_silence_ms != null ? s.end_silence_ms : 1400;
     $("max_utterance_s").value = s.max_utterance_s != null ? s.max_utterance_s : 30;
@@ -412,6 +473,7 @@
     var sec = s._secrets || {};
     $("keyState").textContent = sec.anthropic_api_key ? "— saved (leave blank to keep)" : "— not set";
     $("webKeyState").textContent = sec.web_api_key ? "— saved (leave blank to keep)" : "— not set";
+    loadVoiceStatus();
     await populateModels(s.llm_model || "");
   }
 
@@ -446,7 +508,6 @@
       llm_model: $("ollamaModel").value,
       anthropic_model: selectedClaudeModel(),
       web_provider: $("web_provider").value,
-      wake_phrase: $("wake_phrase").value.trim(),
       follow_up_window_s: Number($("follow_up_window_s").value),
       end_silence_ms: Number($("end_silence_ms").value),
       max_utterance_s: Number($("max_utterance_s").value),
@@ -572,6 +633,16 @@
   // already-open window, or we auto-open when launched with a #report hash.
   window.__openReport = raiseIssue;
   if(location.hash.indexOf("report") >= 0){ raiseIssue(); }
+
+  // Jump to a tab programmatically (used by the #voice deep-link from the Voice toggle).
+  function switchTab(name){
+    var btn = document.querySelector('.tabs button[data-tab="' + name + '"]');
+    if(btn) btn.click();
+  }
+  // The chat's Voice toggle deep-links here when models need downloading: land on the
+  // Listening tab so the voice-download section is right there.
+  window.__openVoice = function(){ switchTab("listen"); };
+  if(location.hash.indexOf("voice") >= 0){ window.__openVoice(); }
 
   load();
 })();

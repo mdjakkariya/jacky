@@ -111,6 +111,33 @@ def test_post_confirm_delivers_clicked_answer() -> None:
     assert answers == [True, False]
 
 
+def test_voice_status_returns_model_presence_shape() -> None:
+    body = TestClient(create_app(EventBus())).get("/voice/status").json()
+    assert set(body["models"]) >= {"voice", "stt", "wake"}
+    assert isinstance(body["ready"], bool) and "needed" in body
+
+
+def test_voice_download_starts_and_streams_done(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    import time
+
+    import autobot.voice_setup as vs
+
+    # No network: fake the orchestration so the worker thread just reports progress.
+    monkeypatch.setattr(vs, "download_missing", lambda s, cb, *a, **k: cb(0.5, "Downloading…"))
+    bus = EventBus()
+    seen: list[dict[str, object]] = []
+    bus.subscribe(seen.append)
+    client = TestClient(create_app(bus))
+
+    assert client.post("/voice/download").json() == {"ok": True, "started": True}
+    for _ in range(100):  # wait for the background thread to publish the final frame
+        if any(m.get("type") == "voice_download" and m.get("done") for m in seen):
+            break
+        time.sleep(0.02)
+    frames = [m for m in seen if m.get("type") == "voice_download"]
+    assert frames and frames[-1]["done"] is True and frames[-1]["stage"] == "Ready"
+
+
 def test_post_new_session_invokes_callback() -> None:
     calls = {"n": 0}
     app = create_app(EventBus(), on_new_session=lambda: calls.__setitem__("n", calls["n"] + 1))

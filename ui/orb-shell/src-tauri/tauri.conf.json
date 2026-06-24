@@ -22,6 +22,7 @@
         "skipTaskbar": true,
         "shadow": false,
         "center": false,
+        "visible": false,
         "x": 1100,
         "y": 80
       }
@@ -38,9 +39,6 @@
     ],
     "externalBin": [
       "binaries/autobot-daemon"
-    ],
-    "resources": [
-      "voices/*"
     ]
   }
 }

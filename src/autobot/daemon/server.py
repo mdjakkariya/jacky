@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import threading
 from typing import TYPE_CHECKING, Any
 
 # Imported at module top (not lazily) on purpose: with ``from __future__ import
@@ -39,6 +40,9 @@ _log = get_logger("daemon")
 # Secrets the Settings view may store (Keychain account names). Anything else is
 # rejected so the endpoint can't write arbitrary Keychain items.
 _SECRET_NAMES = ("anthropic_api_key", "web_api_key")
+
+# Guards the on-demand voice-model download so two clicks can't run it twice.
+_voice_download_lock = threading.Lock()
 
 
 def _installed_ollama_models(host: str) -> list[str]:
@@ -251,6 +255,38 @@ def create_app(
             await asyncio.to_thread(on_new_session)
         return {"ok": True}
 
+    async def get_voice_status() -> dict[str, Any]:
+        """Which voice models are present, and whether voice can be enabled."""
+        from autobot import voice_setup
+
+        return voice_setup.status(Settings.load(path))
+
+    async def post_voice_download() -> dict[str, Any]:
+        """Start downloading the missing voice models; progress streams over the WS.
+
+        Runs on a background thread (network + disk) and publishes ``voice_download``
+        events with the overall fraction; the Settings view renders the bar and, on
+        ``done``, can enable voice. Refuses to start a second concurrent download.
+        """
+        from autobot import voice_setup
+
+        settings = Settings.load(path)
+        if not _voice_download_lock.acquire(blocking=False):
+            return {"ok": False, "error": "a download is already in progress"}
+
+        def run() -> None:
+            try:
+                voice_setup.download_missing(settings, bus.publish_voice_download)
+                bus.publish_voice_download(1.0, "Ready", done=True)
+            except Exception as exc:  # surface a short message; never crash the daemon
+                _log.warning("voice download failed: %s", exc)
+                bus.publish_voice_download(0.0, "Download failed", done=True, error=str(exc))
+            finally:
+                _voice_download_lock.release()
+
+        threading.Thread(target=run, name="voice-download", daemon=True).start()
+        return {"ok": True, "started": True}
+
     async def post_confirm(request: Request) -> dict[str, Any]:
         """Deliver a clicked Yes/No answer for a pending confirmation to the engine."""
         payload = await request.json()
@@ -276,6 +312,8 @@ def create_app(
     app.add_api_route("/confirm", post_confirm, methods=["POST"])
     app.add_api_route("/chat", post_chat, methods=["POST"])
     app.add_api_route("/session/new", post_new_session, methods=["POST"])
+    app.add_api_route("/voice/status", get_voice_status, methods=["GET"])
+    app.add_api_route("/voice/download", post_voice_download, methods=["POST"])
     return app
 
 

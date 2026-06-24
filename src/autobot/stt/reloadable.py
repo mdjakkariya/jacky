@@ -31,7 +31,10 @@ class ReloadableSTT:
         self._factory = factory
         self._lock = threading.Lock()
         self._dirty = False
-        self._inner: SpeechToText = factory()  # build eagerly (load model at startup)
+        # Built LAZILY on the first transcription — not at startup. Loading (and, on a
+        # fresh machine, downloading) the model is slow and only needed in voice mode,
+        # so a chat-first launch must not pay that cost or block the daemon coming up.
+        self._inner: SpeechToText | None = None
 
     def mark_dirty(self) -> None:
         """Request a model reload before the next transcription (settings changed)."""
@@ -40,13 +43,16 @@ class ReloadableSTT:
         _log.info("stt marked for reload")
 
     def transcribe(self, audio: AudioClip) -> Transcription:
-        """Reload the model from fresh settings if dirty, then transcribe."""
+        """Build/reload the model on first use or after a settings change, then transcribe."""
         with self._lock:
-            if self._dirty:
+            if self._inner is None or self._dirty:
+                first = self._inner is None
                 try:
                     self._inner = self._factory()
-                    _log.info("stt reloaded from updated settings")
-                except Exception as exc:  # keep the working model on failure
+                    _log.info("stt model loaded" if first else "stt reloaded from updated settings")
+                except Exception as exc:
+                    if self._inner is None:
+                        raise  # can't transcribe without any model — let the turn error out
                     _log.warning("stt reload failed, keeping current: %s", exc)
                 self._dirty = False
             inner = self._inner

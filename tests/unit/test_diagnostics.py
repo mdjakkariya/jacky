@@ -111,7 +111,7 @@ def test_build_report_has_sections_and_is_redacted(tmp_path: Path) -> None:
     report = build_report(_FakeSettings(), buffer=buf, log_path=log)  # type: ignore[arg-type]
 
     for heading in (
-        "# Autobot debug report",
+        "# Jack debug report",
         "## Config",
         "## State sequence",
         "## Errors & warnings",

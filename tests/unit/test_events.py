@@ -94,6 +94,23 @@ def test_publish_context_carries_pct_and_dev_flag() -> None:
     }
 
 
+def test_publish_voice_download_carries_pct_and_done() -> None:
+    bus = EventBus()
+    seen: list[dict[str, object]] = []
+    bus.subscribe(seen.append)
+    bus.publish_voice_download(0.5, "Downloading voice…")
+    assert seen[-1] == {
+        "type": "voice_download",
+        "fraction": 0.5,
+        "pct": 50,
+        "stage": "Downloading voice…",
+        "done": False,
+        "error": "",
+    }
+    bus.publish_voice_download(1.0, "Ready", done=True)
+    assert seen[-1]["done"] is True and seen[-1]["pct"] == 100
+
+
 def test_bus_broadcasts_state_to_subscribers_and_records_last() -> None:
     bus = EventBus()
     seen: list[dict[str, object]] = []

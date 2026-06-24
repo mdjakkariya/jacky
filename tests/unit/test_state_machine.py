@@ -90,7 +90,7 @@ def _orchestrator(text: str, gate: object, tts: object | None = None) -> Orchest
 
     transitions: list[State] = []
     orch = Orchestrator(
-        settings=Settings(),
+        settings=Settings(interaction_mode="voice"),  # exercising the voice loop
         audio=_FakeAudio(),
         stt=_FakeSTT(text),
         llm=_ToolingLLM(),
@@ -306,7 +306,7 @@ def test_incomplete_utterance_triggers_reopen_and_retranscribe() -> None:
     audio = _ContinuingAudio()
     stt = _GrowingSTT()
     orch = Orchestrator(
-        settings=Settings(reopen_on_incomplete=True),
+        settings=Settings(reopen_on_incomplete=True, interaction_mode="voice"),
         audio=audio,
         stt=stt,
         llm=_EchoLLM(),
@@ -349,7 +349,7 @@ def test_awake_true_after_addressed_turn_false_when_ignored() -> None:
     # Addressed turn (PassThrough -> COMMAND): we end up awake for the follow-up.
     addressed = _AwakeAudio()
     Orchestrator(
-        settings=Settings(),
+        settings=Settings(interaction_mode="voice"),
         audio=addressed,
         stt=_FakeSTT("open spotify"),
         llm=_EchoLLM(),
@@ -362,7 +362,7 @@ def test_awake_true_after_addressed_turn_false_when_ignored() -> None:
     # Ignored (not addressed): we are not awake, so the orb can rest.
     ignored = _AwakeAudio()
     Orchestrator(
-        settings=Settings(),
+        settings=Settings(interaction_mode="voice"),
         audio=ignored,
         stt=_FakeSTT("just chatting nearby"),
         llm=_EchoLLM(),
@@ -371,6 +371,46 @@ def test_awake_true_after_addressed_turn_false_when_ignored() -> None:
         tts=NullTTS(),
     ).run_once()
     assert ignored.awake[-1] is False
+
+
+def test_voice_wake_reshows_orb_only_when_addressed() -> None:
+    # A voice turn addressed to Jack must re-show the orb (it may have been hidden
+    # via the global shortcut/tray); an unaddressed turn must not.
+    from autobot.orchestrator.wake_gate import Address, PassThroughGate, WakeResult
+    from autobot.tts.null_tts import NullTTS
+
+    class _IgnoringGate:
+        def process(self, text: str, started_at: float | None = None) -> WakeResult:
+            return WakeResult(Address.IGNORED)
+
+        def mark_turn_complete(self) -> None: ...
+        def end_follow_up(self) -> None: ...
+
+    shown: list[bool] = []
+    Orchestrator(
+        settings=Settings(interaction_mode="voice"),
+        audio=_FakeAudio(),
+        stt=_FakeSTT("open spotify"),
+        llm=_EchoLLM(),
+        gate=_RecordingGate(),  # type: ignore[arg-type]
+        wake_gate=PassThroughGate(),
+        tts=NullTTS(),
+        on_show=lambda: shown.append(True),
+    ).run_once()
+    assert shown == [True]  # addressed -> orb re-shown
+
+    shown_ignored: list[bool] = []
+    Orchestrator(
+        settings=Settings(interaction_mode="voice"),
+        audio=_FakeAudio(),
+        stt=_FakeSTT("just chatting nearby"),
+        llm=_EchoLLM(),
+        gate=_RecordingGate(),  # type: ignore[arg-type]
+        wake_gate=_IgnoringGate(),
+        tts=NullTTS(),
+        on_show=lambda: shown_ignored.append(True),
+    ).run_once()
+    assert shown_ignored == []  # not addressed -> orb left as-is
 
 
 class _StoppableTTS:
@@ -410,7 +450,7 @@ def test_barge_in_stops_reply_and_queues_the_interrupting_utterance() -> None:
 
     audio, tts = _BargeAudio(), _StoppableTTS()
     orch = Orchestrator(
-        settings=Settings(barge_in=True),
+        settings=Settings(barge_in=True, interaction_mode="voice"),
         audio=audio,
         stt=_FakeSTT("open spotify"),
         llm=_EchoLLM(),
@@ -439,7 +479,7 @@ def test_no_barge_in_when_input_is_not_echo_cancelled() -> None:
 
     tts = _StoppableTTS()
     orch = Orchestrator(
-        settings=Settings(barge_in=True),
+        settings=Settings(barge_in=True, interaction_mode="voice"),
         audio=_PlainAudio(),
         stt=_FakeSTT("open spotify"),
         llm=_EchoLLM(),
@@ -475,7 +515,7 @@ def test_voice_and_chat_turns_do_not_interleave_state() -> None:
             return user_text
 
     orch = Orchestrator(
-        settings=Settings(),
+        settings=Settings(interaction_mode="voice"),
         audio=_FakeAudio(),
         stt=_FakeSTT("open spotify"),
         llm=_BlockingLLM(),

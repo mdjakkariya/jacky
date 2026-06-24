@@ -27,4 +27,13 @@ def main() -> None:
 
 
 if __name__ == "__main__":
+    # CRITICAL for frozen (PyInstaller) builds: on macOS multiprocessing defaults to
+    # the 'spawn' start method, which re-executes THIS entry point for every worker a
+    # dependency starts (e.g. parallel model downloads on first run). Without this
+    # guard each spawned child would boot a brand-new engine — opening the mic and
+    # loading STT — cascading into a fork bomb that pins the CPU and hangs the machine.
+    # freeze_support() makes a spawned child run its worker target instead of main().
+    import multiprocessing
+
+    multiprocessing.freeze_support()
     main()

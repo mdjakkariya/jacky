@@ -452,4 +452,4 @@ def test_system_prompt_includes_memory_when_present() -> None:
         client=FakeClient([]),
     )
     sys = model._system()
-    assert "MD" in sys and "Autobot" in sys
+    assert "MD" in sys and "Jack" in sys

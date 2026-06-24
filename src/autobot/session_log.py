@@ -78,7 +78,7 @@ class FileTranscript:
         self._total_out = 0
         self._total_cost = 0.0
         self._has_cost = False
-        self._write(f"# Autobot session — {started:%Y-%m-%d %H:%M:%S}\n")
+        self._write(f"# Jack session — {started:%Y-%m-%d %H:%M:%S}\n")
         if header:
             self._write(f"\n{header}\n")
         self._write("\n")
@@ -97,7 +97,7 @@ class FileTranscript:
 
     def assistant(self, text: str) -> None:
         """Record the assistant's spoken reply."""
-        self._write(f"**Autobot:** {text}\n\n")
+        self._write(f"**Jack:** {text}\n\n")
 
     def tool(self, name: str, arguments: dict[str, Any], ok: bool, detail: str) -> None:
         """Record a tool execution and its outcome."""

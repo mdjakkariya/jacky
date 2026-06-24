@@ -17,6 +17,18 @@ use tauri_plugin_shell::ShellExt;
 /// Holds the spawned engine sidecar so we can stop it when the app quits.
 struct Engine(Mutex<Option<CommandChild>>);
 
+/// The surface the user last had open: `true` = chat drawer, `false` = voice orb.
+/// The ⌘⌃J summon toggle restores THIS (persisting the mode) instead of switching
+/// chat⇄voice — and since the orb only becomes the last surface once voice is enabled
+/// (a gated action), the toggle never surfaces a useless orb on a fresh, chat-only app.
+struct LastSurface(AtomicBool);
+
+fn set_last_surface(app: &tauri::AppHandle, chat: bool) {
+    if let Some(s) = app.try_state::<LastSurface>() {
+        s.0.store(chat, Ordering::Relaxed);
+    }
+}
+
 /// Start the bundled `autobot-daemon` sidecar; the orb connects to it over the
 /// local WebSocket. Logs (but doesn't crash) if it can't start.
 #[allow(dead_code)] // only called in release builds (see setup)
@@ -59,7 +71,14 @@ fn stop_engine(app: &tauri::AppHandle) {
 /// Open the Settings window — callable from the orb (e.g. the first-run wizard).
 #[tauri::command]
 fn open_settings_window(app: tauri::AppHandle) {
-    open_settings(&app, false);
+    open_settings(&app, "");
+}
+
+/// Open Settings on the Listening tab's voice-download section — used when the user
+/// picks Voice but the speech models aren't downloaded yet.
+#[tauri::command]
+fn open_settings_voice(app: tauri::AppHandle) {
+    open_settings(&app, "voice");
 }
 
 /// Open (or focus) the chat drawer — a right-docked panel for typed chat mode.
@@ -70,6 +89,7 @@ fn open_settings_window(app: tauri::AppHandle) {
 /// macOS jump you to the Desktop Space, which is exactly the bug we're avoiding.
 #[tauri::command]
 fn open_chat(app: tauri::AppHandle) {
+    set_last_surface(&app, true);  // chat is now the surface to restore on summon
     // Chat and voice are one-at-a-time: hide the orb while the chat drawer is open
     // (close_chat shows it again), so they never overlap.
     with_orb(&app, |w| {
@@ -124,6 +144,7 @@ fn open_chat(app: tauri::AppHandle) {
 /// Hide the chat drawer, bring the orb back, and return to the background presence.
 #[tauri::command]
 fn close_chat(app: tauri::AppHandle) {
+    set_last_surface(&app, false);  // voice/orb is now the surface to restore on summon
     if let Some(win) = app.get_webview_window("chat") {
         let _ = win.hide();
     }
@@ -131,6 +152,17 @@ fn close_chat(app: tauri::AppHandle) {
     with_orb(&app, |w| {
         let _ = w.show();
     });
+    #[cfg(target_os = "macos")]
+    let _ = app.set_activation_policy(tauri::ActivationPolicy::Accessory);
+}
+
+/// Hide the chat drawer WITHOUT bringing the orb back — used when voice isn't set up
+/// yet, so closing chat doesn't surface a useless orb (no voice models downloaded).
+#[tauri::command]
+fn hide_chat(app: tauri::AppHandle) {
+    if let Some(win) = app.get_webview_window("chat") {
+        let _ = win.hide();
+    }
     #[cfg(target_os = "macos")]
     let _ = app.set_activation_policy(tauri::ActivationPolicy::Accessory);
 }
@@ -227,13 +259,17 @@ fn main() {
     builder
         .invoke_handler(tauri::generate_handler![
             open_settings_window,
+            open_settings_voice,
             open_external,
             reveal_in_finder,
             copy_to_clipboard,
             open_chat,
-            close_chat
+            close_chat,
+            hide_chat
         ])
         .setup(|app| {
+            // Track which surface to restore on summon; chat is the launch surface.
+            app.manage(LastSurface(AtomicBool::new(true)));
             // Bundled release: launch the embedded engine (the orb is its UI client).
             // In dev (`cargo tauri dev`) run the engine separately with `make run`,
             // so you can iterate on it and the orb won't double-spawn it on :8765.
@@ -268,7 +304,7 @@ fn main() {
             // tray/status-item menu these key-equivalents are display-only — they fire
             // only while the menu is open — so the GLOBAL hotkeys registered after the
             // tray (same as summon) are the real, always-on handlers. The combos match.
-            let view = MenuItem::with_id(app, "view", HIDE, true, Some("Command+Control+J"))?;
+            let view = MenuItem::with_id(app, "view", SHOW, true, Some("Command+Control+J"))?;
             let lock = MenuItem::with_id(app, "lock", MOVABLE, true, Some("Command+Control+L"))?;
 
             let small = MenuItem::with_id(app, "size_s", "Small", true, None::<&str>)?;
@@ -296,7 +332,7 @@ fn main() {
             let menu =
                 Menu::with_items(app, &[&chat, &view, &lock, &size, &settings, &report, &quit])?;
 
-            let visible = Arc::new(AtomicBool::new(true));
+            let visible = Arc::new(AtomicBool::new(false));  // launch hidden (chat-first)
             let locked = Arc::new(AtomicBool::new(false));
             let view_item = view.clone();
             let lock_item = lock.clone();
@@ -334,8 +370,8 @@ fn main() {
                     "size_m" => resize(app, SIZE_MEDIUM),
                     "size_l" => resize(app, SIZE_LARGE),
                     "chat" => open_chat(app.clone()),
-                    "settings" => open_settings(app, false),
-                    "report" => open_settings(app, true),
+                    "settings" => open_settings(app, ""),
+                    "report" => open_settings(app, "report"),
                     #[cfg(debug_assertions)]
                     "cleanup" => eprintln!("[jack] {}", cleanup_storage(app)),
                     "quit" => app.exit(0),
@@ -372,12 +408,12 @@ fn main() {
                 });
                 reg!("Command+Control+S", |app, _s, e| {
                     if e.state() == ShortcutState::Pressed {
-                        open_settings(app, false);
+                        open_settings(app, "");
                     }
                 });
                 reg!("Command+Control+R", |app, _s, e| {
                     if e.state() == ShortcutState::Pressed {
-                        open_settings(app, true);
+                        open_settings(app, "report");
                     }
                 });
                 reg!("Command+Control+Q", |app, _s, e| {
@@ -396,6 +432,12 @@ fn main() {
                     }
                 });
             }
+
+            // Launch into chat: the engine defaults to chat mode (no mic, no voice
+            // models needed), so open the chat drawer and leave the orb hidden. The
+            // orb only appears once the user switches to voice (close_chat shows it),
+            // which the chat UI gates on the voice models being downloaded.
+            open_chat(app.handle().clone());
 
             Ok(())
         })
@@ -451,7 +493,9 @@ fn install_edit_menu(app: &tauri::App) -> tauri::Result<()> {
 /// the API-key field. So while Settings is open we switch to the regular
 /// activation policy (the app activates, fields are typable, a Dock icon appears)
 /// and switch back to accessory when the window closes.
-fn open_settings(app: &tauri::AppHandle, focus_report: bool) {
+fn open_settings(app: &tauri::AppHandle, target: &str) {
+    // `target`: "" (default Model tab), "report" (open the debug-report sheet), or
+    // "voice" (jump to the Listening tab's voice-download section).
     // Become a regular app AND actually activate it — without activating, no
     // window can become "key", so text fields can't take focus or accept input.
     #[cfg(target_os = "macos")]
@@ -463,15 +507,25 @@ fn open_settings(app: &tauri::AppHandle, focus_report: bool) {
     if let Some(win) = app.get_webview_window("settings") {
         let _ = win.show();
         let _ = win.set_focus();
-        // Already open: ask the webview to pop the debug-report sheet.
-        if focus_report {
-            let _ = win.eval("window.__openReport && window.__openReport()");
+        // Already open: ask the webview to jump to the requested place.
+        match target {
+            "report" => {
+                let _ = win.eval("window.__openReport && window.__openReport()");
+            }
+            "voice" => {
+                let _ = win.eval("window.__openVoice && window.__openVoice()");
+            }
+            _ => {}
         }
         return;
     }
 
-    // Fresh window: a #report hash the page checks on load auto-opens the sheet.
-    let url = if focus_report { "settings.html#report" } else { "settings.html" };
+    // Fresh window: a #hash the page checks on load (#report sheet / #voice tab).
+    let url = if target.is_empty() {
+        "settings.html".to_string()
+    } else {
+        format!("settings.html#{target}")
+    };
     let handle = app.clone();
     match WebviewWindowBuilder::new(app, "settings", WebviewUrl::App(url.into()))
         .title("Jack — Settings")
@@ -504,24 +558,43 @@ fn with_orb(app: &tauri::AppHandle, f: impl FnOnce(&tauri::WebviewWindow)) {
     }
 }
 
-/// Summon/dismiss Jack (the ⌘⇧J global hotkey). Keeps the one-mode-at-a-time rule:
-/// if the chat drawer is open it's closed first (which brings the voice orb back);
-/// otherwise the orb is toggled. So the hotkey never shows the orb and chat at once.
+/// Summon/dismiss Jack (the ⌘⌃J global hotkey). It toggles the *visibility* of the
+/// current surface and, when summoning from hidden, restores whatever was last shown
+/// (chat or voice) — it does NOT switch modes. So pressing it in chat hides/shows the
+/// chat drawer, and it only ever shows the orb if the user had already enabled voice
+/// (the orb is never surfaced on a fresh, chat-only app).
 fn toggle_jack(app: &tauri::AppHandle) {
-    if let Some(chat) = app.get_webview_window("chat") {
-        if chat.is_visible().unwrap_or(false) {
-            close_chat(app.clone()); // hides chat, restores voice + shows the orb
-            return;
-        }
+    let chat_visible = app
+        .get_webview_window("chat")
+        .map(|w| w.is_visible().unwrap_or(false))
+        .unwrap_or(false);
+    if chat_visible {
+        hide_chat(app.clone()); // dismiss the drawer — do NOT surface the orb
+        return;
     }
-    with_orb(app, |w| {
-        if w.is_visible().unwrap_or(false) {
+    let orb_visible = app
+        .get_webview_window("orb")
+        .map(|w| w.is_visible().unwrap_or(false))
+        .unwrap_or(false);
+    if orb_visible {
+        with_orb(app, |w| {
             let _ = w.hide();
-        } else {
+        });
+        return;
+    }
+    // Both hidden — summon the surface that was last shown (persisted; no mode switch).
+    let chat_last = app
+        .try_state::<LastSurface>()
+        .map(|s| s.0.load(Ordering::Relaxed))
+        .unwrap_or(true);
+    if chat_last {
+        open_chat(app.clone());
+    } else {
+        with_orb(app, |w| {
             let _ = w.show();
             let _ = w.set_always_on_top(true);
-        }
-    });
+        });
+    }
 }
 
 /// Resize the orb window to a square `px`; the web orb scales to fill it.
