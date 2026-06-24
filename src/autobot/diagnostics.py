@@ -23,7 +23,7 @@ from collections import Counter, deque
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from autobot.config import Settings
@@ -74,17 +74,48 @@ class DiagnosticsBuffer:
         self._states: deque[str] = deque(maxlen=states)
         self._counts: Counter[str] = Counter()
         self._started = datetime.now()
+        # Running totals (never wrap, unlike the bounded deques) so a session window
+        # can be sliced even after old breadcrumbs have been evicted.
+        self._added = 0
+        self._errors_added = 0
+        self._states_added = 0
+        # Marks the start of the current chat session (set by mark_session on "New
+        # chat"); defaults to engine start so the first session is the whole run.
+        self._session_started = self._started
+        self._session_added = 0
+        self._session_errors_added = 0
+        self._session_states_added = 0
 
     def add(self, crumb: Crumb) -> None:
         """Record a breadcrumb; warnings/errors are also kept in their own tail."""
         self._recent.append(crumb)
+        self._added += 1
         self._counts[crumb.level] += 1
         if crumb.level in _WARN_LEVELS:
             self._errors.append(crumb)
+            self._errors_added += 1
 
     def add_state(self, old: str, new: str) -> None:
         """Append one state transition to the compact sequence trace."""
         self._states.append(f"{datetime.now():%H:%M:%S} {old}→{new}")
+        self._states_added += 1
+
+    def mark_session(self) -> None:
+        """Mark 'now' as the start of a fresh session (the chat's "New chat").
+
+        The full report still shows everything; only the concise/per-session view
+        (:func:`build_dev_report`) slices to breadcrumbs recorded after this point.
+        """
+        self._session_started = datetime.now()
+        self._session_added = self._added
+        self._session_errors_added = self._errors_added
+        self._session_states_added = self._states_added
+
+    @staticmethod
+    def _tail(items: deque[Crumb] | deque[str], since: int, total: int) -> list[Any]:
+        """The items added since ``since`` (running total ``total``), capped to buffer."""
+        n = min(total - since, len(items))
+        return list(items)[-n:] if n > 0 else []
 
     @property
     def recent(self) -> list[Crumb]:
@@ -101,6 +132,18 @@ class DiagnosticsBuffer:
         """The state-transition trace (oldest first)."""
         return list(self._states)
 
+    def session_recent(self) -> list[Crumb]:
+        """Breadcrumbs recorded since the last :meth:`mark_session` (this session)."""
+        return self._tail(self._recent, self._session_added, self._added)
+
+    def session_errors(self) -> list[Crumb]:
+        """Warnings/errors recorded since the last :meth:`mark_session`."""
+        return self._tail(self._errors, self._session_errors_added, self._errors_added)
+
+    def session_states(self) -> list[str]:
+        """State transitions recorded since the last :meth:`mark_session`."""
+        return self._tail(self._states, self._session_states_added, self._states_added)
+
     @property
     def counts(self) -> dict[str, int]:
         """Count of breadcrumbs seen per level (since start)."""
@@ -110,6 +153,11 @@ class DiagnosticsBuffer:
     def started(self) -> datetime:
         """When this buffer began collecting (≈ engine start)."""
         return self._started
+
+    @property
+    def session_started(self) -> datetime:
+        """When the current session began (last :meth:`mark_session`, else start)."""
+        return self._session_started
 
 
 class RingLogHandler(logging.Handler):
@@ -245,6 +293,66 @@ def build_report(
     parts.append("```\n" + ("\n".join(tail) if tail else "(no log file)") + "\n```")
     parts.append("</details>")
 
+    return redact("\n".join(parts))
+
+
+def build_dev_report(
+    settings: Settings,
+    *,
+    buffer: DiagnosticsBuffer | None = None,
+    events: int = 60,
+    states: int = 40,
+) -> str:
+    """Render a concise, redacted report for local debugging (e.g. pasting to an assistant).
+
+    Unlike :func:`build_report` — the full report behind the GitHub-issue flow — this
+    is scoped to the **current chat session** (everything since the last "New chat",
+    via :meth:`DiagnosticsBuffer.mark_session`) and omits the raw log-file tail, so the
+    output stays small and focused on the scenario just run. The full log remains on
+    disk and the full report still shows everything.
+
+    Args:
+        settings: Effective settings (only whitelisted fields are surfaced).
+        buffer: Breadcrumb buffer to read; defaults to the process-wide one.
+        events: Max recent event lines to include.
+        states: Max state-transition lines to include.
+
+    Returns:
+        A redacted Markdown report.
+    """
+    buf = buffer or get_buffer()
+    now = datetime.now()
+    # Session-scoped: only what happened since the last "New chat".
+    session_recent = buf.session_recent()
+    counts: Counter[str] = Counter(c.level for c in session_recent)
+    count_str = " · ".join(f"{lvl}={n}" for lvl, n in sorted(counts.items())) or "none"
+
+    parts: list[str] = []
+    parts.append("# Jack debug (concise)")
+    parts.append(
+        f"_generated {now:%Y-%m-%d %H:%M:%S}_ · v{_app_version()} · "
+        f"{platform.system()} {platform.release()} · Python {platform.python_version()}\n"
+    )
+
+    parts.append("## Config")
+    parts.append("```\n" + "\n".join(_config_lines(settings)) + "\n```\n")
+
+    parts.append("## Summary")
+    parts.append(f"this session: events {count_str} · since {buf.session_started:%H:%M:%S}\n")
+
+    state_trace = buf.session_states()[-states:]
+    parts.append("## State sequence")
+    parts.append("```\n" + ("\n".join(state_trace) if state_trace else "(none)") + "\n```\n")
+
+    parts.append("## Errors & warnings")
+    errs = [c.render() for c in buf.session_errors()]
+    parts.append("```\n" + ("\n".join(errs) if errs else "(none)") + "\n```\n")
+
+    recent = [c.render() for c in session_recent][-events:]
+    parts.append(f"## Events (last {len(recent)})")
+    parts.append("```\n" + ("\n".join(recent) if recent else "(none)") + "\n```\n")
+
+    parts.append("_Full log on this machine: ~/.autobot/logs/autobot.log_")
     return redact("\n".join(parts))
 
 

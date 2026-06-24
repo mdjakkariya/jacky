@@ -94,6 +94,20 @@ def test_publish_context_carries_pct_and_dev_flag() -> None:
     }
 
 
+def test_publish_choices_carries_items_and_chat_mode() -> None:
+    bus = EventBus()
+    seen: list[dict[str, object]] = []
+    bus.subscribe(seen.append)
+    items = [{"label": "a.pdf", "actions": [{"label": "Open", "tool": "open_path", "args": {}}]}]
+    bus.publish_choices("Files matching 'a'", items)
+    assert seen[-1] == {
+        "type": "choices",
+        "title": "Files matching 'a'",
+        "items": items,
+        "mode": "chat",
+    }
+
+
 def test_publish_voice_download_carries_pct_and_done() -> None:
     bus = EventBus()
     seen: list[dict[str, object]] = []

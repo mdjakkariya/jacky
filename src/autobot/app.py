@@ -15,7 +15,7 @@ from collections.abc import Callable
 from typing import TYPE_CHECKING
 
 from autobot.config import Settings
-from autobot.core.events import AmplitudeSink, VisibilitySink
+from autobot.core.events import AmplitudeSink, ChoicesSink, VisibilitySink
 from autobot.core.interfaces import AudioSource, LanguageModel, SpeechToText, TextToSpeech
 from autobot.io.audio import PushToTalkRecorder
 from autobot.llm.ollama_llm import OllamaLanguageModel
@@ -304,6 +304,7 @@ def build(
     on_confirm_clear: Callable[[], None] | None = None,
     poll_click: Callable[[], bool | None] | None = None,
     on_context: Callable[[dict[str, object]], None] | None = None,
+    on_choices: ChoicesSink | None = None,
 ) -> Orchestrator:
     """Compose a fully wired :class:`Orchestrator`.
 
@@ -331,6 +332,9 @@ def build(
         on_context: Optional sink fed the per-turn context-usage payload (used,
             window, model, cache stats), so the chat meter can render it; the daemon
             wires it to the bus's ``publish_context``.
+        on_choices: Optional sink (title, items) so tools can surface clickable
+            actions in the chat drawer; the daemon wires it to the bus's
+            ``publish_choices``. Passed to the file tools for search results.
 
     Returns:
         A ready-to-run orchestrator. Constructing it loads the STT model, opens
@@ -367,6 +371,13 @@ def build(
 
         register_system_tools(registry)
         log.info("system info ENABLED (battery/wifi/disk)")
+
+    if settings.allow_file_search:
+        # Read-only Spotlight file search (on-device).
+        from autobot.tools.files import register_file_tools
+
+        register_file_tools(registry, choices=on_choices)
+        log.info("file search ENABLED (Spotlight)")
 
     # Phase 4: persistent personalization. The store is read into the prompt each
     # turn and grown via the (gated) memory tools.

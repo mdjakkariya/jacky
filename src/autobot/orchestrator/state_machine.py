@@ -385,7 +385,28 @@ class Orchestrator:
                 reset()
             self._last_reply = ""
             self._sm.reset(State.IDLE)
+            # Scope the concise debug report to this fresh session: breadcrumbs from
+            # before "New chat" stay in the full report but drop out of the dev view.
+            from autobot.diagnostics import get_buffer
+
+            get_buffer().mark_session()
         _log.info("new chat session started")
+
+    def run_tool(self, name: str, arguments: dict[str, Any]) -> str:
+        """Run one registered tool through the permission gate — for a UI action.
+
+        Backs a clicked action card (e.g. "Open" on a file result): the named tool
+        runs through the *same* gate (risk classification + audit) the model uses, so
+        nothing bypasses it — but with no LLM call, so a click costs no tokens and is
+        instant. Held under the turn lock so it can't interleave with a voice/typed
+        turn. Returns the tool's result text (a short failure message if it failed).
+        """
+        call = ToolCall(name=name, arguments=dict(arguments or {}))
+        with self._turn_lock:
+            _log.info("ui action tool=%s args=%s", name, call.arguments)
+            result = self._gate.execute(call)
+            self._transcript.tool(call.name, call.arguments, result.ok, result.content)
+        return result.content
 
     def mark_llm_dirty(self) -> None:
         """Ask the LLM to rebuild from fresh settings before the next turn.

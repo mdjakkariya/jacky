@@ -10,6 +10,7 @@ from autobot.diagnostics import (
     Crumb,
     DiagnosticsBuffer,
     RingLogHandler,
+    build_dev_report,
     build_report,
     redact,
 )
@@ -123,3 +124,63 @@ def test_build_report_has_sections_and_is_redacted(tmp_path: Path) -> None:
     assert "an error happened" in report
     assert "llm_provider: ollama" in report
     assert "sk-ant-SECRET" not in report  # redacted from the log tail
+
+
+def test_dev_report_is_concise_no_log_tail_and_redacted() -> None:
+    buf = DiagnosticsBuffer()
+    buf.add_state("idle", "planning")
+    buf.add(_crumb("INFO", "key sk-ant-SECRETSECRETSECRET in a breadcrumb"))
+    buf.add(_crumb("ERROR", "boom happened"))
+
+    report = build_dev_report(_FakeSettings(), buffer=buf)  # type: ignore[arg-type]
+
+    for heading in ("# Jack debug (concise)", "## Config", "## State sequence", "## Events"):
+        assert heading in report
+    assert "## Log tail" not in report  # the concise report omits the raw log dump
+    assert "idle→planning" in report
+    assert "boom happened" in report
+    assert "sk-ant-SECRET" not in report  # redacted
+
+
+def test_mark_session_scopes_recent_states_and_errors() -> None:
+    buf = DiagnosticsBuffer()
+    buf.add(_crumb("INFO", "old1"))
+    buf.add(_crumb("ERROR", "old_err"))
+    buf.add_state("idle", "planning")
+    buf.mark_session()  # <-- "New chat" boundary
+    buf.add(_crumb("INFO", "new1"))
+    buf.add(_crumb("ERROR", "new_err"))
+    buf.add_state("planning", "responding")
+
+    assert [c.message for c in buf.session_recent()] == ["new1", "new_err"]
+    assert [c.message for c in buf.session_errors()] == ["new_err"]
+    assert len(buf.session_states()) == 1 and buf.session_states()[0].endswith(
+        "planning→responding"
+    )
+    # The full views still hold everything (the GitHub-issue report is unaffected).
+    assert len(buf.recent) == 4 and len(buf.states) == 2
+
+
+def test_dev_report_only_shows_current_session_after_new_chat() -> None:
+    buf = DiagnosticsBuffer()
+    buf.add(_crumb("INFO", "BEFORE_newchat_event"))
+    buf.mark_session()
+    buf.add(_crumb("INFO", "AFTER_newchat_event"))
+
+    report = build_dev_report(_FakeSettings(), buffer=buf)  # type: ignore[arg-type]
+    assert "AFTER_newchat_event" in report
+    assert "BEFORE_newchat_event" not in report  # old session dropped from concise view
+
+
+def test_dev_report_bounds_events_and_states() -> None:
+    buf = DiagnosticsBuffer()
+    for i in range(50):
+        buf.add_state("a", f"s{i}")
+    for i in range(200):
+        buf.add(_crumb("INFO", f"event{i}"))
+
+    report = build_dev_report(_FakeSettings(), buffer=buf, events=10, states=5)  # type: ignore[arg-type]
+
+    assert "event199" in report and "event190" in report  # newest kept
+    assert "event189" not in report  # older trimmed to the last 10
+    assert "s49" in report and "s44" not in report  # last 5 states only

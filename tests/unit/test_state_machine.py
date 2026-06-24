@@ -128,6 +128,16 @@ def test_reply_is_spoken_via_tts() -> None:
     assert tts.spoken[-1] == "done: ok"
 
 
+def test_run_tool_executes_through_gate_without_llm() -> None:
+    # A clicked action card calls run_tool: the named tool goes straight through the
+    # gate (recorded here), returning its result text — no LLM, no state churn.
+    gate = _RecordingGate()
+    orch = _orchestrator("anything", gate)
+    out = orch.run_tool("open_path", {"path": "~/a.pdf"})
+    assert out == "ok"
+    assert gate.calls == [ToolCall(name="open_path", arguments={"path": "~/a.pdf"})]
+
+
 def test_text_turn_returns_reply_runs_tool_and_stays_silent() -> None:
     tts = _RecordingTTS()
     gate = _RecordingGate()

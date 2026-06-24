@@ -116,6 +116,7 @@ def serve(settings: Settings | None = None) -> None:
         on_confirm_clear=bus.publish_confirm_clear,
         poll_click=inbox.take,
         on_context=publish_context,
+        on_choices=bus.publish_choices,
     )
     holder["orch"] = orchestrator
     thread = threading.Thread(target=orchestrator.run, name="engine", daemon=True)
@@ -130,6 +131,7 @@ def serve(settings: Settings | None = None) -> None:
         on_confirm_answer=inbox.submit,
         on_chat=orchestrator.run_text_turn,
         on_new_session=orchestrator.new_chat_session,
+        on_action=orchestrator.run_tool,
     )
 
 

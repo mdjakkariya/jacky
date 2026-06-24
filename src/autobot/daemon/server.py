@@ -65,6 +65,7 @@ def create_app(
     on_confirm_answer: Any | None = None,
     on_chat: Any | None = None,
     on_new_session: Any | None = None,
+    on_action: Any | None = None,
 ) -> Any:
     """Build the FastAPI app: the event stream plus the Settings-view API.
 
@@ -80,6 +81,9 @@ def create_app(
             the reply; wired to the orchestrator's ``run_text_turn``.
         on_new_session: Optional callback invoked to discard the conversation and
             start fresh; wired to the orchestrator's ``new_chat_session``.
+        on_action: Optional callback (tool: str, args: dict -> str) that runs one tool
+            through the permission gate for a clicked action card; wired to the
+            orchestrator's ``run_tool``.
 
     Returns:
         A FastAPI app: ``/healthz``, WebSocket ``/ws``, the settings API, and
@@ -195,6 +199,17 @@ def create_app(
         log_path = _Path(settings.log_dir).expanduser() / "autobot.log"
         return {"report": build_report(settings, log_path=log_path)}
 
+    async def get_report_concise() -> dict[str, str]:
+        """Concise debug report for local debugging (the dev copy button).
+
+        Distinct from ``/report`` (the full GitHub-issue report): bounded to the
+        recent window and without the raw log dump, so it's small enough to paste
+        into a debug chat without exhausting it.
+        """
+        from autobot.diagnostics import build_dev_report
+
+        return {"report": build_dev_report(Settings.load(path))}
+
     async def get_report_file() -> dict[str, str]:
         """Write the debug report to a file and return its path (for Reveal in Finder)."""
         from pathlib import Path as _Path
@@ -287,6 +302,23 @@ def create_app(
         threading.Thread(target=run, name="voice-download", daemon=True).start()
         return {"ok": True, "started": True}
 
+    async def post_action(request: Request) -> dict[str, Any]:
+        """Run a UI-initiated action (a clicked action card) through the engine's gate.
+
+        Generic: the body is ``{tool, args}`` naming a registered tool; it runs through
+        the same permission gate the model uses (no LLM call). The action's tool/args
+        are produced by the engine itself (a tool's choices), not free user input.
+        """
+        payload = await request.json()
+        if not isinstance(payload, dict) or "tool" not in payload:
+            return {"ok": False, "error": "expected {tool, args}"}
+        tool = str(payload["tool"])
+        args = payload.get("args") or {}
+        if not isinstance(args, dict) or on_action is None:
+            return {"ok": False, "error": "bad args / action unavailable"}
+        result = await asyncio.to_thread(on_action, tool, args)
+        return {"ok": True, "result": result}
+
     async def post_confirm(request: Request) -> dict[str, Any]:
         """Deliver a clicked Yes/No answer for a pending confirmation to the engine."""
         payload = await request.json()
@@ -305,11 +337,13 @@ def create_app(
     app.add_api_route("/models", get_models, methods=["GET"])
     app.add_api_route("/setup", get_setup, methods=["GET"])
     app.add_api_route("/report", get_report, methods=["GET"])
+    app.add_api_route("/report/concise", get_report_concise, methods=["GET"])
     app.add_api_route("/report/file", get_report_file, methods=["GET"])
     app.add_api_route("/permissions", get_permissions, methods=["GET"])
     app.add_api_route("/permissions/open", post_permission_open, methods=["POST"])
     app.add_api_route("/secret", post_secret, methods=["POST"])
     app.add_api_route("/confirm", post_confirm, methods=["POST"])
+    app.add_api_route("/action", post_action, methods=["POST"])
     app.add_api_route("/chat", post_chat, methods=["POST"])
     app.add_api_route("/session/new", post_new_session, methods=["POST"])
     app.add_api_route("/voice/status", get_voice_status, methods=["GET"])
@@ -325,6 +359,7 @@ def run_daemon(
     on_confirm_answer: Any | None = None,
     on_chat: Any | None = None,
     on_new_session: Any | None = None,
+    on_action: Any | None = None,
 ) -> None:
     """Run the daemon server (blocking) on ``host:port``.
 
@@ -347,6 +382,7 @@ def run_daemon(
         on_confirm_answer=on_confirm_answer,
         on_chat=on_chat,
         on_new_session=on_new_session,
+        on_action=on_action,
     )
     with contextlib.suppress(KeyboardInterrupt):
         uvicorn.run(app, host=host, port=port, log_level="warning", lifespan="off")

@@ -45,6 +45,12 @@
   header .x{border:none;background:transparent;color:var(--muted);font-size:16px;cursor:pointer;-webkit-app-region:no-drag;display:inline-flex;align-items:center;}
   header .x:hover{color:var(--text);}
   header .x svg{width:16px;height:16px;display:block;}
+  header .dbg{position:relative;}
+  .dbgtip{position:absolute;top:130%;left:50%;transform:translateX(-50%);white-space:nowrap;
+    background:var(--panel);border:.5px solid var(--field-line);color:var(--text);font-size:11px;
+    padding:3px 7px;border-radius:6px;opacity:0;pointer-events:none;transition:opacity .15s;
+    box-shadow:0 4px 14px rgba(0,0,0,.3);z-index:8;}
+  .dbg.copied .dbgtip{opacity:1;}
   #log{flex:1;overflow-y:auto;padding:14px 12px;display:flex;flex-direction:column;gap:10px;}
   #log > *{flex-shrink:0;}
   .msg{max-width:82%;font-size:15px;line-height:1.55;padding:10px 13px;border-radius:16px;white-space:pre-wrap;word-wrap:break-word;}
@@ -72,6 +78,17 @@
   .confirm .row{display:flex;gap:8px;justify-content:flex-end;}
   .btn{font-size:12px;padding:5px 12px;border-radius:7px;border:.5px solid var(--field-line);background:transparent;color:var(--text);cursor:pointer;}
   .btn.danger{border-color:var(--danger);background:var(--danger-bg);color:var(--danger);}
+  /* Action cards: generic selectable items (e.g. file results) with action buttons. */
+  .choices{align-self:stretch;background:var(--panel);border:.5px solid var(--field-line);border-radius:8px;padding:11px 12px;}
+  .choices .h{font-size:12px;font-weight:500;color:var(--muted);margin-bottom:8px;}
+  .choices .it{padding:8px 0;border-top:.5px solid var(--field-line);}
+  .choices .it:first-of-type{border-top:none;}
+  .choices .il{font-size:12.5px;font-weight:500;color:var(--text);word-break:break-word;}
+  .choices .is{font-size:11px;color:var(--muted);margin-top:2px;word-break:break-word;}
+  .choices .ia{display:flex;flex-wrap:wrap;gap:6px;margin-top:7px;}
+  .choices .ia .btn{padding:4px 10px;font-size:11.5px;}
+  .choices .ia .btn:disabled{opacity:.5;cursor:default;}
+  .choices .done{color:var(--accent);font-size:11.5px;margin-top:7px;}
   footer{padding:12px 14px 14px;border-top:.5px solid var(--line);position:relative;}
   .inbar{display:flex;align-items:center;gap:8px;background:var(--field);border:1px solid var(--field-line);border-radius:24px;padding:7px 7px 7px 18px;transition:border-color .15s;position:relative;}
   .inbar:focus-within{border-color:var(--accent);}
@@ -122,6 +139,10 @@
         <svg width="16" height="16" viewBox="0 0 36 36" aria-hidden="true"><circle cx="18" cy="18" r="15" fill="none" stroke="var(--field-line)" stroke-width="5"/><circle id="ctxArc" cx="18" cy="18" r="15" fill="none" stroke="#7fb87a" stroke-width="5" stroke-linecap="round" stroke-dasharray="94.2" stroke-dashoffset="94.2" transform="rotate(-90 18 18)"/></svg>
         <span id="ctxPct" class="pct">0%</span>
       </span>
+      <button class="x dbg hidden" id="dbg" aria-label="Copy debug report" title="Copy debug report (dev)">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 10a3 3 0 0 1 6 0"/><rect x="8" y="9" width="8" height="9" rx="4"/><path d="M8 12H4M16 12h4M8 16l-3 2M16 16l3 2M8.5 9.2 6.5 7M15.5 9.2 17.5 7M12 5V3"/></svg>
+        <span class="dbgtip" id="dbgTip">Copied</span>
+      </button>
     </div>
     <div class="hgroup">
       <div class="seg">
@@ -331,6 +352,48 @@
     try { await fetch(API + "/confirm", {method:"POST", headers:{"content-type":"application/json"}, body: JSON.stringify({answer: ok})}); } catch(e){}
   }
 
+  // Generic action cards arrive over the WebSocket (type "choices"): a title plus
+  // items, each with action buttons. A "copy" action copies client-side; any other
+  // action runs a named tool via POST /action — straight through the engine's
+  // permission gate, no LLM turn. This is generic, so any tool can offer choices.
+  function runAction(act, btn, statusEl){
+    if(act.copy != null){
+      copyText(String(act.copy));
+      statusEl.textContent = "Copied to clipboard";
+      return;
+    }
+    var row = btn.parentNode;
+    row.querySelectorAll("button").forEach(function(b){ b.disabled = true; });
+    statusEl.textContent = "Working…";
+    fetch(API + "/action", {method:"POST", headers:{"content-type":"application/json"},
+      body: JSON.stringify({tool: act.tool, args: act.args || {}})})
+      .then(function(r){ return r.json(); })
+      .then(function(r){ statusEl.textContent = (r && r.result) ? r.result : "Done"; })
+      .catch(function(){ statusEl.textContent = "Couldn't do that"; })
+      .finally(function(){ row.querySelectorAll("button").forEach(function(b){ b.disabled = false; }); });
+  }
+  function showChoices(m){
+    if(!m || !m.items || !m.items.length) return;
+    var card = document.createElement("div"); card.className = "choices";
+    var h = document.createElement("div"); h.className = "h"; h.textContent = m.title || "Choose one";
+    card.appendChild(h);
+    m.items.forEach(function(item){
+      var it = document.createElement("div"); it.className = "it";
+      var il = document.createElement("div"); il.className = "il"; il.textContent = item.label || "";
+      it.appendChild(il);
+      if(item.sublabel){ var is = document.createElement("div"); is.className = "is"; is.textContent = item.sublabel; it.appendChild(is); }
+      var ia = document.createElement("div"); ia.className = "ia";
+      var status = document.createElement("div"); status.className = "done";
+      (item.actions || []).forEach(function(act){
+        var b = document.createElement("button"); b.className = "btn"; b.textContent = act.label || "Do it";
+        b.addEventListener("click", function(){ runAction(act, b, status); });
+        ia.appendChild(b);
+      });
+      it.appendChild(ia); it.appendChild(status); card.appendChild(it);
+    });
+    log.appendChild(card); scroll();
+  }
+
   // Per-session context meter in the header (percent ring; in dev builds, tap the
   // ring to expand a detail card). Driven by the engine's "context" event each turn.
   var CTX_CIRC = 94.2, lastCtx = null;
@@ -409,6 +472,7 @@
         if(m.type === "confirm") showConfirm(m.text);
         else if(m.type === "confirm_clear") clearConfirm();
         else if(m.type === "context") renderContext(m);
+        else if(m.type === "choices" && m.mode !== "voice") showChoices(m);
       };
       ws.onclose = function(){ setTimeout(connect, 1500); };
     } catch(e){ setTimeout(connect, 1500); }
@@ -435,12 +499,16 @@
   }
   function showUpdateBanner(latest, url){
     var b = $("updateBanner");
-    b.querySelector(".u-text").textContent = "Jack " + latest + " is available";
-    b.querySelector(".u-link").onclick = function(){ if(tauri()) tauri().invoke("open_external", {url: url}); };
-    b.querySelector(".u-dismiss").onclick = function(){
+    function ack(){  // mark this version seen so the banner doesn't return for it
       b.classList.add("hidden");
       try { localStorage.setItem("jackUpdateDismissed", latest); } catch(e){}
+    }
+    b.querySelector(".u-text").textContent = "Jack " + latest + " is available";
+    b.querySelector(".u-link").onclick = function(){
+      if(tauri()) tauri().invoke("open_external", {url: url});
+      ack();  // opening the release notes counts as acknowledging this version
     };
+    b.querySelector(".u-dismiss").onclick = ack;
     b.classList.remove("hidden");
   }
   async function checkForUpdate(){
@@ -455,6 +523,41 @@
     showUpdateBanner(latest, rel.html_url || ("https://github.com/" + UPDATE_REPO + "/releases/latest"));
   }
   checkForUpdate();
+
+  // Dev-only "copy debug report" button. One click puts a CONCISE, redacted report
+  // (config + state timeline + recent events, bounded to the recent window — no raw
+  // log dump) on the clipboard, for pasting straight into a debug chat. It hits
+  // /report/concise, distinct from the full /report behind the GitHub-issue flow, so
+  // this stays lean and doesn't burn the session on duplicated content. Shown only
+  // in dev builds (show_debug), checked on load so it's there on a fresh chat too.
+  async function copyText(txt){
+    try { if(tauri() && await tauri().invoke("copy_to_clipboard", {text: txt})) return true; } catch(e){}
+    try { await navigator.clipboard.writeText(txt); return true; } catch(e){ return false; }
+  }
+  async function copyDebugReport(){
+    var btn = $("dbg"), tip = $("dbgTip");
+    var txt = "";
+    try { txt = (await (await fetch(API + "/report/concise")).json()).report || ""; } catch(e){}
+    var ok = !!txt && await copyText(txt);
+    tip.textContent = ok ? "Copied report" : "Couldn't copy";
+    btn.classList.add("copied");
+    setTimeout(function(){ btn.classList.remove("copied"); }, 1500);
+  }
+  $("dbg").addEventListener("click", copyDebugReport);
+  // Reveal the button in dev builds. Retries a few times because at page load the
+  // daemon may still be starting (the /settings fetch would otherwise race, fail
+  // once, and leave the button hidden forever). Also called once the daemon is
+  // confirmed up in waitForReady().
+  async function refreshDebugButton(){
+    for(var i = 0; i < 5; i++){
+      try {
+        var s = await (await fetch(API + "/settings")).json();
+        if(s && s.show_debug){ $("dbg").classList.remove("hidden"); }
+        return;  // got a definite answer (debug on or off) — stop retrying
+      } catch(e){ await new Promise(function(res){ setTimeout(res, 800); }); }
+    }
+  }
+  refreshDebugButton();
 
   // Engine interaction_mode tracks the drawer: chat while it's open (so the voice
   // loop idles and the confirmer is click-only), voice once it closes (so the orb
@@ -537,6 +640,7 @@
     showEmpty();
     lockInput(false);
     box.focus();
+    refreshDebugButton();  // daemon is up now — make sure the dev button is shown
   }
   waitForReady();
 })();

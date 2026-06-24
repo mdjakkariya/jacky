@@ -150,6 +150,28 @@ def test_post_new_session_ok_without_callback() -> None:
     assert TestClient(create_app(EventBus())).post("/session/new").json() == {"ok": True}
 
 
+def test_post_action_runs_tool_through_callback() -> None:
+    calls: list[tuple[str, dict[str, object]]] = []
+
+    def on_action(tool: str, args: dict[str, object]) -> str:
+        calls.append((tool, args))
+        return f"ran {tool}"
+
+    app = create_app(EventBus(), on_action=on_action)
+    body = (
+        TestClient(app)
+        .post("/action", json={"tool": "open_path", "args": {"path": "~/a.pdf"}})
+        .json()
+    )
+    assert body == {"ok": True, "result": "ran open_path"}
+    assert calls == [("open_path", {"path": "~/a.pdf"})]
+
+
+def test_post_action_rejects_missing_tool() -> None:
+    app = create_app(EventBus(), on_action=lambda t, a: "x")
+    assert TestClient(app).post("/action", json={"args": {}}).json()["ok"] is False
+
+
 def test_post_confirm_rejects_missing_answer() -> None:
     app = create_app(EventBus(), on_confirm_answer=lambda _a: None)
     body = TestClient(app).post("/confirm", json={}).json()

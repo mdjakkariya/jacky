@@ -172,6 +172,33 @@ class ContextEvent:
 
 
 @dataclass(frozen=True, slots=True)
+class ChoicesEvent:
+    """Selectable items the user can act on from the chat drawer.
+
+    Generic on purpose so *any* tool can offer follow-up choices, not just file
+    search. Each item carries a label, an optional sublabel, and one or more
+    ``actions``; an action either runs a registered tool (``tool`` + ``args``,
+    executed through the permission gate) or copies a value client-side (``copy``).
+
+    ``chat`` marks it as belonging to the chat drawer (the only surface that renders
+    it); the voice orb ignores it, since voice acts on what the user says instead.
+    """
+
+    title: str
+    items: list[dict[str, Any]]
+    chat: bool = True
+
+    def message(self) -> dict[str, object]:
+        """Serialize to the wire shape clients consume."""
+        return {
+            "type": "choices",
+            "title": self.title,
+            "items": self.items,
+            "mode": "chat" if self.chat else "voice",
+        }
+
+
+@dataclass(frozen=True, slots=True)
 class VoiceDownloadEvent:
     """Progress of the on-demand voice-model download (drives the Settings bar).
 
@@ -209,6 +236,11 @@ satisfies this; components (mic capture, TTS) call it so the orb reacts live."""
 VisibilitySink = Callable[[bool], None]
 """Receives a UI show/hide request (True=show, False=hide). The orb's ``dismiss``
 tool calls it with ``False``; ``EventBus.publish_visibility`` satisfies it."""
+
+ChoicesSink = Callable[[str, list[dict[str, Any]]], None]
+"""Receives (title, items) to offer the user selectable actions in the chat drawer.
+A tool calls it to surface follow-up choices; ``EventBus.publish_choices`` satisfies
+it. See :class:`ChoicesEvent` for the item shape."""
 
 
 class EventBus:
@@ -296,6 +328,10 @@ class EventBus:
     ) -> None:
         """Broadcast voice-download progress (the Settings view renders a bar)."""
         self._emit(VoiceDownloadEvent(fraction, stage, done=done, error=error).message())
+
+    def publish_choices(self, title: str, items: list[dict[str, Any]], chat: bool = True) -> None:
+        """Broadcast a set of selectable actions for the chat drawer to render."""
+        self._emit(ChoicesEvent(title, items, chat=chat).message())
 
     def _emit(self, message: dict[str, object]) -> None:
         with self._lock:

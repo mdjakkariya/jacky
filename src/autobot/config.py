@@ -180,6 +180,7 @@ class Settings:
     allow_app_control: bool = True
     allow_system_info: bool = True
     allow_memory: bool = True
+    allow_file_search: bool = True
     memory_db: str = "~/.autobot/memory.db"
     # --- debugging / logging ---
     session_log: bool = True

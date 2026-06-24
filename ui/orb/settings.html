@@ -182,6 +182,8 @@
           <label class="switch"><input type="checkbox" id="allow_system_info"><span class="slider"></span></label></div>
         <div class="row"><span class="grow"><span class="label">Remember me</span><div class="desc">Personalization</div></span>
           <label class="switch"><input type="checkbox" id="allow_memory"><span class="slider"></span></label></div>
+        <div class="row"><span class="grow"><span class="label">File search</span><div class="desc">Find files by name (on-device, Spotlight)</div></span>
+          <label class="switch"><input type="checkbox" id="allow_file_search"><span class="slider"></span></label></div>
         <div class="row"><span class="grow"><span class="label">Web search</span><div class="desc">Sends queries off-device</div></span>
           <label class="switch"><input type="checkbox" id="allow_web"><span class="slider"></span></label></div>
         <!-- Provider-driven, like the Model tab: add a future search provider by
@@ -272,7 +274,7 @@
 (function(){
   var API = new URLSearchParams(location.search).get("api") || "http://127.0.0.1:8765";
   var $ = function(id){ return document.getElementById(id); };
-  var CHECKS = ["tts_enabled","barge_in","aec","allow_app_control","allow_system_info","allow_memory","allow_web"];
+  var CHECKS = ["tts_enabled","barge_in","aec","allow_app_control","allow_system_info","allow_memory","allow_file_search","allow_web"];
 
   // tabs
   document.querySelectorAll(".tabs button").forEach(function(b){
