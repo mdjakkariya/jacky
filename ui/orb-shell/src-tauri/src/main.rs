@@ -593,11 +593,24 @@ fn with_orb(app: &tauri::AppHandle, f: impl FnOnce(&tauri::WebviewWindow)) {
 /// timer (armed at launch while the orb was hidden) can tuck the orb away right after
 /// it's shown, leaving voice with no visible orb.
 fn surface_orb(app: &tauri::AppHandle) {
+    // The orb is an NSPanel and the app is an Accessory (no Dock, never the active
+    // app). A plain window.show() / orderFront won't bring a hidden panel forward for
+    // an inactive app — only orderFrontRegardless does (the same call make_floating_panel
+    // uses to first show it). So drive the panel directly; the standard show() is just
+    // a non-macOS / not-yet-a-panel fallback.
+    #[cfg(target_os = "macos")]
+    {
+        use tauri_nspanel::ManagerExt;
+        if let Ok(panel) = app.get_webview_panel("orb") {
+            panel.order_front_regardless();
+            with_orb(app, |w| {
+                let _ = w.eval("window.__showOrb && window.__showOrb()");
+            });
+            return;
+        }
+    }
     with_orb(app, |w| {
         let _ = w.show();
-        // Don't call set_always_on_top here: the orb is an NSPanel whose level +
-        // collection behavior are set once by make_floating_panel. Re-setting them on
-        // every surface resets the panel's collection behavior and can leave it hidden.
         let _ = w.eval("window.__showOrb && window.__showOrb()");
     });
 }
