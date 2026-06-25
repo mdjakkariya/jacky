@@ -65,3 +65,11 @@ class ReloadableLanguageModel:
         fn = getattr(inner, "new_session", None)
         if callable(fn):
             fn()
+
+    def set_delivery_mode(self, mode: str) -> None:
+        """Tell the active inner model how the reply is delivered ('chat'/'voice')."""
+        with self._lock:
+            inner = self._inner
+        fn = getattr(inner, "set_delivery_mode", None)
+        if callable(fn):
+            fn(mode)

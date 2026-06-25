@@ -13,8 +13,21 @@ from autobot.llm.ollama_llm import (
     normalize_tool_calls,
     pick_context_length,
     render_messages,
+    system_prompt,
     trim_history,
 )
+
+
+def test_system_prompt_is_mode_aware() -> None:
+    voice = system_prompt("voice")
+    chat = system_prompt("chat")
+    # Voice: spoken, short, no markdown.
+    assert "spoken aloud" in voice and "no lists" in voice.lower()
+    # Chat: shown as text, light markdown allowed, not phrased as speech.
+    assert "shown as text" in chat and "markdown" in chat.lower()
+    assert "spoken aloud" not in chat
+    # Shared principles stay in both (the base prompt).
+    assert "You are Jack" in voice and "You are Jack" in chat
 
 
 def test_normalize_dict_shaped_message() -> None:

@@ -36,9 +36,8 @@ _SUMMARIZE_INSTRUCTION = (
 # words map to it) belongs in that tool's `description`, not here — so adding a
 # tool never means editing this prompt. Keep this list short and principled.
 SYSTEM_PROMPT = (
-    "You are Jack, a local voice assistant. Replies are spoken aloud, so talk "
-    "like a person and keep it SHORT: answer what was asked in one sentence, two "
-    "at most. Principles:\n"
+    "You are Jack, a local assistant for the user's Mac. You're a warm, friendly "
+    "person, not a robotic tool. Principles:\n"
     "- You ACT through your tools. A request phrased as a question ('can you…', "
     "'could you…', 'will you…') is a command to act, not a yes/no question. When "
     "the user asks for something a tool can do, you MUST call that tool to actually "
@@ -56,9 +55,9 @@ SYSTEM_PROMPT = (
     "- To open a website or web service (YouTube, Gmail, a news site, any URL), use "
     "open_website to take them straight there — don't just open a blank browser or "
     "tell them to navigate.\n"
-    "- You're a warm, friendly companion, not a robotic tool. When you know the "
-    "user's name, use it naturally now and then, and let what you remember about "
-    "them shape your replies — without reciting their saved details back at them.\n"
+    "- When you know the user's name, use it naturally now and then, and let what "
+    "you remember about them shape your replies — without reciting their saved "
+    "details back at them.\n"
     "- When the user shares durable information about themselves (their name, what "
     "they like, do, or prefer), quietly save it with set_name/remember so you know "
     "it next time. Don't save passwords, financial, or health details.\n"
@@ -67,8 +66,32 @@ SYSTEM_PROMPT = (
     "without reading out URLs or source names.\n"
     "- Don't repeat a previous answer; if asked for more, add new specifics. Don't "
     "list your capabilities or ask 'what next?' unless asked.\n"
-    "- No lists, numbering, markdown, or headings. Always respond in English."
+    "- Always respond in English."
 )
+
+# How the reply is delivered depends on the turn's mode — spoken vs. shown as text.
+# Kept separate from SYSTEM_PROMPT so the principles stay shared and only the
+# delivery instruction changes per turn (see system_prompt / set_delivery_mode).
+VOICE_DELIVERY = (
+    "Your reply will be spoken aloud. Talk like a person and keep it SHORT — one "
+    "sentence, two at most — with no lists, numbering, markdown, or headings."
+)
+CHAT_DELIVERY = (
+    "Your reply is shown as text in a chat, not spoken. Be concise and "
+    "conversational; you may use light markdown (a short list, `code`, or a link) "
+    "when it genuinely aids readability. Don't phrase replies as speech or say "
+    "you'll read anything out."
+)
+
+
+def system_prompt(mode: str) -> str:
+    """The system prompt with a delivery line matched to the turn's mode.
+
+    Args:
+        mode: ``"chat"`` (reply shown as text) or anything else (spoken/voice).
+    """
+    delivery = CHAT_DELIVERY if mode == "chat" else VOICE_DELIVERY
+    return f"{SYSTEM_PROMPT}\n{delivery}"
 
 
 def _get(obj: Any, key: str) -> Any:
@@ -260,7 +283,8 @@ class OllamaLanguageModel:
 
     def _assemble(self, user_msg: dict[str, Any]) -> list[dict[str, Any]]:
         """System prompt + running summary (if any) + recent turns + the new message."""
-        messages: list[dict[str, Any]] = [{"role": "system", "content": SYSTEM_PROMPT}]
+        mode = getattr(self, "_delivery_mode", "voice")
+        messages: list[dict[str, Any]] = [{"role": "system", "content": system_prompt(mode)}]
         if self._memory is not None:
             profile = self._memory.context()
             if profile:
@@ -272,6 +296,10 @@ class OllamaLanguageModel:
         messages += self._history
         messages.append(user_msg)
         return messages
+
+    def set_delivery_mode(self, mode: str) -> None:
+        """Set how the next reply is delivered ('chat' = text, else spoken/voice)."""
+        self._delivery_mode = mode
 
     def run_turn(self, user_text: str, execute: ToolExecutor) -> str:
         """Handle one user turn end-to-end; see the interface for the contract."""

@@ -462,6 +462,16 @@ class Orchestrator:
         self._transcript.tool(call.name, call.arguments, result.ok, result.content)
         return result
 
+    def _set_delivery(self, mode: str) -> None:
+        """Tell the LLM whether this turn's reply is spoken (voice) or shown (chat).
+
+        So the model styles the reply for its medium — short and unformatted when
+        spoken, concise text (light markdown allowed) when typed.
+        """
+        setter = getattr(self._llm, "set_delivery_mode", None)
+        if callable(setter):
+            setter(mode)
+
     def _emit_context(self) -> None:
         """Publish this turn's context-window usage to the chat meter, if wired."""
         if self._on_context is None:
@@ -695,6 +705,7 @@ class Orchestrator:
         self._sm.transition(State.PLANNING)
         self._acknowledged = False  # reset per turn; _execute may speak a filler
         self._dismissed = False  # reset per turn; set if the dismiss tool runs
+        self._set_delivery("voice")  # this reply is spoken
         started = time.perf_counter()
         reply = self._llm.run_turn(command, self._execute)
         elapsed_ms = int((time.perf_counter() - started) * 1000)
@@ -754,6 +765,7 @@ class Orchestrator:
             self._sm.reset(State.PLANNING)
             self._acknowledged = False
             self._dismissed = False
+            self._set_delivery("chat")  # this reply is shown as text, not spoken
             started = time.perf_counter()
             reply = self._llm.run_turn(text, self._execute)
             elapsed_ms = int((time.perf_counter() - started) * 1000)

@@ -128,6 +128,37 @@ def test_reply_is_spoken_via_tts() -> None:
     assert tts.spoken[-1] == "done: ok"
 
 
+def test_turn_sets_delivery_mode_voice_then_chat() -> None:
+    # The orchestrator tells the LLM how each reply is delivered: spoken on a voice
+    # turn, text on a typed turn — so replies are styled for their medium.
+    from autobot.orchestrator.wake_gate import PassThroughGate
+    from autobot.tts.null_tts import NullTTS
+
+    class _DeliveryLLM:
+        def __init__(self) -> None:
+            self.modes: list[str] = []
+
+        def set_delivery_mode(self, mode: str) -> None:
+            self.modes.append(mode)
+
+        def run_turn(self, user_text: str, execute) -> str:  # type: ignore[no-untyped-def]
+            return "ok"
+
+    llm = _DeliveryLLM()
+    orch = Orchestrator(
+        settings=Settings(interaction_mode="voice"),
+        audio=_FakeAudio(),
+        stt=_FakeSTT("hello"),
+        llm=llm,
+        gate=_RecordingGate(),  # type: ignore[arg-type]
+        wake_gate=PassThroughGate(),
+        tts=NullTTS(),
+    )
+    orch.run_once()  # a voice turn
+    orch.run_text_turn("hi there")  # a typed turn
+    assert llm.modes == ["voice", "chat"]
+
+
 def test_run_tool_executes_through_gate_without_llm() -> None:
     # A clicked action card calls run_tool: the named tool goes straight through the
     # gate (recorded here), returning its result text — no LLM, no state churn.

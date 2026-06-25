@@ -21,7 +21,7 @@ from typing import TYPE_CHECKING, Any
 
 from autobot.config import Settings
 from autobot.core.types import ToolCall, ToolExecutor
-from autobot.llm.ollama_llm import _SUMMARIZE_INSTRUCTION, SYSTEM_PROMPT
+from autobot.llm.ollama_llm import _SUMMARIZE_INSTRUCTION, system_prompt
 from autobot.logging_setup import get_logger
 from autobot.session_log import NullTranscript, Transcript
 from autobot.tools.registry import ToolRegistry
@@ -374,9 +374,13 @@ class AnthropicLanguageModel:
             self._session_cost,
         )
 
+    def set_delivery_mode(self, mode: str) -> None:
+        """Set how the next reply is delivered ('chat' = text, else spoken/voice)."""
+        self._delivery_mode = mode
+
     def _system(self) -> str:
         """System prompt + memory profile + running summary of compacted older turns."""
-        parts = [SYSTEM_PROMPT]
+        parts = [system_prompt(getattr(self, "_delivery_mode", "voice"))]
         if self._memory is not None:
             ctx = self._memory.context()
             if ctx:
