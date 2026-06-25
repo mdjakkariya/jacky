@@ -722,11 +722,12 @@ def test_mode_toggle_does_not_reload_models(monkeypatch) -> None:  # type: ignor
     assert calls == {"llm": 1, "stt": 0}
 
 
-def test_switch_to_chat_releases_voice_io(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Flipping voice→chat tears down the mic (so macOS stops ducking other audio).
+def test_switch_to_chat_debounces_voice_io_release(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Voice→chat arms a *debounced* mic release; a quick switch back cancels it.
 
-    chat→chat re-applies (drawer focus re-POSTs the mode) must NOT release again, and
-    chat→voice must NOT release — the voice I/O rebuilds lazily on the next capture.
+    This avoids tearing down + rebuilding the audio engine on a fast chat⇄voice toggle
+    (which churns macOS Voice-Processing and can drop AEC). The release only happens
+    if we're still in chat when the timer fires.
     """
     from autobot.orchestrator.wake_gate import PassThroughGate
     from autobot.tts.null_tts import NullTTS
@@ -743,16 +744,27 @@ def test_switch_to_chat_releases_voice_io(monkeypatch: pytest.MonkeyPatch) -> No
         release_voice_io=lambda: released.__setitem__("n", released["n"] + 1),
     )
 
+    # voice → chat: release is DEBOUNCED (a timer is armed), not immediate.
     monkeypatch.setattr(Settings, "load", lambda: Settings(interaction_mode="chat"))
     orch.mark_settings_changed()
-    assert released["n"] == 1  # voice → chat: mic released
+    assert released["n"] == 0
+    assert orch._voice_io_release_timer is not None
 
-    orch.mark_settings_changed()
-    assert released["n"] == 1  # still chat: no extra release
-
+    # a quick switch back to voice cancels the pending release (mic kept alive).
     monkeypatch.setattr(Settings, "load", lambda: Settings(interaction_mode="voice"))
     orch.mark_settings_changed()
-    assert released["n"] == 1  # chat → voice: nothing to release (lazy rebuild)
+    assert orch._voice_io_release_timer is None
+    assert released["n"] == 0
+
+    # when the debounce fires and we're still in chat, the mic is released.
+    orch._mode = "chat"
+    orch._release_if_still_chat()
+    assert released["n"] == 1
+
+    # but if voice resumed by the time it fires, it does NOT release.
+    orch._mode = "voice"
+    orch._release_if_still_chat()
+    assert released["n"] == 1
 
 
 def test_llm_unavailable_message_is_specific_then_generic(monkeypatch: pytest.MonkeyPatch) -> None:

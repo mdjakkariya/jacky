@@ -30,6 +30,11 @@ from autobot.tools.permission import PermissionGate
 
 _log = get_logger("orchestrator")
 
+# How long to stay in chat before actually releasing the mic. Debounced so a quick
+# chat⇄voice toggle keeps the audio engine alive (instant, no churn) instead of
+# tearing it down and rebuilding it (which can briefly drop macOS AEC).
+_VOICE_IO_RELEASE_DELAY_S = 5.0
+
 # The transitions the loop is allowed to make. Anything else is a bug.
 _TRANSITIONS: dict[State, frozenset[State]] = {
     State.IDLE: frozenset({State.LISTENING, State.ERROR}),
@@ -327,10 +332,15 @@ class Orchestrator:
     ) -> None:
         self._settings = settings
         self._audio = audio
-        # Releases the lazily-built voice I/O (mic + TTS). Called when switching to
-        # chat so the mic is freed and macOS stops ducking other audio; the next voice
-        # turn rebuilds it. None in tests / headless runs without a UI.
+        # Releases the lazily-built voice I/O (mic + TTS). Called (debounced) when
+        # switching to chat so the mic is freed and macOS stops ducking other audio;
+        # the next voice turn rebuilds it. None in tests / headless runs without a UI.
         self._release_voice_io = release_voice_io
+        # Debounce the release: a quick chat⇄voice toggle shouldn't tear down and
+        # rebuild the audio engine (that churns macOS Voice-Processing and can drop
+        # AEC). We arm a timer on entering chat and cancel it if voice resumes first.
+        self._voice_io_release_timer: threading.Timer | None = None
+        self._voice_io_timer_lock = threading.Lock()
         self._stt = stt
         self._llm = llm
         self._gate = gate
@@ -466,11 +476,39 @@ class Orchestrator:
             self.mark_stt_dirty()
         # Pick up a voice⇄chat switch (applies next loop tick) — always cheap.
         old_mode, self._mode = self._mode, new.interaction_mode
-        if self._mode != old_mode and self._mode == "chat":
-            # Leaving voice: release the mic so it's freed and macOS stops ducking
-            # other audio. Closing the source also unblocks the capture loop parked
-            # in record_clip(), so the run loop drops cleanly to the chat idle. The
-            # next switch back to voice rebuilds the voice I/O lazily.
+        if self._mode != old_mode:
+            if self._mode == "chat":
+                # Leaving voice: arm a debounced release. If voice resumes within the
+                # window we cancel it and keep the mic alive — no teardown/rebuild churn.
+                self._schedule_voice_io_release()
+            else:
+                # Back to voice: keep the mic; cancel any pending release.
+                self._cancel_voice_io_release()
+
+    def _schedule_voice_io_release(self) -> None:
+        """Arm a debounced mic release; resets any pending timer. Safe with no UI."""
+        if self._release_voice_io is None:
+            return
+        with self._voice_io_timer_lock:
+            if self._voice_io_release_timer is not None:
+                self._voice_io_release_timer.cancel()
+            timer = threading.Timer(_VOICE_IO_RELEASE_DELAY_S, self._release_if_still_chat)
+            timer.daemon = True
+            self._voice_io_release_timer = timer
+            timer.start()
+
+    def _cancel_voice_io_release(self) -> None:
+        """Cancel a pending mic release (voice resumed before the debounce elapsed)."""
+        with self._voice_io_timer_lock:
+            if self._voice_io_release_timer is not None:
+                self._voice_io_release_timer.cancel()
+                self._voice_io_release_timer = None
+
+    def _release_if_still_chat(self) -> None:
+        """Debounce timer fired: release the voice I/O, but only if still in chat."""
+        with self._voice_io_timer_lock:
+            self._voice_io_release_timer = None
+        if self._mode == "chat":
             self._release_voice_io_now()
 
     def _release_voice_io_now(self) -> None:
@@ -480,7 +518,7 @@ class Orchestrator:
         try:
             self._release_voice_io()
         except Exception:  # teardown must never break a settings change
-            _log.exception("releasing voice I/O on chat switch failed")
+            _log.exception("releasing voice I/O failed")
 
     def _execute(self, call: ToolCall) -> ToolResult:
         """Executor handed to the LLM: mark EXECUTING and run through the gate."""
@@ -816,6 +854,9 @@ class Orchestrator:
         # the mic loop goes quiet immediately. The voice loop sees _mode next tick
         # and idles; closing the drawer restores voice via mark_settings_changed.
         self._mode = "chat"
+        # Typing forces chat even if the UI's mode POST was missed; arm the debounced
+        # mic release too (resets while you keep typing; frees it ~quiet-spell later).
+        self._schedule_voice_io_release()
         self._tts.stop()
         # Serialise against the voice loop: wait for any in-flight voice turn to
         # finish before driving the shared state machine (and vice versa).
@@ -880,10 +921,9 @@ class Orchestrator:
             try:
                 if self._mode == "chat":
                     # Chat mode: don't capture from the mic — typed turns arrive via
-                    # run_text_turn (driven by the daemon). Ensure the mic is released
-                    # (idempotent) so it can never sit open ducking other audio, then
-                    # idle until switched back to voice.
-                    self._release_voice_io_now()
+                    # run_text_turn (driven by the daemon). The mic is released on a
+                    # debounce timer (see mark_settings_changed), so a quick toggle back
+                    # to voice keeps it alive. Just idle until switched back.
                     time.sleep(0.2)
                     continue
                 self.run_once()

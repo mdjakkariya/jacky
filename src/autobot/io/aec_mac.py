@@ -146,13 +146,16 @@ class VoiceProcessingMicSource:
         if not ok:
             raise RuntimeError(f"audio engine failed to start: {err}")
         self._engine = engine
-        # Verify the tap delivers audio quickly, else we'd block capture forever.
-        deadline = time.monotonic() + 2.0
+        # Verify the tap delivers audio, else we'd block capture forever. Allow a few
+        # seconds: right after a previous engine was torn down, CoreAudio can take a
+        # moment to hand the input device back, and a too-tight timeout here is what
+        # made a healthy mic fall back to the plain (no-AEC) path.
+        deadline = time.monotonic() + 4.0
         while time.monotonic() < deadline and self._queue.empty():
             time.sleep(0.05)
         if self._queue.empty():
             raise RuntimeError(
-                "voice-processing mic produced no audio within 2s — likely the process "
+                "voice-processing mic produced no audio within 4s — likely the process "
                 "lacks Microphone permission (System Settings → Privacy & Security → "
                 "Microphone) or another app holds the input"
             )
