@@ -258,7 +258,67 @@
   var tauriApi=null,tauriWin=null,suppressSave=false,parkedPos=null,animTok=0;
   var ENGAGED={listening:1,thinking:1,talking:1};
   function comeForwardEnabled(){ try{return localStorage.getItem("jackComeForward")==="1";}catch(e){return false;} }
+  // --- state earcons -----------------------------------------------------
+  // A short, distinct tone per state so the user can HEAR the status
+  // (listening / thinking / talking) — not rely on the orb's color alone.
+  // Web Audio only (no asset, on-device). The daemon only drives the orb in
+  // VOICE mode (chat turns are skipped server-side), so these stay voice-only.
+  // Disable by setting localStorage "jackEarcons" to "0".
+  var _ac=null,_acGain=null,_lastEar={s:"",t:0};
+  function earconsEnabled(){ try{return localStorage.getItem("jackEarcons")!=="0";}catch(e){return true;} }
+  function audioCtx(){
+    if(_ac) return _ac;
+    try{var Ctx=window.AudioContext||window.webkitAudioContext;if(!Ctx)return null;
+      _ac=new Ctx();_acGain=_ac.createGain();_acGain.gain.value=0.30;_acGain.connect(_ac.destination);}catch(e){_ac=null;}
+    return _ac;
+  }
+  function blip(freq,start,dur,peak,type){
+    var ac=audioCtx();if(!ac)return;
+    var o=ac.createOscillator(),g=ac.createGain();
+    o.type=type||"sine";o.frequency.value=freq;o.connect(g);g.connect(_acGain);
+    var t0=ac.currentTime+start;
+    g.gain.setValueAtTime(0.0001,t0);
+    g.gain.exponentialRampToValueAtTime(peak,t0+0.015);
+    g.gain.exponentialRampToValueAtTime(0.0001,t0+dur);
+    o.start(t0);o.stop(t0+dur+0.02);
+  }
+  // Rising pair = listening (I hear you), falling double-tick = thinking (working).
+  // No "talking" cue on purpose: the spoken reply itself signals speaking, so a chime
+  // would just step on the start of Jack's voice.
+  var _EARCON={
+    listening:function(){blip(659.25,0,0.14,0.9,"sine");blip(987.77,0.09,0.18,0.8,"sine");},
+    thinking:function(){blip(440,0,0.07,0.95,"triangle");blip(440,0.18,0.08,0.9,"triangle");},  // two-tick cue (web-style), louder so it's clearly audible
+  };
+  function playEarcon(next){
+    if(!earconsEnabled())return;
+    var fn=_EARCON[next];if(!fn)return;                     // idle has no cue
+    var now=Date.now();
+    if(_lastEar.s===next&&(now-_lastEar.t)<1500)return;     // debounce VAD flutter / repeats
+    var ac=audioCtx();if(!ac)return;
+    if(ac.state==="suspended"){try{ac.resume();}catch(e){}}
+    _lastEar={s:next,t:now}; fn();
+  }
+  // Some webviews start the audio context suspended until a gesture; resume once.
+  ["pointerdown","keydown"].forEach(function(ev){window.addEventListener(ev,function(){var ac=audioCtx();if(ac&&ac.state==="suspended"){try{ac.resume();}catch(e){}}},{once:true,passive:true});});
+
+  // Mode-switch cue, invoked by the native shell (close_chat) when the user flips
+  // chat<->voice. Played HERE on the orb because it's the visible surface then — the
+  // chat webview is hidden on switch, so its audio context is suspended and silent.
+  // Ascending = voice on, descending = back to chat. resume().then() covers the
+  // brief window where the orb was just shown.
+  function playModeEarcon(mode){
+    if(!earconsEnabled()) return;
+    var ac=audioCtx(); if(!ac) return;
+    var go=function(){
+      if(mode==="chat"){ blip(880,0,0.12,0.7,"sine"); blip(587.33,0.10,0.16,0.7,"sine"); }
+      else { blip(587.33,0,0.14,0.85,"sine"); blip(880,0.10,0.20,0.8,"sine"); }
+    };
+    if(ac.state==="suspended"){ ac.resume().then(go).catch(go); } else { go(); }
+  }
+  window.__modeEarcon = playModeEarcon;
+
   function onStateChange(prev,next){
+    playEarcon(next);   // audible status cue, alongside the orb's color/animation
     if(!tauriWin) return;
     // Presence: any engaged state shows the orb (this is how the wake word brings
     // it back); returning to idle either honors a pending dismiss or restarts the

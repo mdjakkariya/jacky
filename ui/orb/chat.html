@@ -659,11 +659,43 @@
   }
   function tauri(){ return window.__TAURI__ && window.__TAURI__.core; }
 
+  // --- mode-switch earcon: a short tone when flipping chat<->voice, so the switch
+  // is audible — useful especially via the ⌘⌃V shortcut (off-screen) or when the
+  // drawer closes. Web Audio only, on-device. Disable via localStorage "jackEarcons".
+  var _ac=null,_acGain=null;
+  function earconsEnabled(){ try{return localStorage.getItem("jackEarcons")!=="0";}catch(e){return true;} }
+  function audioCtx(){
+    if(_ac) return _ac;
+    try{var Ctx=window.AudioContext||window.webkitAudioContext;if(!Ctx)return null;
+      _ac=new Ctx();_acGain=_ac.createGain();_acGain.gain.value=0.16;_acGain.connect(_ac.destination);}catch(e){_ac=null;}
+    return _ac;
+  }
+  function blip(freq,start,dur,peak,type){
+    var ac=audioCtx();if(!ac)return;
+    var o=ac.createOscillator(),g=ac.createGain();
+    o.type=type||"sine";o.frequency.value=freq;o.connect(g);g.connect(_acGain);
+    var t0=ac.currentTime+start;
+    g.gain.setValueAtTime(0.0001,t0);
+    g.gain.exponentialRampToValueAtTime(peak,t0+0.015);
+    g.gain.exponentialRampToValueAtTime(0.0001,t0+dur);
+    o.start(t0);o.stop(t0+dur+0.02);
+  }
+  function playModeEarcon(mode){
+    if(!earconsEnabled())return;
+    var ac=audioCtx();if(!ac)return;
+    if(ac.state==="suspended"){try{ac.resume();}catch(e){}}
+    if(mode==="voice"){ blip(587.33,0,0.14,0.85,"sine"); blip(880,0.10,0.20,0.8,"sine"); }  // ascending = voice on
+    else { blip(880,0,0.12,0.7,"sine"); blip(587.33,0.10,0.16,0.7,"sine"); }                // descending = back to chat
+  }
+  ["pointerdown","keydown"].forEach(function(ev){window.addEventListener(ev,function(){var ac=audioCtx();if(ac&&ac.state==="suspended"){try{ac.resume();}catch(e){}}},{once:true,passive:true});});
+
   // The "Voice" toggle: switch to voice + bring the orb back ONLY if the models are
   // present; otherwise send the user to Settings to download them (with progress).
   async function enableVoice(){
     if(await voiceReady()){
       await setMode("voice");
+      // The "switched to voice" cue is played by the orb (the visible surface once
+      // the chat drawer hides) via close_chat — a hidden webview can't play audio.
       if(tauri()) tauri().invoke("close_chat").catch(function(){});
     } else if(tauri()){
       tauri().invoke("open_settings_voice").catch(function(){});  // deep-link to the voice download
@@ -681,7 +713,7 @@
 
   $("m-voice").addEventListener("click", enableVoice);
   window.__enableVoice = enableVoice;  // driven by the ⌘⌃V global shortcut / tray "Voice…"
-  $("m-chat").addEventListener("click", function(){ setMode("chat"); });
+  $("m-chat").addEventListener("click", function(){ playModeEarcon("chat"); setMode("chat"); });
   $("close").addEventListener("click", closeDrawer);
 
   // Esc or ⌘W closes the drawer (back to voice) — standard, accessible shortcuts.

@@ -151,6 +151,12 @@ fn close_chat(app: tauri::AppHandle) {
     // Switching back to voice: the orb must reappear (it was hidden for chat) and its
     // web side must re-sync, or a stale idle-hide timer tucks it straight back away.
     surface_orb(&app);
+    // Audible "switched to voice" cue, played by the orb (the now-visible surface).
+    // The chat webview is hidden here, so its audio context is suspended — which is
+    // why driving the cue from chat only ever fired once.
+    with_orb(&app, |w| {
+        let _ = w.eval("window.__modeEarcon && window.__modeEarcon('voice')");
+    });
     #[cfg(target_os = "macos")]
     let _ = app.set_activation_policy(tauri::ActivationPolicy::Accessory);
 }
