@@ -36,6 +36,99 @@ FractionFn = Callable[[float], None]
 # Piper voice files (the .onnx model + its .json config) live under this prefix.
 _PIPER_BASE = "https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/ryan/high"
 
+# A finished STT weights file dwarfs this; anything smaller is a stub/partial download.
+_MIN_STT_BYTES = 10_000_000  # 10 MB
+
+# Rough on-disk sizes (bytes) of the CTranslate2 faster-whisper builds. Used ONLY to
+# render a real progress bar by polling bytes-on-disk against this total — HF's
+# downloader doesn't hand us byte counts — so an approximate figure is fine.
+_STT_APPROX_BYTES: dict[str, int] = {
+    "tiny.en": 75_000_000,
+    "tiny": 75_000_000,
+    "base.en": 145_000_000,
+    "base": 145_000_000,
+    "small.en": 484_000_000,
+    "small": 484_000_000,
+    "medium.en": 1_530_000_000,
+    "medium": 1_530_000_000,
+    "large-v1": 3_090_000_000,
+    "large-v2": 3_090_000_000,
+    "large-v3": 3_090_000_000,
+    "distil-small.en": 166_000_000,
+    "distil-medium.en": 789_000_000,
+    "distil-large-v2": 1_510_000_000,
+    "distil-large-v3": 1_510_000_000,
+}
+
+# Same, for whisper.cpp's single ggml weights file (Metal path).
+_GGML_APPROX_BYTES: dict[str, int] = {
+    "tiny.en": 78_000_000,
+    "tiny": 78_000_000,
+    "base.en": 148_000_000,
+    "base": 148_000_000,
+    "small.en": 488_000_000,
+    "small": 488_000_000,
+    "medium.en": 1_530_000_000,
+    "medium": 1_530_000_000,
+    "large-v1": 3_100_000_000,
+    "large-v2": 3_100_000_000,
+    "large-v3": 3_100_000_000,
+}
+
+
+def _whispercpp_dirs() -> list[Path]:
+    """Candidate directories where pywhispercpp caches its ggml model files."""
+    return [
+        Path("~/Library/Application Support/pywhispercpp/models").expanduser(),
+        Path("~/.local/share/pywhispercpp/models").expanduser(),
+    ]
+
+
+def _dir_bytes(root: Path, match: Callable[[Path], bool] | None = None) -> int:
+    """Total bytes of real files under ``root`` (skipping symlinks to avoid double-count).
+
+    With ``match`` we only sum HuggingFace repo dirs (``models--*``) whose name matches —
+    so we measure just the model being downloaded. Partial ``.incomplete`` blobs count,
+    which is what makes the size grow smoothly during a download.
+    """
+    if not root.exists():
+        return 0
+    bases = [p for p in root.glob("models--*") if match(p)] if match is not None else [root]
+    total = 0
+    for base in bases:
+        for f in base.rglob("*"):
+            try:
+                if f.is_file() and not f.is_symlink():
+                    total += f.stat().st_size
+            except OSError:  # a file vanished mid-scan (download churn) — ignore
+                continue
+    return total
+
+
+def _hf_snapshot_complete(repo_dir: Path) -> bool:
+    """True only when an HF model snapshot has *finished* downloading.
+
+    A download in flight leaves ``*.incomplete`` blobs and no resolved ``model.bin`` in
+    the snapshot, so the directory existing is NOT enough to call it ready — the bug this
+    guards against (status said "ready" the instant the dir was created).
+    """
+    blobs = repo_dir / "blobs"
+    if blobs.exists() and any(blobs.glob("*.incomplete")):
+        return False  # a download is still in flight
+    snaps = repo_dir / "snapshots"
+    if not snaps.exists():
+        return False
+    for rev in snaps.iterdir():
+        if not rev.is_dir():
+            continue
+        weights = rev / "model.bin"
+        try:
+            if weights.exists() and weights.stat().st_size > _MIN_STT_BYTES:
+                return True
+        except OSError:
+            continue
+    return False
+
 
 @dataclass(frozen=True)
 class ModelSpec:
@@ -69,20 +162,24 @@ def _stt_present(settings: Settings) -> bool:
     model = settings.stt_model
     if settings.stt_engine == "whisper_cpp":
         name = f"ggml-{model}.bin"
-        candidates = [
-            Path("~/Library/Application Support/pywhispercpp/models").expanduser(),
-            Path("~/.local/share/pywhispercpp/models").expanduser(),
-        ]
-        return any((d / name).exists() for d in candidates)
+        return any(
+            (d / name).exists() and (d / name).stat().st_size > _MIN_STT_BYTES
+            for d in _whispercpp_dirs()
+        )
     try:
         from huggingface_hub.constants import HF_HUB_CACHE
     except Exception:  # hub not importable — assume not present so we offer to fetch
         return False
-    needle = f"faster-whisper-{model}".lower()
     cache = Path(HF_HUB_CACHE)
     if not cache.exists():
         return False
-    return any(needle in p.name.lower() for p in cache.glob("models--*"))
+    needle = f"faster-whisper-{model}".lower()
+    # Require a *complete* snapshot, not just the dir: HF creates the directory the
+    # instant a download starts, so a name match alone would report "ready" mid-download
+    # and let the user into voice mode before STT can actually transcribe.
+    return any(
+        _hf_snapshot_complete(p) for p in cache.glob("models--*") if needle in p.name.lower()
+    )
 
 
 def _wake_present(settings: Settings) -> bool:
@@ -200,20 +297,91 @@ def _make_voice_fetch(settings: Settings) -> Callable[[FractionFn], None]:
     return fetch
 
 
+def _stt_disk_bytes(settings: Settings) -> int:
+    """Bytes of the configured STT model currently on disk (incl. partial downloads)."""
+    model = settings.stt_model
+    if settings.stt_engine == "whisper_cpp":
+        name = f"ggml-{model}.bin"
+        total = 0
+        for d in _whispercpp_dirs():
+            # pywhispercpp downloads to the final name; some versions use a temp first.
+            for cand in (d / name, d / (name + ".tmp"), d / (name + ".part")):
+                try:
+                    if cand.exists():
+                        total += cand.stat().st_size
+                except OSError:
+                    continue
+        return total
+    try:
+        from huggingface_hub.constants import HF_HUB_CACHE
+    except Exception:
+        return 0
+    needle = f"faster-whisper-{model}".lower()
+    return _dir_bytes(Path(HF_HUB_CACHE), match=lambda p: needle in p.name.lower())
+
+
+def _download_with_progress(
+    run: Callable[[], object],
+    bytes_so_far: Callable[[], int],
+    approx_total: int,
+    on_fraction: FractionFn,
+    poll_s: float = 0.5,
+) -> None:
+    """Run a blocking model download on a thread, reporting progress from disk size.
+
+    faster-whisper/HF and pywhispercpp don't hand a byte-progress callback to us, so we
+    watch the destination's growing size against ``approx_total``. The reported fraction
+    is capped just below 1.0 until ``run`` actually returns, so the bar only ever hits
+    100% when the download is genuinely complete (which is what the readiness check then
+    confirms). Any download error is re-raised in the caller's thread.
+    """
+    import threading
+
+    error: dict[str, Exception] = {}
+    done = threading.Event()
+
+    def worker() -> None:
+        try:
+            run()
+        except Exception as exc:  # surface it to the caller below
+            error["exc"] = exc
+        finally:
+            done.set()
+
+    thread = threading.Thread(target=worker, name="model-download", daemon=True)
+    thread.start()
+    while not done.wait(poll_s):
+        if approx_total > 0:
+            # Report true on-disk completion: for a resumed download this correctly
+            # starts partway, not from zero.
+            on_fraction(min(0.99, bytes_so_far() / approx_total))
+    thread.join()
+    if "exc" in error:
+        raise error["exc"]
+
+
 def _make_stt_fetch(settings: Settings) -> Callable[[FractionFn], None]:
     def fetch(on_fraction: FractionFn) -> None:
-        # The model pulls into its cache on first construction/download. We can't get
-        # fine-grained byte progress without reaching into the libraries' internals,
-        # so report a coarse start→finish around the blocking download.
-        on_fraction(0.02)
+        on_fraction(0.0)
+        model = settings.stt_model
         if settings.stt_engine == "whisper_cpp":
             from pywhispercpp.model import Model
 
-            Model(settings.stt_model, print_realtime=False, print_progress=False)
+            _download_with_progress(
+                run=lambda: Model(model, print_realtime=False, print_progress=False),
+                bytes_so_far=lambda: _stt_disk_bytes(settings),
+                approx_total=_GGML_APPROX_BYTES.get(model, 0),
+                on_fraction=on_fraction,
+            )
         else:
             from faster_whisper.utils import download_model
 
-            download_model(settings.stt_model)
+            _download_with_progress(
+                run=lambda: download_model(model),
+                bytes_so_far=lambda: _stt_disk_bytes(settings),
+                approx_total=_STT_APPROX_BYTES.get(model, 0),
+                on_fraction=on_fraction,
+            )
         on_fraction(1.0)
 
     return fetch
