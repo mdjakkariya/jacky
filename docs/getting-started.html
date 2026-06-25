@@ -1,0 +1,142 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Getting started — Jack</title>
+<meta name="description" content="Install and use Jack, the on-device macOS voice & chat assistant: setup, talking to Jack by chat or voice, configuration, permissions, and troubleshooting." />
+<link rel="canonical" href="https://mdjakkariya.github.io/jacky/getting-started.html" />
+<meta property="og:type" content="article" />
+<meta property="og:title" content="Getting started — Jack" />
+<meta property="og:description" content="Install and use Jack, the on-device macOS voice & chat assistant." />
+<meta property="og:url" content="https://mdjakkariya.github.io/jacky/getting-started.html" />
+<meta name="theme-color" content="#06070d" />
+<link rel="stylesheet" href="style.css" />
+</head>
+<body>
+
+<header><div class="wrap"><nav>
+  <a class="brand" href="./"><span class="mk"><svg viewBox="0 0 24 24"><path d="M12 3l1.6 4.4L18 9l-4.4 1.6L12 15l-1.6-4.4L6 9z"/><path d="M18.5 14l.7 2 2 .7-2 .7-.7 2-.7-2-2-.7 2-.7z"/></svg></span>Jack</a>
+  <div class="links">
+    <a href="./#features">Features</a><a href="./#how">How it works</a><a href="./#privacy">Privacy</a>
+    <a href="getting-started.html">Docs</a><a href="https://github.com/mdjakkariya/jacky">GitHub</a>
+  </div>
+  <a class="btn primary" href="https://github.com/mdjakkariya/jacky/releases"><svg class="ico" viewBox="0 0 24 24"><path d="M12 3v12m0 0l-4-4m4 4l4-4M5 21h14"/></svg>Download</a>
+</nav></div></header>
+
+<div class="wrap"><div class="docwrap">
+  <aside class="toc">
+    <div class="lbl">On this page</div>
+    <a href="#install">Install</a>
+    <a href="#setup">First-run setup</a>
+    <a href="#talking">Talking to Jack</a>
+    <a href="#voice">Voice &amp; hands-free</a>
+    <a href="#config">Configuration</a>
+    <a href="#permissions">Permissions</a>
+    <a href="#web">Web search</a>
+    <a href="#source">Build from source</a>
+    <a href="#debug">Logs &amp; debugging</a>
+    <a href="#troubleshooting">Troubleshooting</a>
+  </aside>
+
+  <article class="article">
+    <h1>Getting started</h1>
+    <p class="intro">Jack is a privacy-first, on-device voice &amp; chat assistant for macOS. Everything runs locally — no audio, text, or memory leaves your machine, except two opt-in, clearly-disclosed features (web search and an optional cloud LLM).</p>
+
+    <h2 id="install">Install</h2>
+    <p>Grab the latest <code>.dmg</code> from <a class="ln" href="https://github.com/mdjakkariya/jacky/releases">GitHub Releases</a> — a single, self-contained app (the orb + chat drawer plus the embedded engine). Voice models download on demand the first time you enable voice, so the app stays small. Drag <b>Jack</b> to Applications.</p>
+    <div class="callout warn">It’s an unsigned dev preview, so the first launch is: right-click <b>Jack</b> → <b>Open</b> → <b>Open</b>. After that it launches normally.</div>
+
+    <h2 id="setup">First-run setup</h2>
+    <p>On first run Jack walks you through setup — the LLM provider, models, and permissions. You’ll need, locally, one of:</p>
+    <ul>
+      <li><b>Ollama</b> running with a model (local mode, the default), or</li>
+      <li>an <b>Anthropic API key</b> (cloud mode) — set it in the orb’s <b>Settings</b>.</li>
+    </ul>
+    <p>You’ll also grant a few macOS permissions (Microphone, Accessibility, Automation). Settings → Permissions shows each one and links straight to the right System Settings pane.</p>
+
+    <h2 id="talking">Talking to Jack</h2>
+    <p><b>Chat is the default.</b> Type in the right-docked chat drawer; replies show as text and the mic stays off. Voice is off until you enable it (Settings → Listening), which downloads the speech models the first time.</p>
+    <p>Things to try:</p>
+    <ul>
+      <li><i>“what time is it”</i> — read-only, runs straight through.</li>
+      <li><i>“open YouTube”</i> / <i>“close youtube.com”</i> — opens a site / closes that tab.</li>
+      <li><i>“open Spotify”</i>, <i>“quit Mail”</i>, <i>“minimize Safari”</i> — app control.</li>
+      <li><i>“find my resume”</i> — searches your files; pick a result to open or reveal it.</li>
+      <li><i>“how’s my battery”</i>, <i>“what’s my Wi-Fi”</i> — system info.</li>
+      <li><i>“empty the trash”</i> — destructive, so Jack confirms first, then does it.</li>
+    </ul>
+    <div class="callout safe">Every action runs through a permission gate: read-only tools run straight through, destructive ones ask first, and everything is written to an audit log.</div>
+
+    <h2 id="voice">Voice &amp; hands-free</h2>
+    <p>Once voice is enabled, switch to it with the <b>Voice</b> toggle or <code>⌘⌃V</code>. Start a command with <b>“jack”</b> — <i>“jack, what’s the time”</i> — said naturally. Jack transcribes each phrase and, if the wake word appears, strips it and runs the rest.</p>
+    <ul>
+      <li><b>Follow-ups:</b> after a reply Jack keeps listening without the wake word for a window (default 30s); speak again and it just answers.</li>
+      <li><b>Barge-in:</b> talk over Jack to interrupt it (full-duplex when echo cancellation is available; otherwise it finishes, then listens).</li>
+      <li><b>Dismiss:</b> say <i>“go away”</i> and the orb hides; it also auto-hides when idle and returns on the wake word.</li>
+      <li><b>Summon / hide:</b> <code>⌘⌃J</code> toggles Jack; <code>⌘⌃C</code> switches to chat, <code>⌘⌃V</code> to voice.</li>
+    </ul>
+
+    <h2 id="config">Configuration</h2>
+    <p>All tunables live in one JSON file, <code>~/.autobot/settings.json</code> — there are no environment variables. A missing file or key falls back to the built-in default. The orb’s Settings view edits the common ones live (no restart).</p>
+    <pre><code>{ "llm_provider": "ollama", "llm_model": "qwen3:8b",
+  "stt_engine": "faster_whisper", "stt_model": "small.en",
+  "follow_up_window_s": 30, "barge_in": true, "aec": true }</code></pre>
+    <p>Secrets (API keys) are never in this file — they live in the macOS Keychain. <b>Local vs. cloud:</b> <code>ollama</code> (default, fully on-device) or <code>anthropic</code> (Claude — sends the conversation + tool schemas to Anthropic, never audio, never the actions; opt-in and disclosed).</p>
+
+    <h2 id="permissions">Permissions</h2>
+    <p>Jack manages macOS permissions in one place — Settings → Permissions shows each with its status and a button that opens the exact System Settings pane:</p>
+    <ul>
+      <li><b>Microphone</b> — to hear you.</li>
+      <li><b>Accessibility</b> — show/hide/minimize/list app windows.</li>
+      <li><b>Automation</b> — control other apps via Apple Events (close browser tabs, quit apps, empty the Trash).</li>
+    </ul>
+    <p>If a tool needs a permission that isn’t granted, Jack refuses cleanly, opens the right pane, and you grant it once.</p>
+
+    <h2 id="web">Web search (optional, off-device)</h2>
+    <p>Off by default. When enabled, it sends only your search <i>query</i> to a provider; the local LLM summarizes the results. Enable it with <code>"allow_web": true</code> in settings (or the Settings → Capabilities toggle).</p>
+
+    <h2 id="source">Build from source</h2>
+    <p>For developers on Apple Silicon (tested on MacBook Air M2, macOS 15): install <a class="ln" href="https://docs.astral.sh/uv/">uv</a> and Ollama, then:</p>
+    <pre><code>brew install uv ollama
+ollama serve            # leave running
+ollama pull qwen3:8b    # ~5 GB, one time
+cd /path/to/autobot
+make setup              # dev env + git hooks
+make run                # the engine/daemon</code></pre>
+    <p>In dev the engine runs on its own; build the orb separately from <code>ui/orb-shell</code> (<code>cargo tauri dev</code>). Full details are in the <a class="ln" href="https://github.com/mdjakkariya/jacky#readme">README</a>.</p>
+
+    <h2 id="debug">Logs &amp; debugging</h2>
+    <p>The easiest report: in the orb, Settings → Raise an issue (or the tray menu) builds a compact, redacted snapshot — recent events, errors, the state sequence, config (no audio, no API keys) — copies it to your clipboard, and can open a prefilled GitHub issue. Session transcripts are written to <code>~/.autobot/sessions/</code>; the full rotating log is at <code>~/.autobot/logs/autobot.log</code>.</p>
+
+    <h2 id="troubleshooting">Troubleshooting</h2>
+    <ul>
+      <li><b>Engine won’t connect / model not found</b> → ensure <code>ollama serve</code> is running and you’ve pulled the model, or switch to cloud mode and set the Anthropic key in Settings.</li>
+      <li><b>Jack can’t control an app / close a tab</b> → grant Automation (and Accessibility) in Settings → Permissions.</li>
+      <li><b>Barge-in mishears its own voice</b> → that’s AEC not cancelling; it falls back to half-duplex, or use headphones. Toggle <code>barge_in</code>.</li>
+      <li><b>No audio</b> → confirm Microphone permission.</li>
+    </ul>
+
+    <div class="callout">Need more? Read the full <a class="ln" href="https://github.com/mdjakkariya/jacky#readme">README on GitHub</a>, or <a class="ln" href="https://github.com/mdjakkariya/jacky/issues">open an issue</a>.</div>
+  </article>
+</div></div>
+
+<footer><div class="wrap">
+  <div class="frow">
+    <div>
+      <span class="brand" style="font-size:15px"><span class="mk" style="width:20px;height:20px"><svg viewBox="0 0 24 24" fill="none"><path d="M12 3l1.6 4.4L18 9l-4.4 1.6L12 15l-1.6-4.4L6 9z"/></svg></span>Jack</span>
+      <p style="margin-top:8px;color:var(--faint)">A local, privacy-first macOS assistant. Apache-2.0.</p>
+    </div>
+    <div class="flinks">
+      <a href="https://github.com/mdjakkariya/jacky">GitHub</a>
+      <a href="./">Home</a>
+      <a href="https://github.com/mdjakkariya/jacky/releases">Releases</a>
+      <a href="https://github.com/mdjakkariya/jacky/blob/main/LICENSE">License</a>
+      <a href="https://github.com/sponsors/mdjakkariya">Sponsor</a>
+    </div>
+  </div>
+  <p style="margin-top:18px;color:var(--faint)">Created &amp; maintained by Mohamed Jakkariya (@mdjakkariya).</p>
+</div></footer>
+
+</body>
+</html>
