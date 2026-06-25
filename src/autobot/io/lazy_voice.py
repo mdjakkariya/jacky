@@ -36,9 +36,33 @@ class LazyVoiceIO:
     def _ensure(self) -> tuple[AudioSource, TextToSpeech]:
         with self._lock:
             if self._io is None:
-                _log.info("building voice I/O on first use (mic + tts)")
+                _log.info("building voice I/O (mic + tts)")
                 self._io = self._factory()
             return self._io
+
+    def release(self) -> None:
+        """Tear down the built voice I/O so the mic is released (idempotent).
+
+        Closing the audio source stops the OS audio engine — on macOS that's what
+        stops the Voice-Processing unit from ducking all other system audio while
+        Jack sits in chat mode. The next ``audio``/``tts`` use rebuilds everything
+        fresh (a fresh engine is more reliable than restarting the duplex unit in
+        place). Safe to call when nothing is built yet.
+        """
+        with self._lock:
+            if self._io is None:
+                return
+            audio, _tts = self._io
+            self._io = None
+        # Close outside the lock: closing stops the engine and unblocks any capture
+        # parked in the source, which must not deadlock against a concurrent _ensure.
+        close = getattr(audio, "close", None)
+        if callable(close):
+            try:
+                close()
+            except Exception:  # never let teardown raise into the caller
+                _log.exception("voice I/O close failed")
+        _log.info("voice I/O released (mic + tts torn down)")
 
     @property
     def audio(self) -> AudioSource:

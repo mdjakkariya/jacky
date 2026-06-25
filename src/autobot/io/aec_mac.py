@@ -51,6 +51,9 @@ class VoiceProcessingMicSource:
         self._queue: queue.Queue[AudioClip] = queue.Queue()
         self._buf: AudioClip = np.zeros(0, dtype=np.float32)
         self._started = False
+        # Set by close() to release the mic when leaving voice mode (so the
+        # Voice-Processing unit stops ducking other system audio). frames() polls it.
+        self._stopped = threading.Event()
         self._warned = False  # so a per-frame tap error logs only once
         self._engine: Any = None
         self._player_node: Any = None
@@ -109,6 +112,7 @@ class VoiceProcessingMicSource:
         ok, err = input_node.setVoiceProcessingEnabled_error_(True, None)
         if not ok:
             raise RuntimeError(f"voice processing unavailable: {err}")
+        _minimize_other_audio_ducking(input_node)
         in_format = input_node.outputFormatForBus_(0)
         self._src_rate = float(in_format.sampleRate()) or 48_000.0
         self._out_rate = self._src_rate
@@ -166,13 +170,41 @@ class VoiceProcessingMicSource:
                 break
 
     def frames(self) -> Iterator[AudioClip]:
-        """Yield fixed 512-sample 16 kHz mono float32 frames forever."""
-        while True:
-            chunk = self._queue.get()
+        """Yield fixed 512-sample 16 kHz mono float32 frames until closed.
+
+        The blocking read uses a short timeout so :meth:`close` can interrupt a
+        capture that's parked waiting for audio (e.g. on the wake word) — otherwise
+        leaving voice mode couldn't release the mic until the user happened to speak.
+        """
+        while not self._stopped.is_set():
+            try:
+                chunk = self._queue.get(timeout=0.1)
+            except queue.Empty:
+                continue
             self._buf = np.concatenate([self._buf, chunk])
             while self._buf.size >= _FRAME:
                 yield self._buf[:_FRAME].copy()
                 self._buf = self._buf[_FRAME:]
+
+    def close(self) -> None:
+        """Stop the engine and release the microphone (idempotent).
+
+        Tearing the Voice-Processing unit down is what stops macOS from ducking all
+        other audio while Jack is in chat mode. A fresh engine is built on the next
+        switch back to voice (the proven first-use path), so we don't try to restart
+        this finicky duplex unit in place.
+        """
+        self._stopped.set()
+        engine, self._engine = self._engine, None
+        node, self._player_node = self._player_node, None
+        self._started = False
+        if node is not None:
+            with contextlib.suppress(Exception):
+                node.stop()
+        if engine is not None:
+            with contextlib.suppress(Exception):
+                engine.stop()
+        _log.info("voice-processing mic closed (released)")
 
     def play(
         self,
@@ -246,6 +278,30 @@ class VoiceProcessingMicSource:
             if on_level is not None:
                 on_level(0.0)
             return True
+
+
+def _minimize_other_audio_ducking(input_node: Any) -> None:
+    """Stop voice processing from ducking *other* system audio to near-silence.
+
+    By default Apple's Voice-Processing unit treats every audio stream that isn't our
+    captured voice as "other audio" and ducks it hard so speech stays intelligible —
+    which makes any video/music play almost inaudibly the whole time the mic engine is
+    open. macOS 14 added ``voiceProcessingOtherAudioDuckingConfiguration`` to control
+    this; we set it to the minimum level with advanced ducking off, so other audio
+    keeps playing at normal volume while Jack listens.
+
+    Best-effort and fully guarded: on older macOS / runtimes without the selector this
+    is a no-op (AEC still works, just with the OS default ducking) so it can never
+    break capture. The duck level constant ``10`` is
+    ``AVAudioVoiceProcessingOtherAudioDuckingLevelMin``.
+    """
+    setter = getattr(input_node, "setVoiceProcessingOtherAudioDuckingConfiguration_", None)
+    if setter is None:  # pre-macOS 14 or unavailable in this runtime — leave OS default
+        return
+    with contextlib.suppress(Exception):
+        # PyObjC marshals the C struct as a tuple: (enableAdvancedDucking, duckingLevel).
+        setter((False, 10))
+        _log.info("voice-processing other-audio ducking minimized")
 
 
 def _buffer_to_mono16k(buffer: object, src_rate: float) -> AudioClip:

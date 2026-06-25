@@ -61,6 +61,9 @@ class MemoryTools:
                 },
                 handler=self.set_name,
                 risk=Risk.WRITE,
+                # Instant local write whose own reply ("I'll remember your name, …") is
+                # the acknowledgement — a generic filler like "Right away." is jarring.
+                ack="",
             ),
             ToolSpec(
                 name="remember",
@@ -82,6 +85,7 @@ class MemoryTools:
                 },
                 handler=self.remember,
                 risk=Risk.WRITE,
+                ack="",  # instant write; its own reply acknowledges (no filler)
             ),
             ToolSpec(
                 name="forget",
@@ -98,6 +102,7 @@ class MemoryTools:
                 },
                 handler=self.forget,
                 risk=Risk.WRITE,
+                ack="",  # instant write; its own reply acknowledges (no filler)
             ),
         ]
 

@@ -13,6 +13,7 @@ class _FakeAudio:
     def __init__(self) -> None:
         self.last_speech_started_at = 1.0
         self.clips = 0
+        self.closed = False
 
     def record_clip(self) -> str:
         self.clips += 1
@@ -22,6 +23,9 @@ class _FakeAudio:
         return "cont"
 
     def set_awake(self, awake: bool) -> None: ...
+
+    def close(self) -> None:
+        self.closed = True
 
 
 class _FakeTTS:
@@ -34,12 +38,14 @@ class _FakeTTS:
     def stop(self) -> None: ...
 
 
-def _holder() -> tuple[LazyVoiceIO, dict[str, int]]:
-    built = {"n": 0}
+def _holder() -> tuple[LazyVoiceIO, dict[str, Any]]:
+    built: dict[str, Any] = {"n": 0, "audios": []}
 
     def factory() -> tuple[Any, Any]:
         built["n"] += 1
-        return _FakeAudio(), _FakeTTS()
+        audio = _FakeAudio()
+        built["audios"].append(audio)
+        return audio, _FakeTTS()
 
     return LazyVoiceIO(factory), built
 
@@ -73,3 +79,24 @@ def test_stop_before_build_is_a_noop() -> None:
     io, built = _holder()
     io.tts.stop()  # nothing built yet -> must not raise or build
     assert built["n"] == 0
+
+
+def test_release_before_build_is_a_noop() -> None:
+    io, built = _holder()
+    io.release()  # nothing built yet -> must not raise or build
+    assert built["n"] == 0
+
+
+def test_release_closes_source_and_rebuilds_on_next_use() -> None:
+    io, built = _holder()
+    assert io.audio.record_clip() == "clip"  # builds once
+    assert built["n"] == 1
+
+    io.release()  # tears down: closes the source, drops the built I/O
+    assert built["audios"][0].closed is True
+
+    # The next use rebuilds a *fresh* mic/tts (so a finicky duplex unit isn't restarted
+    # in place) — this is what reopens the mic when switching back to voice.
+    assert io.audio.record_clip() == "clip"
+    assert built["n"] == 2
+    assert built["audios"][1].closed is False

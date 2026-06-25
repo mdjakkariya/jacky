@@ -22,6 +22,7 @@ are injected (see :class:`FrameSource`), so the loop is tested with fakes.
 
 from __future__ import annotations
 
+import contextlib
 import queue
 import threading
 import time
@@ -80,6 +81,9 @@ class MicFrameSource:
         self._settings = settings
         self._queue: queue.Queue[AudioClip] = queue.Queue()
         self._started = False
+        self._stream: object | None = None
+        # Set by close() to release the mic when leaving voice mode; frames() polls it.
+        self._stopped = threading.Event()
 
     def _ensure_stream(self) -> None:
         if self._started:
@@ -110,10 +114,28 @@ class MicFrameSource:
                 break
 
     def frames(self) -> Iterator[AudioClip]:
-        """Open the mic once and yield frames forever (one per audio block)."""
+        """Open the mic once and yield frames until closed (one per audio block).
+
+        The short read timeout lets :meth:`close` interrupt a capture parked waiting
+        for audio, so leaving voice mode can release the mic promptly.
+        """
         self._ensure_stream()
-        while True:
-            yield self._queue.get()
+        while not self._stopped.is_set():
+            try:
+                yield self._queue.get(timeout=0.1)
+            except queue.Empty:
+                continue
+
+    def close(self) -> None:
+        """Stop the input stream and release the microphone (idempotent)."""
+        self._stopped.set()
+        stream, self._stream = self._stream, None
+        self._started = False
+        if stream is not None:
+            with contextlib.suppress(Exception):
+                stream.stop()  # type: ignore[attr-defined]
+            with contextlib.suppress(Exception):
+                stream.close()  # type: ignore[attr-defined]
 
 
 def capture_utterance(
@@ -257,11 +279,19 @@ class WakeWordVadRecorder:
         )
 
     def _next_frame(self) -> AudioClip | None:
-        """Pull the next frame from the (persistent) source, or ``None`` if ended."""
+        """Pull the next frame from the (persistent) source, or ``None`` if ended.
+
+        When the source ends (e.g. it was closed on leaving voice mode), drop the
+        iterator so a later call re-opens it — though in practice the whole recorder
+        is rebuilt fresh on the next voice switch.
+        """
         with self._frames_lock:
             if self._frames is None:
                 self._frames = iter(self._source.frames())
-            return next(self._frames, None)
+            frame = next(self._frames, None)
+            if frame is None:
+                self._frames = None
+            return frame
 
     def _mark_speech_start(self) -> None:
         self._last_speech_started_at = time.monotonic()
@@ -285,6 +315,17 @@ class WakeWordVadRecorder:
         """Drop buffered audio and reset VAD — so a fresh capture starts clean."""
         self._source.flush()
         self._vad.reset()
+
+    def close(self) -> None:
+        """Release the underlying mic source (stops capture, frees the device).
+
+        Called when leaving voice mode so the OS-level audio engine is torn down and
+        stops ducking other audio. No-op if the source has no ``close``.
+        """
+        close = getattr(self._source, "close", None)
+        if callable(close):
+            close()
+        self._frames = None
 
     def _capture(self, wait_frames: int, seed: Sequence[AudioClip] = ()) -> AudioClip | None:
         """Capture one utterance via the shared helper (see :func:`capture_utterance`)."""
@@ -494,7 +535,17 @@ class VadRecorder:
         with self._frames_lock:
             if self._frames is None:
                 self._frames = iter(self._source.frames())
-            return next(self._frames, None)
+            frame = next(self._frames, None)
+            if frame is None:
+                self._frames = None  # source closed/ended — rebuild iterator next call
+            return frame
+
+    def close(self) -> None:
+        """Release the underlying mic source (stops capture, frees the device)."""
+        close = getattr(self._source, "close", None)
+        if callable(close):
+            close()
+        self._frames = None
 
     def record_clip(self) -> AudioClip:
         """Wait for the next spoken phrase and return it (VAD-delimited)."""

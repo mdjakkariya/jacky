@@ -659,8 +659,10 @@ def _chat_orch(llm: object) -> Orchestrator:
 
 
 def test_chat_turn_never_returns_empty_reply() -> None:
-    # dismiss with no trailing text -> a warm goodbye, not an empty bubble.
-    assert _chat_orch(_DismissLLM()).run_text_turn("go away") == "Talk soon! 👋"
+    from autobot.orchestrator.state_machine import _GOODBYES
+
+    # dismiss with no trailing text -> a (random) warm goodbye, not an empty bubble.
+    assert _chat_orch(_DismissLLM()).run_text_turn("go away") in _GOODBYES
 
     class _SilentLLM:
         def run_turn(self, user_text: str, execute) -> str:  # type: ignore[no-untyped-def]
@@ -718,6 +720,68 @@ def test_mode_toggle_does_not_reload_models(monkeypatch) -> None:  # type: ignor
     )
     orch.mark_settings_changed()
     assert calls == {"llm": 1, "stt": 0}
+
+
+def test_switch_to_chat_releases_voice_io(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Flipping voice→chat tears down the mic (so macOS stops ducking other audio).
+
+    chat→chat re-applies (drawer focus re-POSTs the mode) must NOT release again, and
+    chat→voice must NOT release — the voice I/O rebuilds lazily on the next capture.
+    """
+    from autobot.orchestrator.wake_gate import PassThroughGate
+    from autobot.tts.null_tts import NullTTS
+
+    released = {"n": 0}
+    orch = Orchestrator(
+        settings=Settings(interaction_mode="voice"),
+        audio=_FakeAudio(),
+        stt=_FakeSTT(""),
+        llm=_ToolingLLM(),
+        gate=_RecordingGate(),  # type: ignore[arg-type]
+        wake_gate=PassThroughGate(),
+        tts=NullTTS(),
+        release_voice_io=lambda: released.__setitem__("n", released["n"] + 1),
+    )
+
+    monkeypatch.setattr(Settings, "load", lambda: Settings(interaction_mode="chat"))
+    orch.mark_settings_changed()
+    assert released["n"] == 1  # voice → chat: mic released
+
+    orch.mark_settings_changed()
+    assert released["n"] == 1  # still chat: no extra release
+
+    monkeypatch.setattr(Settings, "load", lambda: Settings(interaction_mode="voice"))
+    orch.mark_settings_changed()
+    assert released["n"] == 1  # chat → voice: nothing to release (lazy rebuild)
+
+
+def test_llm_unavailable_message_is_specific_then_generic(monkeypatch: pytest.MonkeyPatch) -> None:
+    orch = _orchestrator("hi", _RecordingGate())
+
+    # Local backend down → an actionable Ollama message.
+    monkeypatch.setattr(Settings, "load", lambda: Settings(llm_provider="ollama"))
+    local = orch._llm_unavailable_message(ConnectionError("refused"))
+    assert local is not None and "Ollama" in local
+
+    # Cloud backend down → a connection message (no Ollama mention).
+    monkeypatch.setattr(Settings, "load", lambda: Settings(llm_provider="anthropic"))
+    cloud = orch._llm_unavailable_message(ConnectionError("refused"))
+    assert cloud is not None and "Ollama" not in cloud
+
+    # Anything that isn't a connection failure falls through to the generic handler.
+    assert orch._llm_unavailable_message(ValueError("bad")) is None
+
+
+def test_goodbye_is_a_warm_signoff_and_emoji_free() -> None:
+    import re
+
+    from autobot.orchestrator.state_machine import _GOODBYES, _goodbye
+
+    assert _goodbye() in _GOODBYES
+    assert all(line.strip() for line in _GOODBYES)
+    # Emoji-free so it reads cleanly when spoken (punctuation like — is fine).
+    emoji = re.compile("[\U0001f000-\U0001faff\U00002600-\U000027bf]")
+    assert not any(emoji.search(line) for line in _GOODBYES)
 
 
 def test_ack_phrase_maps_risk_to_the_right_pool() -> None:

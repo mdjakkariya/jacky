@@ -29,6 +29,15 @@ def test_facts_dedupe_case_insensitively() -> None:
     assert store.facts() == ["likes jazz", "works at BrowserStack"]
 
 
+def test_memory_tools_are_silent_acks() -> None:
+    # Their own reply ("I'll remember your name, …") is the acknowledgement, so the
+    # generic WRITE filler (e.g. "Right away.") must not also fire — ack is "".
+    from autobot.tools.memory import MemoryTools
+
+    acks = {spec.name: spec.ack for spec in MemoryTools(_store()).specs()}
+    assert acks == {"set_name": "", "remember": "", "forget": ""}
+
+
 def test_forget_removes_matching_facts() -> None:
     store = _store()
     store.add_fact("likes jazz")

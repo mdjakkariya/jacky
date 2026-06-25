@@ -526,6 +526,9 @@ def build(
         on_context=on_context,
         # Re-show the orb when a voice turn addresses Jack (it may be hidden).
         on_show=(lambda: on_visibility(True)) if on_visibility is not None else None,
+        # Free the mic (and stop macOS ducking other audio) when switching to chat;
+        # the voice I/O rebuilds lazily on the next switch back to voice.
+        release_voice_io=_voice_io.release,
     )
 
 

@@ -127,6 +127,20 @@ _CONFIRMING_ACKS = (
     "Alright, let me see.",
 )
 
+# Warm sign-offs spoken/shown when the user dismisses Jack ("go away", "bye"). Used as
+# a fallback so a dismiss always ends on a friendly note, even if the model returns no
+# trailing text. Kept emoji-free so they read cleanly when spoken (TTS).
+_GOODBYES = (
+    "See you later!",
+    "Talk soon!",
+    "Catch you later!",
+    "Bye for now!",
+    "Take care!",
+    "I'll be here when you need me.",
+    "Alright, see you!",
+    "Happy to help — see you soon!",
+)
+
 
 # Words that, when an utterance ends on them with no terminal punctuation, strongly
 # suggest the speaker was mid-thought when the silence endpoint fired ("…message to").
@@ -252,6 +266,11 @@ def _is_self_echo(heard: str, reply: str) -> bool:
     return overlap >= 0.75
 
 
+def _goodbye() -> str:
+    """A random warm sign-off for when the user dismisses Jack."""
+    return random.choice(_GOODBYES)
+
+
 def _ack_phrase(risk: Risk | None) -> str:
     """Pick an acknowledgement that fits what the tool is about to do.
 
@@ -304,9 +323,14 @@ class Orchestrator:
         memory: MemoryStore | None = None,
         on_context: Callable[[dict[str, Any]], None] | None = None,
         on_show: Callable[[], None] | None = None,
+        release_voice_io: Callable[[], None] | None = None,
     ) -> None:
         self._settings = settings
         self._audio = audio
+        # Releases the lazily-built voice I/O (mic + TTS). Called when switching to
+        # chat so the mic is freed and macOS stops ducking other audio; the next voice
+        # turn rebuilds it. None in tests / headless runs without a UI.
+        self._release_voice_io = release_voice_io
         self._stt = stt
         self._llm = llm
         self._gate = gate
@@ -441,7 +465,22 @@ class Orchestrator:
             self._stt_keys = stt_keys
             self.mark_stt_dirty()
         # Pick up a voice⇄chat switch (applies next loop tick) — always cheap.
-        self._mode = new.interaction_mode
+        old_mode, self._mode = self._mode, new.interaction_mode
+        if self._mode != old_mode and self._mode == "chat":
+            # Leaving voice: release the mic so it's freed and macOS stops ducking
+            # other audio. Closing the source also unblocks the capture loop parked
+            # in record_clip(), so the run loop drops cleanly to the chat idle. The
+            # next switch back to voice rebuilds the voice I/O lazily.
+            self._release_voice_io_now()
+
+    def _release_voice_io_now(self) -> None:
+        """Tear down the lazily-built voice I/O, if any (mic + TTS). Never raises."""
+        if self._release_voice_io is None:
+            return
+        try:
+            self._release_voice_io()
+        except Exception:  # teardown must never break a settings change
+            _log.exception("releasing voice I/O on chat switch failed")
 
     def _execute(self, call: ToolCall) -> ToolResult:
         """Executor handed to the LLM: mark EXECUTING and run through the gate."""
@@ -481,6 +520,23 @@ class Orchestrator:
             info = usage()
             if info:
                 self._on_context(info)
+
+    def _llm_unavailable_message(self, exc: Exception) -> str | None:
+        """A clear, actionable line for a known LLM-availability failure, else ``None``.
+
+        The local backend (Ollama) and the cloud backend fail differently; a generic
+        "something went wrong" leaves the user stuck. We only special-case the
+        connection failure (the common "the model isn't running / unreachable" case)
+        and let anything genuinely unexpected fall through to the generic handler.
+        """
+        if not isinstance(exc, ConnectionError):
+            return None
+        if Settings.load().llm_provider == "anthropic":
+            return "I can't reach Claude right now — please check your internet connection."
+        return (
+            "I can't reach the local model. Make sure Ollama is running — open the "
+            "Ollama app (or run `ollama serve`) — then try again."
+        )
 
     def _ack_for(self, call: ToolCall) -> str:
         """The spoken filler for a call: the tool's own ack, else a risk-based one.
@@ -606,6 +662,13 @@ class Orchestrator:
             self._pending_audio = self._pending_started_at = None
             self._set_awake(True)
         else:
+            # Re-check the mode right before we (possibly) build + open the mic, to
+            # avoid a switch-to-chat that landed just after the run-loop's top check
+            # from opening the mic again. Closing the source (release) also unblocks
+            # an already-running capture, so the two together cover the window.
+            if self._mode == "chat":
+                self._sm.reset(State.IDLE)
+                return
             # Only show the "listening" cue if we're engaged; passive capture is idle.
             self._set_awake(self._awake)
             self._sm.reset(State.LISTENING)
@@ -709,6 +772,10 @@ class Orchestrator:
         started = time.perf_counter()
         reply = self._llm.run_turn(command, self._execute)
         elapsed_ms = int((time.perf_counter() - started) * 1000)
+        # A dismiss should always end on a warm goodbye — if the model added no
+        # trailing text after calling the tool, supply a random sign-off to speak.
+        if self._dismissed and not reply.strip():
+            reply = _goodbye()
 
         self._sm.transition(State.RESPONDING)
         _log.info("replied chars=%d latency_ms=%d", len(reply), elapsed_ms)
@@ -767,13 +834,22 @@ class Orchestrator:
             self._dismissed = False
             self._set_delivery("chat")  # this reply is shown as text, not spoken
             started = time.perf_counter()
-            reply = self._llm.run_turn(text, self._execute)
+            try:
+                reply = self._llm.run_turn(text, self._execute)
+            except Exception as exc:
+                # A clear, actionable message (e.g. Ollama not running) beats a failed
+                # request / empty bubble in the chat drawer. Unexpected errors re-raise.
+                msg = self._llm_unavailable_message(exc)
+                if msg is None:
+                    raise
+                _log.warning("chat turn: LLM unavailable: %s", exc)
+                reply = msg
             elapsed_ms = int((time.perf_counter() - started) * 1000)
             # The model sometimes runs a tool and returns no trailing text (notably
             # dismiss). Never show the chat an empty bubble — fall back to a short,
             # fitting line so a typed turn always gets a reply.
             if not reply.strip():
-                reply = "Talk soon! 👋" if self._dismissed else "Done. ✅"
+                reply = _goodbye() if self._dismissed else "Done. ✅"
             self._sm.reset(State.RESPONDING)
             _log.info("chat replied chars=%d latency_ms=%d", len(reply), elapsed_ms)
             self._transcript.assistant(reply)
@@ -804,7 +880,10 @@ class Orchestrator:
             try:
                 if self._mode == "chat":
                     # Chat mode: don't capture from the mic — typed turns arrive via
-                    # run_text_turn (driven by the daemon). Idle until switched back.
+                    # run_text_turn (driven by the daemon). Ensure the mic is released
+                    # (idempotent) so it can never sit open ducking other audio, then
+                    # idle until switched back to voice.
+                    self._release_voice_io_now()
                     time.sleep(0.2)
                     continue
                 self.run_once()
@@ -816,9 +895,12 @@ class Orchestrator:
                 _log.exception("turn failed error=%s", exc)
                 self._transcript.note(f"ERROR: {exc}")
                 print(f"[error] {exc}  (see log for details)")
-                # Let the user know without dumping a traceback at them.
+                # Let the user know without dumping a traceback at them — and be
+                # specific when the model backend is simply unreachable.
                 try:
-                    self._tts.speak("Sorry, something went wrong.")
+                    self._tts.speak(
+                        self._llm_unavailable_message(exc) or "Sorry, something went wrong."
+                    )
                 except Exception:  # never let error-handling raise
                     _log.exception("tts failed while reporting an error")
                 # Recover back to a clean idle state for the next turn.

@@ -21,12 +21,16 @@ def _frame(value: float) -> AudioClip:
 class _ScriptedSource:
     def __init__(self, frames: list[AudioClip]) -> None:
         self._frames = frames
+        self.closed = False
 
     def frames(self) -> Iterator[AudioClip]:
         yield from self._frames
 
     def flush(self) -> None:
         pass
+
+    def close(self) -> None:
+        self.closed = True
 
 
 class _VadFromSign:
@@ -58,6 +62,22 @@ def test_captures_an_utterance_with_no_wake_word() -> None:
 def test_returns_empty_if_only_silence() -> None:
     frames = [_frame(_SILENCE), _frame(_SILENCE), _frame(_SILENCE)]
     assert _recorder(frames).record_clip().size == 0
+
+
+def test_close_releases_the_underlying_source() -> None:
+    # Leaving voice mode must tear down the mic source so it stops capturing/ducking.
+    source = _ScriptedSource([_frame(_SILENCE)])
+    rec = VadRecorder(Settings(input_mode="wake"), source, _VadFromSign())
+    rec.close()
+    assert source.closed is True
+
+
+def test_next_frame_resets_iterator_when_source_ends() -> None:
+    # When the source ends (e.g. closed), the recorder drops its iterator so a later
+    # call rebuilds it rather than returning None forever.
+    rec = VadRecorder(Settings(input_mode="wake"), _ScriptedSource([]), _VadFromSign())
+    assert rec._next_frame() is None  # source yielded nothing
+    assert rec._frames is None  # iterator dropped, ready to rebuild
 
 
 def _speech_frames() -> list[AudioClip]:
