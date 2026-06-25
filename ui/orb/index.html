@@ -341,6 +341,7 @@
       var api=window.__TAURI__.window;
       var win=(api.getCurrentWindow||api.getCurrent).call(api);
       tauriApi=api; tauriWin=win;   // shared with the "come to me" glide logic
+      window.__showOrb = showOrb;   // let the shell (close_chat / ⌘⌃V) re-show + resync JS state
       if(win.setAlwaysOnTop) win.setAlwaysOnTop(true);
       if(win.setVisibleOnAllWorkspaces) win.setVisibleOnAllWorkspaces(true);
       var stage=document.querySelector(".stage");
@@ -370,9 +371,15 @@
         if(s && typeof s.width==="number") localStorage.setItem(SIZE_KEY, JSON.stringify({w:s.width,h:s.height}));
       });
 
-      // Fresh launch starts idle — begin the auto-hide countdown so an untouched
-      // orb tucks itself away (it returns on the wake word).
-      scheduleIdleHide();
+      // Fresh launch: only arm the auto-hide if the orb is actually visible. In
+      // chat-first mode the orb launches hidden, so arming it would (30s later) flip
+      // the JS "hidden" flag and then fight close_chat when the user switches to
+      // voice — leaving the orb stuck hidden. Gate on real OS-level visibility.
+      if(win.isVisible){
+        win.isVisible().then(function(v){ if(v) scheduleIdleHide(); }).catch(function(){});
+      } else {
+        scheduleIdleHide();
+      }
     }catch(e){ console.warn("tauri init failed",e); }
   }
 })();

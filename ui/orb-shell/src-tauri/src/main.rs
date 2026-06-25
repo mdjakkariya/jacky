@@ -148,10 +148,9 @@ fn close_chat(app: tauri::AppHandle) {
     if let Some(win) = app.get_webview_window("chat") {
         let _ = win.hide();
     }
-    // Switching back to voice: the orb must reappear (it was hidden for chat).
-    with_orb(&app, |w| {
-        let _ = w.show();
-    });
+    // Switching back to voice: the orb must reappear (it was hidden for chat) and its
+    // web side must re-sync, or a stale idle-hide timer tucks it straight back away.
+    surface_orb(&app);
     #[cfg(target_os = "macos")]
     let _ = app.set_activation_policy(tauri::ActivationPolicy::Accessory);
 }
@@ -368,9 +367,13 @@ fn main() {
                     "view" => {
                         let now = !visible.load(Ordering::Relaxed);
                         visible.store(now, Ordering::Relaxed);
-                        with_orb(app, |w| {
-                            let _ = if now { w.show() } else { w.hide() };
-                        });
+                        if now {
+                            surface_orb(app);  // show + re-sync the orb's web side
+                        } else {
+                            with_orb(app, |w| {
+                                let _ = w.hide();
+                            });
+                        }
                         let _ = view_item.set_text(if now { HIDE } else { SHOW });
                     }
                     "lock" => {
@@ -579,6 +582,18 @@ fn with_orb(app: &tauri::AppHandle, f: impl FnOnce(&tauri::WebviewWindow)) {
     }
 }
 
+/// Surface the orb window: show it at the OS level AND drive its own `showOrb()` so
+/// the web side's auto-hide state stays in sync. Without the second step a stale idle
+/// timer (armed at launch while the orb was hidden) can tuck the orb away right after
+/// it's shown, leaving voice with no visible orb.
+fn surface_orb(app: &tauri::AppHandle) {
+    with_orb(app, |w| {
+        let _ = w.show();
+        let _ = w.set_always_on_top(true);
+        let _ = w.eval("window.__showOrb && window.__showOrb()");
+    });
+}
+
 /// Summon/dismiss Jack (the ⌘⌃J global hotkey). It toggles the *visibility* of the
 /// current surface and, when summoning from hidden, restores whatever was last shown
 /// (chat or voice) — it does NOT switch modes. So pressing it in chat hides/shows the
@@ -611,10 +626,7 @@ fn toggle_jack(app: &tauri::AppHandle) {
     if chat_last {
         open_chat(app.clone());
     } else {
-        with_orb(app, |w| {
-            let _ = w.show();
-            let _ = w.set_always_on_top(true);
-        });
+        surface_orb(app);
     }
 }
 
