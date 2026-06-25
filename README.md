@@ -92,9 +92,10 @@ Contributions are welcome — see [`CONTRIBUTING.md`](CONTRIBUTING.md) for the w
 
 ## Sponsor
 
-Jack is built in my free time. If it's useful to you, sponsoring helps me keep going:
-**[GitHub Sponsors](https://github.com/sponsors/mdjakkariya)** ·
-**[Buy Me a Coffee](https://www.buymeacoffee.com/mdjakkariya)**.
+Jack is built in my free time. If it's useful to you, sponsoring helps me keep going via
+**[GitHub Sponsors](https://github.com/sponsors/mdjakkariya)** — or buy me a chai:
+
+[![Buy Me A Chai](https://buymeachai.ezee.li/assets/images/buymeachai-button.png)](https://buymeachai.ezee.li/mdjakkariya)
 
 ## License
 
