@@ -10,12 +10,40 @@
 <meta property="og:title" content="Jack — your Mac, with a voice. Entirely on-device." />
 <meta property="og:description" content="A privacy-first, on-device voice & chat assistant for macOS. It listens, understands, and acts on your Mac — nothing leaves your machine. Open source, Apache-2.0." />
 <meta property="og:url" content="https://mdjakkariya.github.io/jacky/" />
+<meta property="og:site_name" content="Jack" />
+<meta property="og:locale" content="en_US" />
 <meta property="og:image" content="https://mdjakkariya.github.io/jacky/architecture/local_voice_assistant_architecture.png" />
+<meta property="og:image:width" content="1440" />
+<meta property="og:image:height" content="1050" />
+<meta property="og:image:alt" content="Jack architecture — an on-device macOS voice assistant pipeline." />
 <meta name="twitter:card" content="summary_large_image" />
 <meta name="twitter:title" content="Jack — your Mac, with a voice. Entirely on-device." />
 <meta name="twitter:description" content="A privacy-first, on-device voice & chat assistant for macOS. Open source, Apache-2.0." />
+<meta name="twitter:image" content="https://mdjakkariya.github.io/jacky/architecture/local_voice_assistant_architecture.png" />
+<meta name="twitter:image:alt" content="Jack architecture — an on-device macOS voice assistant pipeline." />
 <meta name="theme-color" content="#06070d" />
+<meta name="robots" content="index, follow" />
+<meta name="author" content="Mohamed Jakkariya" />
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M12 3l1.6 4.4L18 9l-4.4 1.6L12 15l-1.6-4.4L6 9z' fill='%230a84ff'/%3E%3C/svg%3E" />
 <link rel="stylesheet" href="style.css" />
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "SoftwareApplication",
+  "name": "Jack",
+  "alternateName": "autobot",
+  "applicationCategory": "UtilitiesApplication",
+  "operatingSystem": "macOS",
+  "description": "Jack is a privacy-first, on-device voice and chat assistant for macOS. It listens, understands, and acts on your Mac — nothing leaves your machine. Open source, Apache-2.0.",
+  "url": "https://mdjakkariya.github.io/jacky/",
+  "downloadUrl": "https://github.com/mdjakkariya/jacky/releases",
+  "softwareLicense": "Apache-2.0",
+  "license": "https://www.apache.org/licenses/LICENSE-2.0",
+  "isAccessibleForFree": true,
+  "offers": { "@type": "Offer", "price": "0", "priceCurrency": "USD" },
+  "author": { "@type": "Person", "name": "Mohamed Jakkariya", "url": "https://github.com/mdjakkariya" }
+}
+</script>
 </head>
 <body>
 
@@ -32,7 +60,7 @@
   <div class="herogrid">
     <div>
       <span class="pill">Open source · Apache-2.0 · macOS · <b>100% on-device</b></span>
-      <h1>Your Mac,<br>with a voice.<br><span class="accent">Entirely on-device.</span></h1>
+      <h1 id="headline">Your Mac,<br>with a voice.<br><span class="accent">Entirely on-device.</span></h1>
       <p class="sub">A privacy-first voice &amp; chat assistant for macOS. Talk to a floating orb — it listens, understands, and acts on your Mac. No audio, text, or memory ever leaves your machine.</p>
       <div class="cta">
         <a class="btn primary" href="https://github.com/mdjakkariya/jacky/releases"><svg class="ico" viewBox="0 0 24 24"><path d="M12 3v12m0 0l-4-4m4 4l4-4M5 21h14"/></svg>Download for macOS</a>
@@ -215,6 +243,48 @@
     orbstage.classList.remove("on"); await sleep(500);
   }
   (async function run(){ while(true){ await chatPhase(); await orbPhase(); } })();
+})();
+</script>
+
+<script>
+/* Headline typewriter. The real text stays in the H1 markup (for SEO and
+   no-JS), and we only animate it when JS runs and motion is allowed. */
+(function(){
+  var h1=document.getElementById("headline");
+  if(!h1) return;
+  if(window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+  // Parse the existing markup into line segments, preserving the accent line.
+  var segs=[], cur={t:"",c:""};
+  h1.childNodes.forEach(function(n){
+    if(n.nodeName==="BR"){ segs.push(cur); cur={t:"",c:""}; }
+    else if(n.nodeType===3){ cur.t+=n.textContent; }
+    else if(n.nodeName==="SPAN"){ cur.t+=n.textContent; cur.c=n.className; }
+  });
+  segs.push(cur);
+  // Reserve the rendered height so typing doesn't shift the layout, then clear.
+  h1.style.minHeight=h1.offsetHeight+"px";
+  function esc(s){ return s.replace(/&/g,"&amp;").replace(/</g,"&lt;"); }
+  function wrap(t,c){ return c ? '<span class="'+c+'">'+esc(t)+'</span>' : esc(t); }
+  function render(li,ci){
+    var html="";
+    for(var i=0;i<segs.length;i++){
+      if(i<li){ html+=wrap(segs[i].t,segs[i].c)+"<br>"; }
+      else if(i===li){ html+=wrap(segs[i].t.slice(0,ci),segs[i].c)+'<span class="hcar"></span>'; break; }
+    }
+    h1.innerHTML=html;
+  }
+  var sleep=function(ms){ return new Promise(function(r){ setTimeout(r,ms); }); };
+  (async function(){
+    h1.innerHTML='<span class="hcar"></span>';
+    await sleep(350);
+    for(var li=0; li<segs.length; li++){
+      for(var ci=1; ci<=segs[li].t.length; ci++){ render(li,ci); await sleep(45); }
+      await sleep(260);
+    }
+    var full="";
+    for(var j=0;j<segs.length;j++){ full+=wrap(segs[j].t,segs[j].c)+(j<segs.length-1?"<br>":""); }
+    h1.innerHTML=full+'<span class="hcar"></span>';
+  })();
 })();
 </script>
 

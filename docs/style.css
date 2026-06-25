@@ -42,6 +42,8 @@ nav .btn{padding:7px 14px}
 .pill{display:inline-flex;align-items:center;gap:8px;font-size:12.5px;color:var(--muted);border:.5px solid var(--line2);border-radius:999px;padding:6px 14px;margin-bottom:22px}
 .pill b{color:var(--green);font-weight:600}
 h1{font-size:52px;line-height:1.05;font-weight:680;letter-spacing:-.02em}
+.hcar{display:inline-block;width:3px;height:.82em;margin-left:5px;border-radius:1px;vertical-align:-1px;
+  background:linear-gradient(180deg,var(--accent2),var(--violet));animation:blink 1.05s infinite}
 .sub{font-size:18px;color:var(--muted);max-width:520px;margin:20px 0 0;line-height:1.6}
 .cta{display:flex;gap:13px;margin-top:28px;flex-wrap:wrap}
 .cta .btn{padding:12px 20px;font-size:15px}
@@ -194,6 +196,29 @@ pre{background:#0c0e15;border:.5px solid var(--line);border-radius:10px;padding:
 pre code{background:none;padding:0;color:#cfe6ff;font-size:12.5px;line-height:1.6}
 @media(max-width:860px){.docwrap{grid-template-columns:1fr} .toc{display:none}}
 @media(max-width:820px){
-  .herogrid{grid-template-columns:1fr} .show{margin-top:18px}
-  h1{font-size:40px} .three,.grid{grid-template-columns:1fr} nav .links{display:none}
+  .herogrid{grid-template-columns:1fr;text-align:center}
+  /* center the hero copy and buttons on mobile */
+  .cta{justify-content:center}
+  /* keep the chat-drawer showcase centered and within the viewport */
+  .show{margin:18px auto 0;width:100%;max-width:360px;min-height:auto}
+  .drawer{width:100%;max-width:340px;height:420px}
+  h1{font-size:40px}
+  .three,.grid{grid-template-columns:1fr}
+  nav .links{display:none}
+  /* links are hidden on mobile, so push the Download button to the right */
+  nav .btn.primary{margin-left:auto}
+  /* pill wraps cleanly, centered, instead of splitting left/right */
+  .pill{flex-wrap:wrap;justify-content:center;text-align:center;row-gap:3px;max-width:100%}
+  /* stack the flow vertically and point the connectors downward */
+  .flow{flex-direction:column;align-items:stretch;gap:0;margin-top:32px}
+  .node{width:100%;min-width:0}
+  .arrow{transform:rotate(90deg);align-self:center;margin:10px 0}
+  /* tighter spacing on small screens */
+  section{padding:48px 0}
+  .panel{padding:32px 22px}
+  .sub{font-size:17px;margin-left:auto;margin-right:auto}
+}
+@media(max-width:420px){
+  h1{font-size:34px}
+  h2{font-size:27px}
 }

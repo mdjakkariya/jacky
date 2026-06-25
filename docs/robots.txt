@@ -1,0 +1,4 @@
+User-agent: *
+Allow: /
+
+Sitemap: https://mdjakkariya.github.io/jacky/sitemap.xml
