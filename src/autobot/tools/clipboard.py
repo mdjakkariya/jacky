@@ -61,9 +61,13 @@ def register_clipboard_tools(registry: ToolRegistry, runner: Runner | None = Non
         ToolSpec(
             name="read_clipboard",
             description=(
-                "Read the current contents of the macOS clipboard (what the user last "
-                "copied). Spoken cues: 'what's on my clipboard', 'read my clipboard', "
-                "'what did I just copy'."
+                "Read what's on the macOS clipboard (what the user last copied) so you can "
+                "answer about it or transform it. Cues: 'what's on my clipboard', 'read my "
+                "clipboard'. Also the start of the copy->ask->paste loop: when the user "
+                "refers to something they just copied — 'summarize / translate / explain / "
+                "fix / rewrite / reformat / clean up this' or '...what I copied / the copied "
+                "text' — call read_clipboard FIRST to get the text, then do the "
+                "transformation yourself and reply with the result."
             ),
             parameters={"type": "object", "properties": {}, "required": []},
             handler=lambda: read_clipboard(runner),
@@ -75,9 +79,12 @@ def register_clipboard_tools(registry: ToolRegistry, runner: Runner | None = Non
         ToolSpec(
             name="set_clipboard",
             description=(
-                "Put text on the macOS clipboard so the user can paste it. Spoken cues: "
-                "'copy this', 'copy X to my clipboard', 'put X on my clipboard'. Pass the "
-                "text to copy as `text`."
+                "Put text on the macOS clipboard so the user can paste it. Cues: 'copy "
+                "this', 'copy X to my clipboard', 'put X on my clipboard'. Also finishes the "
+                "copy->ask->paste loop: when the user wants a transformed result placed back "
+                "— '...and copy it', 'copy that back', 'replace what I copied', 'put the "
+                "translation on my clipboard' — call set_clipboard with the new text. Pass "
+                "the exact text to copy as `text`."
             ),
             parameters={
                 "type": "object",
