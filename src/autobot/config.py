@@ -182,6 +182,8 @@ class Settings:
     allow_memory: bool = True
     allow_file_search: bool = True
     allow_clipboard: bool = True
+    allow_file_io: bool = True
+    access_store: str = "~/.autobot/access.json"
     memory_db: str = "~/.autobot/memory.db"
     # --- debugging / logging ---
     session_log: bool = True

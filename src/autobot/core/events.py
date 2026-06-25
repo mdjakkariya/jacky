@@ -98,19 +98,29 @@ class VisibilityEvent:
 
 @dataclass(frozen=True, slots=True)
 class ConfirmEvent:
-    """The assistant needs the user to approve a risky action (shows a card).
+    """The assistant needs the user to approve an action (shows a card).
 
     ``chat`` marks a confirmation raised during a typed turn: the chat drawer shows
     the card, and the voice orb ignores it (so it doesn't pop up a duplicate card
-    over the drawer).
+    over the drawer). ``kind`` tiers the card's tone so it's proportional to what's
+    asked — ``"read"`` (calm, e.g. file-access grant), ``"write"`` (moderate), or
+    ``"danger"`` (destructive). The UI styles icon/colour/wording from it.
     """
 
     prompt: str
     chat: bool = False
+    kind: str = "danger"
+    options: list[dict[str, str]] | None = None
 
     def message(self) -> dict[str, object]:
         """Serialize to the wire shape clients consume."""
-        return {"type": "confirm", "text": self.prompt, "mode": "chat" if self.chat else "voice"}
+        return {
+            "type": "confirm",
+            "text": self.prompt,
+            "mode": "chat" if self.chat else "voice",
+            "kind": self.kind,
+            "options": self.options,
+        }
 
 
 @dataclass(frozen=True, slots=True)
@@ -292,13 +302,20 @@ class EventBus:
         """Broadcast a UI show/hide request (does not change ``last_state``)."""
         self._emit(VisibilityEvent(visible).message())
 
-    def publish_confirm(self, prompt: str, chat: bool = False) -> None:
+    def publish_confirm(
+        self,
+        prompt: str,
+        chat: bool = False,
+        kind: str = "danger",
+        options: list[dict[str, str]] | None = None,
+    ) -> None:
         """Broadcast that a confirmation is pending (the orb shows a card).
 
         ``chat=True`` marks it as belonging to the chat drawer so the voice orb
-        ignores it (no duplicate card / pop-up over the drawer).
+        ignores it. ``kind`` tiers the card's tone ("read"/"write"/"danger");
+        ``options`` (e.g. access levels) render a dropdown the user picks from.
         """
-        self._emit(ConfirmEvent(prompt, chat=chat).message())
+        self._emit(ConfirmEvent(prompt, chat=chat, kind=kind, options=options).message())
 
     def publish_confirm_clear(self) -> None:
         """Broadcast that the pending confirmation was resolved (hide the card)."""

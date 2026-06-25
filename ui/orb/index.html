@@ -38,7 +38,7 @@
   }
   @keyframes cardIn { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
   .card .ttl { font-weight: 600; margin-bottom: 2px; }
-  .card .msg { opacity: .92; line-height: 1.3; }
+  .card .msg { opacity: .92; line-height: 1.3; overflow-wrap: anywhere; }
   .card .row { display: flex; gap: 8px; margin-top: 9px; }
   .card .btn {
     flex: 1; border: none; border-radius: 9px; padding: 6px 0; cursor: pointer;
@@ -46,6 +46,7 @@
   }
   .card .btn.no  { background: rgba(255,255,255,.14); }
   .card .btn.yes { background: #2f6fff; }
+  .card.danger .btn.yes { background: #ff453a; }
   .card .btn:active { transform: scale(.97); }
   .card .hint { margin-top: 6px; font-size: 11px; opacity: .5; }
 </style>
@@ -179,7 +180,7 @@
       if(msg.type==="state"&&SC[msg.value]){var prev=state;state=msg.value;if(prev!==state)onStateChange(prev,state);}
       else if(msg.type==="amplitude"){liveAmp=Math.max(0,Math.min(1,+msg.value||0));}
       else if(msg.type==="visibility"){ if(msg.value==="hide") requestHide(); else showOrb(); }
-      else if(msg.type==="confirm"){ if(msg.mode!=="chat") showCard(msg.text); }
+      else if(msg.type==="confirm"){ if(msg.mode!=="chat") showCard(msg.text, msg.kind); }
       else if(msg.type==="confirm_clear"){ clearCards(); }
     };
     ws.onclose=function(){scheduleReconnect();};
@@ -199,14 +200,21 @@
   // A persistent card stack under the orb. Answer by voice ("proceed"/"cancel")
   // OR by clicking — the click POSTs to the daemon, which hands it to the engine.
   var API_BASE = WS_URL.replace(/^ws/,"http").replace(/\/ws$/,"");
-  function showCard(text){
+  function showCard(text, kind){
     try{ showOrb(); }catch(e){}   // make sure the orb is visible so the card shows
     var cards=document.getElementById("cards"); if(!cards) return;
-    var el=document.createElement("div"); el.className="card";
-    el.innerHTML='<div class="ttl">Confirm</div><div class="msg"></div>'
-      + '<div class="row"><button class="btn no">Cancel</button>'
-      + '<button class="btn yes">Proceed</button></div>'
-      + '<div class="hint">…or say “proceed” / “cancel”.</div>';
+    kind = kind || "danger";
+    var el=document.createElement("div"); el.className="card " + kind;
+    var ttl = kind === "read" ? "Allow access" : (kind === "write" ? "Allow change" : "Confirm");
+    var yes = kind === "danger" ? "Proceed" : "Allow";
+    var no = kind === "danger" ? "Cancel" : "Not now";
+    el.innerHTML='<div class="ttl"></div><div class="msg"></div>'
+      + '<div class="row"><button class="btn no"></button>'
+      + '<button class="btn yes"></button></div>'
+      + '<div class="hint">…or say “' + (kind==="danger"?"proceed":"allow") + '” / “cancel”.</div>';
+    el.querySelector(".ttl").textContent = ttl;
+    el.querySelector(".no").textContent = no;
+    el.querySelector(".yes").textContent = yes;
     el.querySelector(".msg").textContent = text || "Are you sure?";
     el.querySelector(".yes").addEventListener("click",function(){ sendConfirm(true); });
     el.querySelector(".no").addEventListener("click",function(){ sendConfirm(false); });

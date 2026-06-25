@@ -29,34 +29,60 @@ _log = get_logger("gate")
 
 @runtime_checkable
 class Confirmer(Protocol):
-    """Asks the user to approve a risky action and returns their answer."""
+    """Asks the user to approve an action and returns their answer.
 
-    def confirm(self, prompt: str) -> bool:
+    ``kind`` ("read" / "write" / "danger") lets the UI tier the card's tone so a
+    benign read grant doesn't look like a destructive action.
+    """
+
+    def confirm(self, prompt: str, kind: str = "danger") -> bool:
         """Return ``True`` to proceed, ``False`` to cancel."""
+        ...
+
+    def choose(
+        self, prompt: str, options: list[dict[str, str]], kind: str = "read", default: str = "read"
+    ) -> str:
+        """Pick one option's value (e.g. an access level); "" means cancel."""
         ...
 
 
 class TerminalConfirmer:
     """Confirms via a ``[y/N]`` prompt on the terminal (default: No)."""
 
-    def confirm(self, prompt: str) -> bool:
+    def confirm(self, prompt: str, kind: str = "danger") -> bool:
         """Ask on stdin; only an explicit ``y``/``yes`` proceeds."""
         answer = input(f"{prompt} [y/N] ").strip().lower()
         return answer in {"y", "yes"}
+
+    def choose(
+        self, prompt: str, options: list[dict[str, str]], kind: str = "read", default: str = "read"
+    ) -> str:
+        """Confirm on stdin; a yes grants the least-privilege ``default``."""
+        return default if self.confirm(prompt) else ""
 
 
 class AlwaysAllow:
     """A confirmer that approves everything (tests / non-interactive use)."""
 
-    def confirm(self, prompt: str) -> bool:  # noqa: D102 - see class docstring
+    def confirm(self, prompt: str, kind: str = "danger") -> bool:  # noqa: D102
         return True
+
+    def choose(  # noqa: D102
+        self, prompt: str, options: list[dict[str, str]], kind: str = "read", default: str = "read"
+    ) -> str:
+        return default
 
 
 class AlwaysDeny:
     """A confirmer that rejects everything (tests)."""
 
-    def confirm(self, prompt: str) -> bool:  # noqa: D102 - see class docstring
+    def confirm(self, prompt: str, kind: str = "danger") -> bool:  # noqa: D102
         return False
+
+    def choose(  # noqa: D102
+        self, prompt: str, options: list[dict[str, str]], kind: str = "read", default: str = "read"
+    ) -> str:
+        return ""
 
 
 class PermissionGate:

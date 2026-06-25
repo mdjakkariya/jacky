@@ -40,7 +40,7 @@ class _RecordingConfirmer:
     def __init__(self) -> None:
         self.prompts: list[str] = []
 
-    def confirm(self, prompt: str) -> bool:
+    def confirm(self, prompt: str, kind: str = "danger") -> bool:
         self.prompts.append(prompt)
         return False
 
@@ -50,7 +50,7 @@ class _TimeoutConfirmer:
 
     timed_out = True
 
-    def confirm(self, _prompt: str) -> bool:
+    def confirm(self, _prompt: str, kind: str = "danger") -> bool:
         return False
 
 

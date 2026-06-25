@@ -33,16 +33,16 @@ def test_parse_confirmation_unclear_is_none() -> None:
 def test_inbox_round_trips_one_answer() -> None:
     box = ConfirmInbox()
     assert box.take() is None  # empty
-    box.submit(True)
-    assert box.take() is True
+    box.submit("yes")
+    assert box.take() == "yes"
     assert box.take() is None  # consumed
 
 
 def test_inbox_keeps_first_answer_when_full() -> None:
     box = ConfirmInbox()
-    box.submit(True)
-    box.submit(False)  # ignored — one already pending
-    assert box.take() is True
+    box.submit("yes")
+    box.submit("no")  # ignored — one already pending
+    assert box.take() == "yes"
 
 
 # --- VoiceConfirmer flow (fakes; no mic, no audio) ------------------------
@@ -72,7 +72,7 @@ def _voice(answers: list[str], timeout_s: float = 5.0) -> tuple[VoiceConfirmer, 
     confirmer = VoiceConfirmer(
         speak=flow.speak,
         listen=flow.listen,
-        on_show=flow.shown.append,
+        on_show=lambda p, k, o: flow.shown.append(p),
         on_clear=lambda: setattr(flow, "cleared", flow.cleared + 1),
         timeout_s=timeout_s,
         clock=flow.clock,
@@ -105,9 +105,9 @@ def test_chat_mode_confirms_by_click_without_speaking() -> None:
     shown: list[str] = []
     polls = {"n": 0}
 
-    def poll() -> bool | None:
+    def poll() -> str | None:
         polls["n"] += 1
-        return True if polls["n"] >= 2 else None  # drain sees None, then a click
+        return "yes" if polls["n"] >= 2 else None  # drain sees None, then a click
 
     def no_listen(_t: float) -> str:
         raise AssertionError("chat mode must not listen on the mic")
@@ -115,8 +115,8 @@ def test_chat_mode_confirms_by_click_without_speaking() -> None:
     c = VoiceConfirmer(
         speak=spoken.append,
         listen=no_listen,
-        on_show=shown.append,
-        poll_click=poll,
+        on_show=lambda p, k, o: shown.append(p),
+        poll_answer=poll,
         is_chat=lambda: True,
         timeout_s=10.0,
         clock=lambda: 0.0,
@@ -138,7 +138,7 @@ def test_chat_mode_times_out_silently() -> None:
     c = VoiceConfirmer(
         speak=spoken.append,
         listen=lambda _t: "",
-        poll_click=lambda: None,
+        poll_answer=lambda: None,
         is_chat=lambda: True,
         timeout_s=3.0,
         clock=clock,
@@ -182,16 +182,51 @@ def test_confirm_resolves_on_card_click() -> None:
     # A stale click is drained at the start; the real click arrives a poll later.
     polls = {"n": 0}
 
-    def poll() -> bool | None:
+    def poll() -> str | None:
         polls["n"] += 1
-        return True if polls["n"] >= 3 else None
+        return "yes" if polls["n"] >= 3 else None
 
     spoken: list[str] = []
     c = VoiceConfirmer(
         speak=spoken.append,
         listen=lambda _t: "",  # never any voice
-        poll_click=poll,
+        poll_answer=poll,
         timeout_s=10.0,
         clock=lambda: 0.0,  # deadline never reached; the click resolves it
     )
     assert c.confirm("Empty the Trash?") is True
+
+
+_LEVELS = [{"label": "Read only", "value": "read"}, {"label": "Read & write", "value": "write"}]
+
+
+def test_choose_returns_clicked_value_in_chat() -> None:
+    polls = {"n": 0}
+
+    def poll() -> str | None:
+        polls["n"] += 1
+        return "write" if polls["n"] >= 2 else None  # drain, then the picked value
+
+    shown: list[list[dict[str, str]] | None] = []
+    c = VoiceConfirmer(
+        speak=lambda _s: None,
+        listen=lambda _t: "",
+        on_show=lambda p, k, o: shown.append(o),
+        poll_answer=poll,
+        is_chat=lambda: True,
+        timeout_s=10.0,
+        clock=lambda: 0.0,
+        sleep=lambda _s: None,
+    )
+    assert c.choose("Let Jack in?", _LEVELS, "read", "read") == "write"
+    assert shown == [_LEVELS]  # the options were sent to the card
+
+
+def test_choose_voice_yes_picks_least_privilege_default() -> None:
+    c, _ = _voice(["yes"])
+    assert c.choose("Let Jack in?", _LEVELS, "read", "read") == "read"
+
+
+def test_choose_cancel_returns_empty() -> None:
+    c, _ = _voice(["no"])
+    assert c.choose("Let Jack in?", _LEVELS, "read", "read") == ""

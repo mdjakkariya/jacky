@@ -57,11 +57,28 @@ def test_publish_confirm_carries_mode_so_the_orb_can_ignore_chat_cards() -> None
     seen: list[dict[str, object]] = []
     bus.subscribe(seen.append)
 
-    bus.publish_confirm("Empty the Trash?")  # voice by default
-    assert seen[-1] == {"type": "confirm", "text": "Empty the Trash?", "mode": "voice"}
+    bus.publish_confirm("Empty the Trash?")  # voice + destructive by default
+    assert seen[-1] == {
+        "type": "confirm",
+        "text": "Empty the Trash?",
+        "mode": "voice",
+        "kind": "danger",
+        "options": None,
+    }
 
     bus.publish_confirm("Empty the Trash?", chat=True)  # chat turn -> orb ignores it
-    assert seen[-1] == {"type": "confirm", "text": "Empty the Trash?", "mode": "chat"}
+    assert seen[-1] == {
+        "type": "confirm",
+        "text": "Empty the Trash?",
+        "mode": "chat",
+        "kind": "danger",
+        "options": None,
+    }
+
+    # A read grant: calm tone + an access-level dropdown to pick from.
+    levels = [{"label": "Read only", "value": "read"}, {"label": "Read & write", "value": "write"}]
+    bus.publish_confirm("Let Jack read files in ~/proj?", chat=True, kind="read", options=levels)
+    assert seen[-1]["kind"] == "read" and seen[-1]["options"] == levels
 
 
 def test_publish_context_carries_pct_and_dev_flag() -> None:

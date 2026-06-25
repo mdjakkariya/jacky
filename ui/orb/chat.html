@@ -56,6 +56,14 @@
   .msg{max-width:82%;font-size:15px;line-height:1.55;padding:10px 13px;border-radius:16px;white-space:pre-wrap;word-wrap:break-word;}
   .me{align-self:flex-end;background:var(--accent-bg);color:var(--accent);border-top-right-radius:4px;}
   .jack{align-self:flex-start;background:var(--bubble);color:var(--text);border-top-left-radius:4px;}
+  /* Rendered markdown inside Jack's replies. */
+  .jack p{margin:0 0 7px;} .jack p:last-child{margin-bottom:0;}
+  .jack ul,.jack ol{margin:5px 0 7px;padding-left:20px;} .jack li{margin:2px 0;}
+  .jack code{background:rgba(255,255,255,.10);padding:1px 5px;border-radius:4px;font-family:"SF Mono",ui-monospace,Menlo,monospace;font-size:12px;}
+  .jack pre{background:rgba(0,0,0,.28);border:.5px solid var(--line);border-radius:8px;padding:9px 11px;overflow:auto;margin:7px 0;}
+  .jack pre code{background:none;padding:0;font-size:12px;line-height:1.5;}
+  .jack a.mdlink{color:var(--accent);text-decoration:underline;}
+  .jack strong{font-weight:600;} .jack em{font-style:italic;}
   .msg.clamped{position:relative;max-height:150px;overflow:hidden;}
   .msg.clamped::after{content:"";position:absolute;left:0;right:0;bottom:0;height:34px;pointer-events:none;
     background:linear-gradient(transparent,rgba(0,0,0,.32));border-radius:0 0 16px 16px;}
@@ -74,10 +82,20 @@
   @keyframes tdot{0%,70%,100%{transform:translateY(0);opacity:.35;}35%{transform:translateY(-5px);opacity:1;}}
   .confirm{align-self:stretch;background:var(--panel);border:.5px solid var(--field-line);border-radius:8px;padding:11px 12px;}
   .confirm .h{display:flex;align-items:center;gap:6px;font-size:12.5px;font-weight:500;color:var(--danger);margin-bottom:4px;}
-  .confirm .b{font-size:12.5px;color:var(--muted);line-height:1.5;margin-bottom:10px;}
+  .confirm .b{font-size:12.5px;color:var(--muted);line-height:1.5;margin-bottom:10px;overflow-wrap:anywhere;}
   .confirm .row{display:flex;gap:8px;justify-content:flex-end;}
   .btn{font-size:12px;padding:5px 12px;border-radius:7px;border:.5px solid var(--field-line);background:transparent;color:var(--text);cursor:pointer;}
   .btn.danger{border-color:var(--danger);background:var(--danger-bg);color:var(--danger);}
+  .btn.primary{border:none;background:var(--accent);color:#fff;}
+  /* Tier the confirm card's tone to what's asked: read/write are calm (accent),
+     only destructive is red. */
+  .confirm.read .h,.confirm.write .h{color:var(--accent);}
+  .confirm select.confsel{appearance:none;-webkit-appearance:none;width:100%;margin:0 0 10px;
+    padding:8px 32px 8px 11px;font-size:12.5px;border-radius:8px;background-color:var(--field);
+    color:var(--text);border:.5px solid var(--field-line);cursor:pointer;
+    background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%2398989d' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M6 9l6 6 6-6'/%3E%3C/svg%3E");
+    background-repeat:no-repeat;background-position:right 10px center;background-size:13px;}
+  .confirm select.confsel:focus{outline:none;border-color:var(--accent);}
   /* Action cards: generic selectable items (e.g. file results) with action buttons. */
   .choices{align-self:stretch;background:var(--panel);border:.5px solid var(--field-line);border-radius:8px;padding:11px 12px;}
   .choices .h{font-size:12px;font-weight:500;color:var(--muted);margin-bottom:8px;}
@@ -249,9 +267,56 @@
       + '<h2>Starting Jack…</h2>'
       + '<p>Getting things ready — just a moment.</p></div>';
   }
-  function bubble(cls, text){
+  // Minimal, dependency-free Markdown for Jack's replies (chat mode emits light
+  // markdown). Everything is HTML-escaped first, so model text can't inject markup;
+  // we only add our own tags for code, lists, bold/italic, and http(s) links.
+  function escapeHtml(s){
+    return s.replace(/[&<>]/g, function(c){ return c === "&" ? "&amp;" : c === "<" ? "&lt;" : "&gt;"; });
+  }
+  function renderMarkdown(src){
+    var blocks = [];
+    src = src.replace(/```[a-zA-Z0-9]*\n?([\s\S]*?)```/g, function(_m, code){
+      blocks.push("<pre><code>" + escapeHtml(code.replace(/\n$/, "")) + "</code></pre>");
+      return " B" + (blocks.length - 1) + " ";
+    });
+    src = escapeHtml(src);
+    src = src.replace(/`([^`]+)`/g, function(_m, c){ return "<code>" + c + "</code>"; });
+    src = src.replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g, function(_m, t, u){ return '<a class="mdlink" href="' + u + '">' + t + "</a>"; });
+    src = src.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
+    src = src.replace(/(^|[^*])\*([^*]+)\*/g, "$1<em>$2</em>");
+    var lines = src.split("\n"), out = [], i = 0;
+    while(i < lines.length){
+      var ph = lines[i].match(/^ B(\d+) $/);
+      if(ph){ out.push(blocks[+ph[1]]); i++; continue; }
+      if(/^\s*[-*]\s+/.test(lines[i])){
+        var ul = [];
+        while(i < lines.length && /^\s*[-*]\s+/.test(lines[i])){ ul.push("<li>" + lines[i].replace(/^\s*[-*]\s+/, "") + "</li>"); i++; }
+        out.push("<ul>" + ul.join("") + "</ul>"); continue;
+      }
+      if(/^\s*\d+\.\s+/.test(lines[i])){
+        var ol = [];
+        while(i < lines.length && /^\s*\d+\.\s+/.test(lines[i])){ ol.push("<li>" + lines[i].replace(/^\s*\d+\.\s+/, "") + "</li>"); i++; }
+        out.push("<ol>" + ol.join("") + "</ol>"); continue;
+      }
+      if(lines[i].trim() === ""){ i++; continue; }
+      out.push("<p>" + lines[i] + "</p>"); i++;
+    }
+    return out.join("");
+  }
+  function bubble(cls, text, md){
     removeEmpty();
-    var d = document.createElement("div"); d.className = "msg " + cls; d.textContent = text;
+    var d = document.createElement("div"); d.className = "msg " + cls;
+    if(md){
+      d.innerHTML = renderMarkdown(text);
+      d.querySelectorAll("a.mdlink").forEach(function(a){
+        a.addEventListener("click", function(e){
+          e.preventDefault();
+          if(tauri()) tauri().invoke("open_external", {url: a.getAttribute("href")}).catch(function(){});
+        });
+      });
+    } else {
+      d.textContent = text;
+    }
     log.appendChild(d); clampIfLong(d, cls); scroll(); return d;
   }
   bindChips(log);  // wire the chips already in the DOM
@@ -281,7 +346,7 @@
     showTyping();
     try {
       var r = await (await fetch(API + "/chat", {method:"POST", headers:{"content-type":"application/json"}, body: JSON.stringify({text: text})})).json();
-      bubble("jack", (r && r.reply) ? r.reply : "(no reply)");
+      bubble("jack", (r && r.reply) ? r.reply : "(no reply)", !!(r && r.reply));
     } catch(e){
       bubble("jack", "Couldn't reach Jack — is it running?");
     } finally {
@@ -332,24 +397,41 @@
   // Confirmation cards arrive over the WebSocket. The loading dots keep running
   // underneath (the turn is still in flight); the input stays locked, so the card's
   // buttons are how you answer — no second message can queue up behind it.
-  function showConfirm(prompt){
+  function showConfirm(prompt, kind, options){
     clearConfirm();
-    var card = document.createElement("div"); card.className = "confirm"; card.id = "confirm-card";
-    card.innerHTML = '<div class="h">⚠️ Just checking</div><div class="b"></div>'
-      + '<div class="row"><button class="btn" data-a="0">Cancel</button>'
-      + '<button class="btn danger" data-a="1">Yes, do it</button></div>';
+    kind = kind || "danger";
+    var hasOpts = !!(options && options.length);
+    var card = document.createElement("div"); card.className = "confirm " + kind; card.id = "confirm-card";
+    var head = kind === "read" ? "Allow access" : (kind === "write" ? "Allow change" : "⚠️ Just checking");
+    var yes = kind === "danger" ? "Yes, do it" : "Allow";
+    var yesCls = kind === "danger" ? "btn danger" : "btn primary";
+    var no = kind === "danger" ? "Cancel" : "Not now";
+    var sel = "";
+    if(hasOpts){
+      sel = '<select class="confsel" id="confSel">';
+      options.forEach(function(o){ sel += '<option value="' + o.value + '">' + o.label + '</option>'; });
+      sel += '</select>';
+    }
+    card.innerHTML = '<div class="h"></div><div class="b"></div>' + sel
+      + '<div class="row"><button class="btn" data-v="no"></button>'
+      + '<button class="' + yesCls + '" data-v="yes"></button></div>';
+    card.querySelector(".h").textContent = head;
     card.querySelector(".b").textContent = prompt || "Do you want me to go ahead with this?";
+    card.querySelector('[data-v="no"]').textContent = no;
+    card.querySelector('[data-v="yes"]').textContent = yes;
     card.querySelectorAll("button").forEach(function(b){
       b.addEventListener("click", function(){
-        answer(b.getAttribute("data-a") === "1");
+        var v = b.getAttribute("data-v");
+        if(v === "yes" && hasOpts){ var s = document.getElementById("confSel"); v = s ? s.value : "yes"; }
+        answer(v);
         card.remove();
       });
     });
     log.appendChild(card); scroll();
   }
   function clearConfirm(){ var c = $("confirm-card"); if(c){ c.remove(); } }
-  async function answer(ok){
-    try { await fetch(API + "/confirm", {method:"POST", headers:{"content-type":"application/json"}, body: JSON.stringify({answer: ok})}); } catch(e){}
+  async function answer(value){
+    try { await fetch(API + "/confirm", {method:"POST", headers:{"content-type":"application/json"}, body: JSON.stringify({value: value})}); } catch(e){}
   }
 
   // Generic action cards arrive over the WebSocket (type "choices"): a title plus
@@ -469,7 +551,7 @@
       var ws = new WebSocket(WS_URL);
       ws.onmessage = function(ev){
         var m; try { m = JSON.parse(ev.data); } catch(e){ return; }
-        if(m.type === "confirm") showConfirm(m.text);
+        if(m.type === "confirm") showConfirm(m.text, m.kind, m.options);
         else if(m.type === "confirm_clear") clearConfirm();
         else if(m.type === "context") renderContext(m);
         else if(m.type === "choices" && m.mode !== "voice") showChoices(m);

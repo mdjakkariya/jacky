@@ -302,6 +302,40 @@ def create_app(
         threading.Thread(target=run, name="voice-download", daemon=True).start()
         return {"ok": True, "started": True}
 
+    async def get_access() -> dict[str, Any]:
+        """List the folders the user has granted Jack access to (for Settings)."""
+        from autobot.tools.access import active_policy
+
+        pol = active_policy()
+        grants = (
+            [{"path": g.path, "mode": g.mode.name.lower()} for g in pol.grants()] if pol else []
+        )
+        return {"grants": grants}
+
+    async def post_access_grant(request: Request) -> dict[str, Any]:
+        """Grant access to a folder (``{path, write}``) — the Settings 'Add folder'."""
+        from autobot.tools.access import AccessDeniedError, active_policy
+
+        payload = await request.json()
+        pol = active_policy()
+        if pol is None or not isinstance(payload, dict) or "path" not in payload:
+            return {"ok": False, "error": "no path / access unavailable"}
+        try:
+            g = pol.grant(str(payload["path"]), write=bool(payload.get("write")))
+        except AccessDeniedError as exc:
+            return {"ok": False, "error": str(exc)}
+        return {"ok": True, "grant": {"path": g.path, "mode": g.mode.name.lower()}}
+
+    async def post_access_revoke(request: Request) -> dict[str, Any]:
+        """Revoke a folder grant (``{path}``)."""
+        from autobot.tools.access import active_policy
+
+        payload = await request.json()
+        pol = active_policy()
+        if pol is None or not isinstance(payload, dict) or "path" not in payload:
+            return {"ok": False, "error": "no path / access unavailable"}
+        return {"ok": True, "removed": pol.revoke(str(payload["path"]))}
+
     async def post_action(request: Request) -> dict[str, Any]:
         """Run a UI-initiated action (a clicked action card) through the engine's gate.
 
@@ -320,12 +354,19 @@ def create_app(
         return {"ok": True, "result": result}
 
     async def post_confirm(request: Request) -> dict[str, Any]:
-        """Deliver a clicked Yes/No answer for a pending confirmation to the engine."""
+        """Deliver a clicked answer for a pending confirmation/choice to the engine.
+
+        Accepts ``{value: str}`` (e.g. "yes"/"no"/"read"/"write") or, for older
+        clients, ``{answer: bool}`` which maps to "yes"/"no".
+        """
         payload = await request.json()
-        if not isinstance(payload, dict) or "answer" not in payload:
-            return {"ok": False, "error": "expected {answer: bool}"}
+        value = payload.get("value") if isinstance(payload, dict) else None
+        if value is None and isinstance(payload, dict) and "answer" in payload:
+            value = "yes" if payload["answer"] else "no"
+        if value is None:
+            return {"ok": False, "error": "expected {value} or {answer}"}
         if on_confirm_answer is not None:
-            on_confirm_answer(bool(payload["answer"]))
+            on_confirm_answer(str(value))
         return {"ok": True}
 
     # Register routes explicitly (rather than via decorators) so the handlers
@@ -344,6 +385,9 @@ def create_app(
     app.add_api_route("/secret", post_secret, methods=["POST"])
     app.add_api_route("/confirm", post_confirm, methods=["POST"])
     app.add_api_route("/action", post_action, methods=["POST"])
+    app.add_api_route("/access", get_access, methods=["GET"])
+    app.add_api_route("/access/grant", post_access_grant, methods=["POST"])
+    app.add_api_route("/access/revoke", post_access_revoke, methods=["POST"])
     app.add_api_route("/chat", post_chat, methods=["POST"])
     app.add_api_route("/session/new", post_new_session, methods=["POST"])
     app.add_api_route("/voice/status", get_voice_status, methods=["GET"])

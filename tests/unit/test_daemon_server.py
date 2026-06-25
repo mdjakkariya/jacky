@@ -103,12 +103,14 @@ def test_post_secret_rejects_unknown_name(tmp_path: object) -> None:
 
 
 def test_post_confirm_delivers_clicked_answer() -> None:
-    answers: list[bool] = []
+    answers: list[str] = []
     app = create_app(EventBus(), on_confirm_answer=answers.append)
     client = TestClient(app)
+    # Legacy bool maps to yes/no; a value (e.g. access level) passes through.
     assert client.post("/confirm", json={"answer": True}).json() == {"ok": True}
     assert client.post("/confirm", json={"answer": False}).json() == {"ok": True}
-    assert answers == [True, False]
+    assert client.post("/confirm", json={"value": "write"}).json() == {"ok": True}
+    assert answers == ["yes", "no", "write"]
 
 
 def test_voice_status_returns_model_presence_shape() -> None:
@@ -165,6 +167,51 @@ def test_post_action_runs_tool_through_callback() -> None:
     )
     assert body == {"ok": True, "result": "ran open_path"}
     assert calls == [("open_path", {"path": "~/a.pdf"})]
+
+
+def test_access_endpoints_list_grant_revoke(tmp_path: object) -> None:
+    from pathlib import Path
+
+    from autobot.tools.access import AccessPolicy, set_active_policy
+
+    base = Path(str(tmp_path))
+    set_active_policy(AccessPolicy(base / "access.json", base / "ws"))
+    try:
+        proj = base / "proj"
+        proj.mkdir()
+        client = TestClient(create_app(EventBus()))
+        assert client.get("/access").json() == {"grants": []}
+        granted = client.post("/access/grant", json={"path": str(proj), "write": True}).json()
+        assert granted["ok"] is True and granted["grant"]["mode"] == "write"
+        listed = client.get("/access").json()["grants"]
+        assert listed[0]["path"] == str(proj.resolve())
+        assert client.post("/access/revoke", json={"path": str(proj)}).json() == {
+            "ok": True,
+            "removed": True,
+        }
+        assert client.get("/access").json() == {"grants": []}
+    finally:
+        set_active_policy(None)  # don't leak the global into other tests
+
+
+def test_access_grant_rejects_protected_path(tmp_path: object) -> None:
+    from pathlib import Path
+
+    from autobot.tools.access import AccessPolicy, set_active_policy
+
+    base = Path(str(tmp_path))
+    set_active_policy(AccessPolicy(base / "access.json", base / "ws"))
+    try:
+        secret = base / ".ssh"
+        secret.mkdir()
+        resp = (
+            TestClient(create_app(EventBus()))
+            .post("/access/grant", json={"path": str(secret)})
+            .json()
+        )
+        assert resp["ok"] is False
+    finally:
+        set_active_policy(None)
 
 
 def test_post_action_rejects_missing_tool() -> None:

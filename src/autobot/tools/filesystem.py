@@ -102,8 +102,10 @@ class FileTools:
             ToolSpec(
                 name="create_file",
                 description=(
-                    "Create or overwrite a file in the workspace. Returns the file's "
-                    "full path so you can tell the user exactly where it is."
+                    "Create a file in Jack's PRIVATE scratch workspace only (not the user's "
+                    "own folders). For a file the user names a place for — their Documents, a "
+                    "project folder, anywhere under their home — use write_file instead. "
+                    "Returns the file's full path."
                 ),
                 parameters={
                     "type": "object",

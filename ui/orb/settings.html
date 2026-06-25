@@ -186,6 +186,8 @@
           <label class="switch"><input type="checkbox" id="allow_file_search"><span class="slider"></span></label></div>
         <div class="row"><span class="grow"><span class="label">Clipboard</span><div class="desc">Read &amp; set the clipboard (on-device)</div></span>
           <label class="switch"><input type="checkbox" id="allow_clipboard"><span class="slider"></span></label></div>
+        <div class="row"><span class="grow"><span class="label">File access</span><div class="desc">Read, copy &amp; edit files in folders you grant</div></span>
+          <label class="switch"><input type="checkbox" id="allow_file_io"><span class="slider"></span></label></div>
         <div class="row"><span class="grow"><span class="label">Web search</span><div class="desc">Sends queries off-device</div></span>
           <label class="switch"><input type="checkbox" id="allow_web"><span class="slider"></span></label></div>
         <!-- Provider-driven, like the Model tab: add a future search provider by
@@ -200,6 +202,21 @@
           <div class="stack" id="web-key-stack"><label for="webKey">API key <span id="webKeyState" class="hint" style="font-weight:400"></span></label>
             <input type="password" id="webKey" placeholder="provider API key" autocomplete="off" />
             <div class="hint">Stored in your macOS Keychain.</div></div>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="row"><span class="grow"><span class="label">Folders &amp; access</span>
+          <div class="desc">Folders Jack may read or write. Jack also asks the first time it needs one.</div></span></div>
+        <div id="accessList" class="desc" style="margin-top:6px">Loading…</div>
+        <div class="stack" style="margin-top:12px">
+          <label for="accessPath">Add a folder (full path)</label>
+          <input type="text" id="accessPath" placeholder="/Users/you/projects/foo" autocomplete="off" />
+        </div>
+        <div class="row" style="margin-top:8px">
+          <label class="grow" style="display:flex;align-items:center;gap:8px;font-weight:400">
+            <input type="checkbox" id="accessWrite"> Allow writing (create &amp; edit files)</label>
+          <button class="btn" id="accessAddBtn">Grant</button>
         </div>
       </div>
     </section>
@@ -276,7 +293,7 @@
 (function(){
   var API = new URLSearchParams(location.search).get("api") || "http://127.0.0.1:8765";
   var $ = function(id){ return document.getElementById(id); };
-  var CHECKS = ["tts_enabled","barge_in","aec","allow_app_control","allow_system_info","allow_memory","allow_file_search","allow_clipboard","allow_web"];
+  var CHECKS = ["tts_enabled","barge_in","aec","allow_app_control","allow_system_info","allow_memory","allow_file_search","allow_clipboard","allow_file_io","allow_web"];
 
   // tabs
   document.querySelectorAll(".tabs button").forEach(function(b){
@@ -478,8 +495,45 @@
     $("keyState").textContent = sec.anthropic_api_key ? "— saved (leave blank to keep)" : "— not set";
     $("webKeyState").textContent = sec.web_api_key ? "— saved (leave blank to keep)" : "— not set";
     loadVoiceStatus();
+    loadAccess();
     await populateModels(s.llm_model || "");
   }
+
+  // Folders & access: list granted folders (with revoke) and grant a new one by path.
+  // (The grant-on-first-use prompt is what most people will use; this is for managing.)
+  async function loadAccess(){
+    var box = $("accessList"); if(!box) return;
+    try {
+      var r = await (await fetch(API + "/access")).json();
+      var gs = (r && r.grants) || [];
+      if(!gs.length){ box.textContent = "No folders granted yet."; return; }
+      box.innerHTML = "";
+      gs.forEach(function(g){
+        var row = document.createElement("div"); row.className = "row";
+        var info = document.createElement("span"); info.className = "grow";
+        var name = document.createElement("div"); name.className = "label"; name.style.fontWeight = "400"; name.textContent = g.path;
+        var mode = document.createElement("div"); mode.className = "desc"; mode.textContent = g.mode === "write" ? "read & write" : "read only";
+        info.appendChild(name); info.appendChild(mode);
+        var btn = document.createElement("button"); btn.className = "btn"; btn.textContent = "Revoke";
+        btn.addEventListener("click", function(){ revokeFolder(g.path); });
+        row.appendChild(info); row.appendChild(btn); box.appendChild(row);
+      });
+    } catch(e){ box.textContent = "Couldn't load the access list."; }
+  }
+  async function grantFolder(){
+    var p = ($("accessPath").value || "").trim(); if(!p) return;
+    try {
+      var r = await (await fetch(API + "/access/grant", {method:"POST", headers:{"content-type":"application/json"},
+        body: JSON.stringify({path: p, write: $("accessWrite").checked})})).json();
+      if(!r.ok){ setStatus(r.error || "Couldn't grant access", true); return; }
+      $("accessPath").value = ""; $("accessWrite").checked = false; loadAccess();
+    } catch(e){ setStatus("Couldn't grant access", true); }
+  }
+  async function revokeFolder(path){
+    try { await fetch(API + "/access/revoke", {method:"POST", headers:{"content-type":"application/json"}, body: JSON.stringify({path: path})}); } catch(e){}
+    loadAccess();
+  }
+  $("accessAddBtn").addEventListener("click", grantFolder);
 
   async function populateModels(current){
     var sel = $("ollamaModel"); sel.innerHTML = "";

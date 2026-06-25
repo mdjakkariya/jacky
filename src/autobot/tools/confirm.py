@@ -25,27 +25,39 @@ _log = get_logger("gate")
 
 
 class ConfirmInbox:
-    """Thread-safe one-slot mailbox for a confirmation answer clicked on the orb.
+    """Thread-safe one-slot mailbox for a clicked answer to a card.
 
-    The daemon (asyncio thread) calls :meth:`submit` when the user clicks Yes/No;
-    the confirmer (engine thread) polls :meth:`take`. Holds a single pending answer
-    — extra clicks while one is queued are ignored.
+    The daemon (asyncio thread) calls :meth:`submit` with the clicked value
+    ("yes"/"no" for a confirm, or an access level like "read"/"write" for a grant
+    choice); the confirmer (engine thread) polls :meth:`take`. Holds a single pending
+    answer — extra clicks while one is queued are ignored.
     """
 
     def __init__(self) -> None:
-        self._q: queue.Queue[bool] = queue.Queue(maxsize=1)
+        self._q: queue.Queue[str] = queue.Queue(maxsize=1)
 
-    def submit(self, answer: bool) -> None:
-        """Record a clicked answer (no-op if one is already pending)."""
+    def submit(self, value: str) -> None:
+        """Record a clicked answer value (no-op if one is already pending)."""
         with contextlib.suppress(queue.Full):
-            self._q.put_nowait(answer)
+            self._q.put_nowait(value)
 
-    def take(self) -> bool | None:
+    def take(self) -> str | None:
         """Return and clear the pending answer, or ``None`` if there isn't one."""
         try:
             return self._q.get_nowait()
         except queue.Empty:
             return None
+
+
+# Values that mean "cancel/decline" when they come back from a card or inbox.
+_CANCEL_VALUES = frozenset({"", "no", "cancel"})
+
+
+def _value_to_bool(value: str | None) -> bool | None:
+    """Map a clicked value to yes/no for confirm(): None passes through unchanged."""
+    if value is None:
+        return None
+    return value not in _CANCEL_VALUES
 
 
 _WORD = re.compile(r"[a-z']+")
@@ -63,6 +75,7 @@ _YES_WORDS = frozenset(
         "sure",
         "ok",
         "okay",
+        "allow",
         "proceed",
         "confirm",
         "confirmed",
@@ -97,9 +110,9 @@ class VoiceConfirmer:
         *,
         speak: Callable[[str], None],
         listen: Callable[[float], str],
-        on_show: Callable[[str], None] | None = None,
+        on_show: Callable[[str, str, list[dict[str, str]] | None], None] | None = None,
         on_clear: Callable[[], None] | None = None,
-        poll_click: Callable[[], bool | None] | None = None,
+        poll_answer: Callable[[], str | None] | None = None,
         flush: Callable[[], None] | None = None,
         is_chat: Callable[[], bool] | None = None,
         timeout_s: float = 30.0,
@@ -111,7 +124,7 @@ class VoiceConfirmer:
         self._listen = listen  # (max_wait_s) -> transcript ("" on silence)
         self._on_show = on_show
         self._on_clear = on_clear
-        self._poll_click = poll_click  # () -> True/False from a card click, else None
+        self._poll_answer = poll_answer  # () -> clicked value string, else None
         self._flush = flush  # drop pre-prompt audio so only the answer is heard
         # When this returns True (chat mode), confirm by the card click only — don't
         # speak the prompt or listen on the mic (which would talk over chat / fight
@@ -136,8 +149,8 @@ class VoiceConfirmer:
         _log.info("confirming (chat, click-only) prompt=%r", prompt)
         deadline = self._clock() + self._timeout_s
         while self._clock() < deadline:
-            if self._poll_click is not None:
-                clicked = self._poll_click()
+            if self._poll_answer is not None:
+                clicked = _value_to_bool(self._poll_answer())
                 if clicked is not None:
                     return self._resolve(clicked, "click")
             self._sleep(min(0.15, self._chunk_s))
@@ -155,19 +168,76 @@ class VoiceConfirmer:
         _log.info("confirmation %s by %s", "approved" if answer else "declined", how)
         return answer
 
-    def confirm(self, prompt: str) -> bool:
+    def choose(
+        self,
+        prompt: str,
+        options: list[dict[str, str]],
+        kind: str = "read",
+        default: str = "read",
+    ) -> str:
+        """Ask the user to pick an option (e.g. an access level); "" means cancel.
+
+        Chat shows the card with a dropdown and waits for the clicked value; by voice
+        a clear yes selects ``default`` (least privilege) and a no cancels. Returns the
+        chosen option's value, or "" on cancel / silence / timeout.
+        """
+        self._timed_out = False
+        valid = {o["value"] for o in options}
+        if self._poll_answer is not None:
+            while self._poll_answer() is not None:
+                pass  # drain any stale answer
+        if self._on_show is not None:
+            self._on_show(prompt, kind, options)
+        try:
+            deadline = self._clock() + self._timeout_s
+            chat = self._is_chat is not None and self._is_chat()
+            if not chat:
+                self._speak(f"{prompt} Say allow to confirm, or cancel.")
+                if self._flush is not None:
+                    self._flush()
+            reprompted = False
+            while self._clock() < deadline:
+                if self._poll_answer is not None:
+                    v = self._poll_answer()
+                    if v is not None:
+                        if v in _CANCEL_VALUES:
+                            return ""
+                        return v if v in valid else default
+                if chat:
+                    self._sleep(min(0.15, self._chunk_s))
+                    continue
+                chunk = min(self._chunk_s, max(0.1, deadline - self._clock()))
+                text = self._listen(chunk)
+                if not text.strip():
+                    continue
+                ans = parse_confirmation(text)
+                if ans is True:
+                    return default
+                if ans is False:
+                    return ""
+                if not reprompted:
+                    reprompted = True
+                    self._speak("Sorry, was that a yes or no?")
+            self._timed_out = True
+            return ""
+        finally:
+            if self._on_clear is not None:
+                self._on_clear()
+
+    def confirm(self, prompt: str, kind: str = "danger") -> bool:
         """Wait for a clear yes (voice *or* a card click); cancel on anything else.
 
-        Listens in short chunks so a click is picked up within a couple of seconds,
-        and cancels on no / silence / ambiguity / timeout — only an explicit,
-        un-negated yes proceeds.
+        ``kind`` ("read"/"write"/"danger") only tiers the card's tone; the answer
+        logic is unchanged. Listens in short chunks so a click is picked up within a
+        couple of seconds, and cancels on no / silence / ambiguity / timeout — only
+        an explicit, un-negated yes proceeds.
         """
         self._timed_out = False  # reset; set True only if we end by timeout
-        if self._poll_click is not None:
-            while self._poll_click() is not None:
+        if self._poll_answer is not None:
+            while self._poll_answer() is not None:
                 pass  # discard any stale click from a previous prompt
         if self._on_show is not None:
-            self._on_show(prompt)
+            self._on_show(prompt, kind, None)
         try:
             # Chat mode: just show the card and wait for a click — no speaking, no
             # mic (those belong to voice mode and would talk over / fight chat).
@@ -183,8 +253,8 @@ class VoiceConfirmer:
             reprompted = False
             while self._clock() < deadline:
                 # A click on the card resolves immediately (checked each chunk).
-                if self._poll_click is not None:
-                    clicked = self._poll_click()
+                if self._poll_answer is not None:
+                    clicked = _value_to_bool(self._poll_answer())
                     if clicked is not None:
                         return self._resolve(clicked, "click")
                 chunk = min(self._chunk_s, max(0.1, deadline - self._clock()))

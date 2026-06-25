@@ -24,10 +24,11 @@ from autobot.orchestrator.state_machine import Orchestrator, StateListener, _pri
 from autobot.orchestrator.wake_gate import PassThroughGate, SttWakeGate, WakeGate
 from autobot.session_log import FileTranscript, NullTranscript, Transcript
 from autobot.stt.faster_whisper_stt import FasterWhisperSTT
+from autobot.tools.access import AccessPolicy, set_active_policy
 from autobot.tools.audit import AuditLog
 from autobot.tools.builtin import register_builtins
 from autobot.tools.filesystem import register_filesystem_tools
-from autobot.tools.permission import PermissionGate
+from autobot.tools.permission import Confirmer, PermissionGate
 from autobot.tools.registry import ToolRegistry
 from autobot.tools.sandbox import Sandbox
 
@@ -209,10 +210,10 @@ def _build_confirmer(
     tts: TextToSpeech,
     audio: AudioSource,
     stt: SpeechToText,
-    on_confirm: Callable[[str, bool], None] | None,
+    on_confirm: Callable[[str, bool, str, list[dict[str, str]] | None], None] | None,
     on_confirm_clear: Callable[[], None] | None,
-    poll_click: Callable[[], bool | None] | None,
-) -> object:
+    poll_click: Callable[[], str | None] | None,
+) -> Confirmer:
     """Pick how destructive actions are confirmed: by voice (hands-free) or terminal.
 
     Hands-free (the mic supports bounded capture) gets the spoken yes/no flow with a
@@ -244,15 +245,17 @@ def _build_confirmer(
     show = None
     if on_confirm is not None:
 
-        def show(prompt: str) -> None:
-            on_confirm(prompt, is_chat())
+        def show(
+            prompt: str, kind: str = "danger", options: list[dict[str, str]] | None = None
+        ) -> None:
+            on_confirm(prompt, is_chat(), kind, options)
 
     return VoiceConfirmer(
         speak=tts.speak,
         listen=listen,
         on_show=show,
         on_clear=on_confirm_clear,
-        poll_click=poll_click,
+        poll_answer=poll_click,
         flush=flush if callable(flush) else None,
         is_chat=is_chat,
         timeout_s=settings.confirm_timeout_s,
@@ -300,9 +303,9 @@ def build(
     amplitude_sink: AmplitudeSink | None = None,
     on_visibility: VisibilitySink | None = None,
     on_voice: Callable[[bool], None] | None = None,
-    on_confirm: Callable[[str, bool], None] | None = None,
+    on_confirm: Callable[[str, bool, str, list[dict[str, str]] | None], None] | None = None,
     on_confirm_clear: Callable[[], None] | None = None,
-    poll_click: Callable[[], bool | None] | None = None,
+    poll_click: Callable[[], str | None] | None = None,
     on_context: Callable[[dict[str, object]], None] | None = None,
     on_choices: ChoicesSink | None = None,
 ) -> Orchestrator:
@@ -357,6 +360,11 @@ def build(
     register_builtins(registry)
     sandbox = Sandbox(settings.sandbox_dir)
     register_filesystem_tools(registry, sandbox)
+    # Central, grant-based access policy shared by the broad file tools (the workspace
+    # is always granted read-write). Tools register after the confirmer is built so a
+    # NeedsAccess prompt can reuse it.
+    access_policy = AccessPolicy(settings.access_store, sandbox.root)
+    set_active_policy(access_policy)  # so the Settings access endpoints can manage grants
     if settings.allow_app_control:
         # macOS app lifecycle by voice; gated like everything else (uninstall
         # confirms, the rest are audited WRITEs).
@@ -477,10 +485,20 @@ def build(
     gate = PermissionGate(
         registry,
         audit,
-        confirmer,  # type: ignore[arg-type]
+        confirmer,
         permission_status=permissions.status_of,
         on_permission_needed=permissions.open_pane,
     )
+
+    if settings.allow_file_io:
+        # Broad read/copy/write/edit, scoped by the access policy; first use of a new
+        # folder asks for a grant via the same confirmer the gate uses.
+        from autobot.tools.access import AccessBroker
+        from autobot.tools.fileio import register_file_io_tools
+
+        broker = AccessBroker(access_policy, confirmer)
+        register_file_io_tools(registry, broker)
+        log.info("file I/O ENABLED (read/copy/write/edit, access-gated)")
 
     # Reloadable LLM: rebuilt from fresh settings + Keychain when the Settings
     # view changes the provider/model/key — no restart needed (applies next turn).
