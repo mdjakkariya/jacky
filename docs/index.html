@@ -152,7 +152,7 @@
   <div class="steps">
     <div class="step"><div class="n">1 · Install</div><p>Drag <b>Jack</b> to Applications. First launch: right-click → Open (unsigned dev preview).</p></div>
     <div class="step"><div class="n">2 · Set up</div><p>Jack walks you through the LLM (Ollama or a Claude key) and macOS permissions.</p></div>
-    <div class="step"><div class="n">3 · Talk</div><p>Type in chat, or enable voice and say <b>“jack, what’s the time.”</b></p></div>
+    <div class="step"><div class="n">3 · Talk</div><p>Type in chat, or enable voice and say <b>“jack, what’s the weather.”</b></p></div>
   </div>
 </div></div></section>
 
@@ -184,6 +184,8 @@
   <p style="margin-top:18px;color:var(--faint)">Created &amp; maintained by Mohamed Jakkariya (@mdjakkariya).</p>
 </div></footer>
 
+<button class="sndbtn" id="sndbtn" type="button" title="Demo sound" aria-label="Enable demo sound">🔇</button>
+
 <script>
 (function(){
   var body=document.getElementById("body"), ibtext=document.getElementById("ibtext"), ibar=document.getElementById("ibar"),
@@ -192,6 +194,74 @@
       orbstage=document.getElementById("orbstage"), orbwrap=document.getElementById("orbwrap"),
       ostate=document.getElementById("ostate"), ocap=document.getElementById("ocap"), spikes=document.getElementById("spikes");
   for(var s=0;s<20;s++){var b=document.createElement("div");b.className="spk";b.style.setProperty("--a",(s*18)+"deg");b.style.setProperty("--d",((s%5)*0.08)+"s");spikes.appendChild(b);}
+
+  /* --- Demo audio: a wake chime + a soft "thinking" tick (Web Audio), and the
+     reply spoken via SpeechSynthesis. Muted until the visitor's first
+     interaction (browser autoplay policy), then auto-enabled. The floating
+     button toggles it, and audio only plays while the demo is on screen. --- */
+  var AC=null, masterGain=null, soundOn=false, showVisible=true;
+  var sndbtn=document.getElementById("sndbtn");
+  var vreply=new Audio("assets/jack-weather.mp3"); vreply.preload="auto";
+  function initAudio(){
+    if(AC) return;
+    var Ctx=window.AudioContext||window.webkitAudioContext; if(!Ctx) return;
+    AC=new Ctx(); masterGain=AC.createGain(); masterGain.gain.value=0; masterGain.connect(AC.destination);
+  }
+  function tone(freq,start,dur,peak,type){
+    if(!AC) return;
+    var o=AC.createOscillator(), g=AC.createGain();
+    o.type=type||"sine"; o.frequency.value=freq; o.connect(g); g.connect(masterGain);
+    var t=AC.currentTime+start;
+    g.gain.setValueAtTime(0.0001,t);
+    g.gain.exponentialRampToValueAtTime(peak,t+0.02);
+    g.gain.exponentialRampToValueAtTime(0.0001,t+dur);
+    o.start(t); o.stop(t+dur+0.03);
+  }
+  function audible(){ return soundOn && showVisible && !document.hidden; }
+  function chimeWake(){ if(!audible())return; tone(659.25,0,0.20,0.22,"sine"); tone(987.77,0.11,0.26,0.18,"sine"); }
+  function tickThink(){ if(!audible())return; tone(440,0,0.05,0.10,"triangle"); tone(440,0.2,0.05,0.09,"triangle"); }
+  function speakReply(){
+    if(!audible())return;
+    try{ vreply.currentTime=0; vreply.volume=0.9; var p=vreply.play(); if(p&&p.catch)p.catch(function(){}); }catch(e){}
+  }
+  function stopSpeech(){ try{ vreply.pause(); vreply.currentTime=0; }catch(e){} }
+  function setSndUI(){
+    if(!sndbtn) return;
+    sndbtn.textContent=soundOn?"🔊":"🔇";
+    sndbtn.classList.toggle("on",soundOn);
+    sndbtn.setAttribute("aria-label", soundOn?"Mute demo sound":"Enable demo sound");
+  }
+  function enableSound(){
+    if(soundOn) return;
+    initAudio(); if(AC&&AC.state==="suspended") AC.resume();
+    soundOn=true; if(masterGain) masterGain.gain.value=0.85;
+    /* unlock the reply clip for later programmatic playback (esp. iOS Safari),
+       which requires the first play() to happen inside a user gesture */
+    try{
+      vreply.muted=true; var p=vreply.play();
+      if(p&&p.then){ p.then(function(){ vreply.pause(); vreply.currentTime=0; vreply.muted=false; }).catch(function(){ vreply.muted=false; }); }
+      else { vreply.pause(); vreply.currentTime=0; vreply.muted=false; }
+    }catch(e){}
+    setSndUI();
+  }
+  function toggleSound(){
+    if(!AC){ enableSound(); return; }
+    soundOn=!soundOn; masterGain.gain.value=soundOn?0.85:0;
+    if(soundOn&&AC.state==="suspended") AC.resume(); else stopSpeech();
+    setSndUI();
+  }
+  if(sndbtn) sndbtn.addEventListener("click", toggleSound);
+  function firstGesture(e){
+    if(sndbtn && e && e.target===sndbtn) return; // the button's own handler manages enabling
+    enableSound();
+    ["pointerdown","keydown","touchstart","wheel"].forEach(function(ev){ window.removeEventListener(ev, firstGesture); });
+  }
+  ["pointerdown","keydown","touchstart","wheel"].forEach(function(ev){ window.addEventListener(ev, firstGesture, {passive:true}); });
+  if("IntersectionObserver" in window){
+    new IntersectionObserver(function(es){ showVisible=es[0].isIntersecting; if(!showVisible) stopSpeech(); }, {threshold:0.35}).observe(show);
+  }
+  document.addEventListener("visibilitychange", function(){ if(document.hidden) stopSpeech(); });
+  setSndUI();
   var QUERY="find my internship certificate";
   var HINTS=["Message Jack…","⌘⌃J to summon or hide","⌘⌃C chat · ⌘⌃V voice"];
   var sleep=function(ms){return new Promise(function(r){setTimeout(r,ms);});};
@@ -207,6 +277,7 @@
     await sleep(650);
   }
   async function chatPhase(){
+    stopSpeech();
     drawer.classList.remove("out"); orbstage.classList.remove("on");
     ctx.classList.remove("on"); ibar.classList.remove("focus"); cursor.style.opacity="0"; tip.style.opacity="0";
     emptyState();
@@ -236,10 +307,10 @@
   async function orbPhase(){
     orbstage.classList.add("on");
     setOrb("idle","Idle",""); await sleep(700);
-    setOrb("listening","Listening…","“jack, what’s the time?”"); await sleep(2300);
-    setOrb("thinking","Thinking…",""); await sleep(1500);
-    setOrb("speaking","Speaking…","“It’s 4:32 in the afternoon.”"); await sleep(2300);
-    setOrb("idle","Idle",""); await sleep(800);
+    setOrb("listening","Listening…","“jack, what’s the weather?”"); chimeWake(); await sleep(2300);
+    setOrb("thinking","Thinking…",""); tickThink(); await sleep(1500);
+    setOrb("speaking","Speaking…","“It’s 24 degrees and sunny.”"); speakReply(); await sleep(2600);
+    setOrb("idle","Idle",""); stopSpeech(); await sleep(800);
     orbstage.classList.remove("on"); await sleep(500);
   }
   (async function run(){ while(true){ await chatPhase(); await orbPhase(); } })();

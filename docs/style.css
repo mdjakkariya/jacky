@@ -173,6 +173,14 @@ footer{border-top:.5px solid var(--line);padding:38px 0;color:var(--muted);font-
 .frow{display:flex;justify-content:space-between;gap:20px;flex-wrap:wrap;align-items:center}
 .flinks{display:flex;gap:20px}
 footer a:hover{color:var(--text)}
+/* floating demo-sound toggle */
+.sndbtn{position:fixed;right:18px;bottom:18px;z-index:50;width:42px;height:42px;border-radius:50%;
+  display:flex;align-items:center;justify-content:center;cursor:pointer;font-size:17px;line-height:1;
+  background:rgba(17,20,29,.9);border:.5px solid var(--line2);color:var(--muted);
+  -webkit-backdrop-filter:blur(8px);backdrop-filter:blur(8px);box-shadow:0 6px 22px rgba(0,0,0,.45);transition:.15s}
+.sndbtn:hover{border-color:var(--accent);color:var(--text)}
+.sndbtn.on{color:#62b0ff;border-color:var(--accent);box-shadow:0 0 0 3px rgba(10,132,255,.16)}
+@media(max-width:520px){.sndbtn{right:12px;bottom:12px;width:38px;height:38px;font-size:15px}}
 /* docs page */
 .docwrap{display:grid;grid-template-columns:210px 1fr;gap:48px;padding:44px 0 60px;align-items:start}
 .toc{position:sticky;top:80px;font-size:13.5px}
