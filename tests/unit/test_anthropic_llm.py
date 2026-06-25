@@ -116,6 +116,31 @@ def test_run_turn_executes_tool_then_returns_final_text() -> None:
     )
 
 
+def test_run_turn_stops_repeating_a_failing_tool_call() -> None:
+    # The model keeps asking for the same (failing) call; the loop must run it once and
+    # then stop, surfacing the failure — not thrash to the round cap ("too many steps").
+    responses = [
+        SimpleNamespace(
+            content=[_block(type="tool_use", id="t1", name="open_app", input={"name": "X"})]
+        ),
+        SimpleNamespace(
+            content=[_block(type="tool_use", id="t2", name="open_app", input={"name": "X"})]
+        ),
+    ]
+    model = AnthropicLanguageModel(
+        Settings(llm_provider="anthropic"), _registry(), client=FakeClient(responses)
+    )
+    runs = {"n": 0}
+
+    def execute(call: ToolCall) -> ToolResult:
+        runs["n"] += 1
+        return ToolResult(name=call.name, content="No access. Do NOT retry.", ok=False)
+
+    reply = model.run_turn("open it", execute)
+    assert runs["n"] == 1  # ran once; the identical repeat was short-circuited
+    assert "do not retry" in reply.lower()
+
+
 def test_history_keeps_tool_blocks_across_turns() -> None:
     # Turn 1 opens a site (a tool round); turn 2 must see the *structured* record of
     # that tool call/result, not just text — so "close it" can resolve the target.

@@ -16,6 +16,7 @@ client — no network, no key.
 
 from __future__ import annotations
 
+import json
 import re
 from typing import TYPE_CHECKING, Any
 
@@ -31,7 +32,7 @@ if TYPE_CHECKING:
 
 _log = get_logger("llm")
 
-_MAX_TOOL_ROUNDS = 6  # cap the plan→tool→result loop so it can't spin forever
+_MAX_TOOL_ROUNDS = 8  # cap the plan→tool→result loop so it can't spin forever
 _HARD_MAX_MESSAGES = 400  # absolute backstop on list growth; the token budget governs first
 _TRIM_HEADROOM = 0.8  # when we must trim, trim down to this fraction of budget — so we
 # trim in chunks (not one message per turn), keeping the cached prefix stable for many
@@ -536,6 +537,10 @@ class AnthropicLanguageModel:
 
         reply = ""
         turn_in = turn_out = cache_read = cache_write = prompt_total = 0
+        # Anti-thrash: a tool call that already failed this turn is never re-run (so a
+        # blocking grant card shows once and stays, not flickering on each retry); a
+        # round that only repeats failed calls ends the loop with that explanation.
+        failed: dict[str, str] = {}
         for _ in range(_MAX_TOOL_ROUNDS):
             problem = _first_pairing_problem(self._history)
             if problem:  # should never happen — but if it does, say exactly where
@@ -566,24 +571,32 @@ class AnthropicLanguageModel:
                 break
             _log.info("planned tools=%s (cloud)", [c.name for c in calls])
             results: list[dict[str, Any]] = []
+            all_repeat = True  # did this round only re-issue calls that already failed?
+            last_fail = ""
             for block in content:
                 if _get(block, "type") != "tool_use":
                     continue
-                call = ToolCall(
-                    name=_get(block, "name"),
-                    arguments=_get(block, "input")
-                    if isinstance(_get(block, "input"), dict)
-                    else {},
-                )
-                result = execute(call)  # through the local permission gate
+                args = _get(block, "input") if isinstance(_get(block, "input"), dict) else {}
+                call = ToolCall(name=_get(block, "name"), arguments=args)
+                key = call.name + "\0" + json.dumps(args, sort_keys=True, default=str)
+                if key in failed:
+                    out = failed[key]  # already failed — reuse, don't re-run (no re-prompt)
+                    last_fail = out
+                else:
+                    all_repeat = False
+                    result = execute(call)  # through the local permission gate
+                    out = result.content
+                    if not result.ok:
+                        failed[key] = result.content
+                        last_fail = result.content
                 results.append(
-                    {
-                        "type": "tool_result",
-                        "tool_use_id": _get(block, "id"),
-                        "content": result.content,
-                    }
+                    {"type": "tool_result", "tool_use_id": _get(block, "id"), "content": out}
                 )
             self._history.append({"role": "user", "content": results})
+            if all_repeat:  # model is just retrying a failing step — stop and explain
+                _log.info("stopping: round repeated only previously-failed tool calls")
+                reply = last_fail or "I couldn't complete that, so I stopped."
+                break
         else:
             reply = reply or "Sorry, that took too many steps."
 
