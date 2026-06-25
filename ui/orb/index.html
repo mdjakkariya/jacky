@@ -345,6 +345,30 @@
     if(!tauriWin||orbHidden) return;
     orbHidden=true; if(tauriWin.hide) tauriWin.hide();
   }
+  // If the orb's saved/default position lands outside every monitor (e.g. a stale
+  // position from another display, or the default x is wider than this screen), it's
+  // invisible. Reposition it to the top-right of the primary monitor when that happens.
+  function ensureOnScreen(){
+    if(!tauriWin||!tauriApi||!tauriApi.PhysicalPosition||!tauriApi.availableMonitors||!tauriApi.primaryMonitor) return;
+    Promise.all([tauriWin.outerPosition(),tauriWin.outerSize(),tauriApi.availableMonitors()]).then(function(r){
+      var pos=r[0],size=r[1],mons=r[2]||[];
+      if(!mons.length) return;
+      var fits=mons.some(function(m){
+        var mp=m.position,ms=m.size;
+        return pos.x>=mp.x-4 && pos.y>=mp.y-4 &&
+               pos.x+size.width<=mp.x+ms.width+4 && pos.y+size.height<=mp.y+ms.height+4;
+      });
+      if(fits) return;
+      tauriApi.primaryMonitor().then(function(m){
+        if(!m) return;
+        var sc=m.scaleFactor||1;
+        var x=m.position.x+Math.max(0,m.size.width-size.width-Math.round(20*sc));
+        var y=m.position.y+Math.round(56*sc);
+        tauriWin.setPosition(new tauriApi.PhysicalPosition(x,y));
+      }).catch(function(){});
+    }).catch(function(){});
+  }
+
   function showOrb(){
     clearTimeout(idleTimer); idleTimer=null;
     // Always (re)show — the global shortcut / tray can hide the window at the OS
@@ -353,6 +377,7 @@
     if(!tauriWin) return;
     orbHidden=false;
     if(tauriWin.show) tauriWin.show();
+    ensureOnScreen();   // a stale/off-screen saved position would make it invisible
     // Do NOT re-set always-on-top / visible-on-all-workspaces here. The orb is an
     // NSPanel whose window level and collection behavior (incl. the full-screen-
     // auxiliary bit) are configured ONCE natively (make_floating_panel). Re-setting
@@ -398,6 +423,11 @@
   }
 
   window.addEventListener("resize",size);
+  // The orb can launch hidden (chat-first), so at first paint c.clientWidth is 0 and
+  // the canvas/viewport size to 0 — and a window 'resize' never fires when it's later
+  // surfaced (its size didn't change), so it'd stay blank. Re-run size() whenever the
+  // canvas actually gains/changes size (i.e. when the orb becomes visible).
+  if(window.ResizeObserver){ try{ new ResizeObserver(size).observe(c); }catch(e){} }
   size();connect();frame();
 
   // --- Tauri shell integration (no-op in a plain browser) ----------------
@@ -424,6 +454,7 @@
         var saved=JSON.parse(localStorage.getItem(POS_KEY)||"null");
         if(saved && PhysPos && typeof saved.x==="number") win.setPosition(new PhysPos(saved.x,saved.y));
       }catch(e){}
+      ensureOnScreen();   // clamp onto a real monitor if the saved/default pos is off-screen
       if(win.onMoved) win.onMoved(function(ev){
         if(suppressSave) return;   // ignore programmatic glides — keep the parked spot
         var p=ev&&ev.payload?ev.payload:ev;

@@ -602,6 +602,14 @@ fn surface_orb(app: &tauri::AppHandle) {
     {
         use tauri_nspanel::ManagerExt;
         if let Ok(panel) = app.get_webview_panel("orb") {
+            // w.show() updates Tauri's visibility state and un-occludes the WKWebView so
+            // it actually renders; order_front_regardless brings the non-activating panel
+            // to the front even though the accessory app is never the active app (a plain
+            // show/orderFront is a no-op then). Not panel.show() — that makes it key and
+            // would steal focus from the user's editor.
+            with_orb(app, |w| {
+                let _ = w.show();
+            });
             panel.order_front_regardless();
             with_orb(app, |w| {
                 let _ = w.eval("window.__showOrb && window.__showOrb()");
