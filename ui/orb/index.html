@@ -353,9 +353,11 @@
     if(!tauriWin) return;
     orbHidden=false;
     if(tauriWin.show) tauriWin.show();
-    // Re-assert floating behavior in case show() reset it.
-    if(tauriWin.setAlwaysOnTop) tauriWin.setAlwaysOnTop(true);
-    if(tauriWin.setVisibleOnAllWorkspaces) tauriWin.setVisibleOnAllWorkspaces(true);
+    // Do NOT re-set always-on-top / visible-on-all-workspaces here. The orb is an
+    // NSPanel whose window level and collection behavior (incl. the full-screen-
+    // auxiliary bit) are configured ONCE natively (make_floating_panel). Re-setting
+    // them through the standard window API resets the panel's collection behavior —
+    // which is exactly what left the orb not appearing on the switch to voice.
   }
   function scheduleIdleHide(){
     clearTimeout(idleTimer); idleTimer=null;

@@ -595,7 +595,9 @@ fn with_orb(app: &tauri::AppHandle, f: impl FnOnce(&tauri::WebviewWindow)) {
 fn surface_orb(app: &tauri::AppHandle) {
     with_orb(app, |w| {
         let _ = w.show();
-        let _ = w.set_always_on_top(true);
+        // Don't call set_always_on_top here: the orb is an NSPanel whose level +
+        // collection behavior are set once by make_floating_panel. Re-setting them on
+        // every surface resets the panel's collection behavior and can leave it hidden.
         let _ = w.eval("window.__showOrb && window.__showOrb()");
     });
 }
