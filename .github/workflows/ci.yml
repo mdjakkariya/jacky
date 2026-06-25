@@ -35,3 +35,11 @@ jobs:
 
       - name: Tests (pytest)
         run: uv run pytest
+
+      # Coverage.xml is produced by pytest-cov (see pyproject addopts). Public repos
+      # upload tokenless; if Codecov asks for one, add a CODECOV_TOKEN repo secret.
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@v4
+        with:
+          files: ./coverage.xml
+          fail_ci_if_error: false

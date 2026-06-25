@@ -179,7 +179,7 @@ ignore_missing_imports = true
 [tool.pytest.ini_options]
 minversion = "8.0"
 testpaths = ["tests"]
-addopts = "-ra -q --strict-markers --cov=autobot --cov-report=term-missing"
+addopts = "-ra -q --strict-markers --cov=autobot --cov-report=term-missing --cov-report=xml"
 pythonpath = ["src"]
 # Silence a third-party deprecation from Starlette's TestClient (it nudges toward
 # 'httpx2'); it's emitted on import of fastapi.testclient and is out of our hands.
