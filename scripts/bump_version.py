@@ -3,8 +3,9 @@
 The version lives in ``pyproject.toml`` (engine), ``src-tauri/Cargo.toml`` and
 ``src-tauri/tauri.conf.json`` (orb app), and they must always agree because the
 release workflow checks them against the pushed git tag. We also rewrite the
-``jack-orb`` entry in ``src-tauri/Cargo.lock`` so a later ``cargo`` build doesn't
-re-touch the lockfile and force a stray, changelog-polluting follow-up commit.
+``jack-orb`` entry in ``src-tauri/Cargo.lock`` and the ``autobot`` entry in
+``uv.lock`` so a later ``cargo``/``uv`` run doesn't re-touch a lockfile and force a
+stray, changelog-polluting follow-up commit (and a surprise diff on the next pull).
 
 Usage::
 
@@ -38,6 +39,14 @@ _FILES: dict[str, tuple[re.Pattern[str], str]] = {
     "ui/orb-shell/src-tauri/Cargo.lock": (
         re.compile(r'name = "jack-orb"\nversion = "[^"]+"'),
         'name = "jack-orb"\nversion = "{v}"',
+    ),
+    # The engine's own entry in uv's lockfile (the editable ``autobot`` package),
+    # pinned by name so we never touch a dependency. Without this, ``uv sync``/``uv
+    # run`` rewrites uv.lock to match pyproject after a release — producing a stray
+    # version diff locally on the next pull.
+    "uv.lock": (
+        re.compile(r'name = "autobot"\nversion = "[^"]+"'),
+        'name = "autobot"\nversion = "{v}"',
     ),
 }
 

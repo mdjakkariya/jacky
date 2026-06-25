@@ -25,6 +25,19 @@ def test_set_version_in_tauri_json() -> None:
     assert '"version": "1.2.3"' in out
 
 
+def test_set_version_in_uv_lock_targets_the_autobot_package() -> None:
+    pat, tpl = bump._FILES["uv.lock"]
+    src = '[[package]]\nname = "autobot"\nversion = "0.1.0"\nsource = { editable = "." }\n'
+    out = bump.set_version(src, pat, tpl, "0.2.0")
+    assert 'name = "autobot"\nversion = "0.2.0"' in out
+    # A dependency *reference* to autobot (same name, inline) must NOT be rewritten —
+    # only the [[package]] block (name line immediately followed by version line).
+    ref = '{ name = "autobot", extras = ["wake"] }\nname = "autobot"\nversion = "0.1.0"\n'
+    out2 = bump.set_version(ref, pat, tpl, "9.9.9")
+    assert '{ name = "autobot", extras = ["wake"] }' in out2
+    assert 'version = "9.9.9"' in out2
+
+
 def test_set_version_raises_when_absent() -> None:
     pat, tpl = bump._FILES["pyproject.toml"]
     try:
