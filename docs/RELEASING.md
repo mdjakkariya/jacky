@@ -9,24 +9,34 @@ mismatch.
 
 ## Cut a release
 
-```bash
-# 1. Bump every manifest (does NOT commit/tag for you).
-make release VERSION=0.5.0          # -> pyproject.toml, Cargo.toml, tauri.conf.json
+The **git tag is the source of truth** for the version — you don't bump the
+manifests by hand. Just tag and push; CI sets `pyproject.toml`, `Cargo.toml`,
+`tauri.conf.json` and `Cargo.lock` from the tag, builds the engine, creates the
+Release, and **commits that bump back to `main`** for you (so there's no manual
+version/lockfile commit, and a forgotten bump can never skip a release).
 
-# 2. Update the changelog from the Conventional Commits since the last tag.
-make changelog VERSION=0.5.0        # prepends a categorized section to CHANGELOG.md
+```bash
+# 1. (Optional) Update the changelog from Conventional Commits since the last tag.
+make changelog VERSION=0.5.0        # prepends a section to CHANGELOG.md (then commit it)
 #   (preview first with: make changelog-preview)
 
-# 3. Review the diff, then commit + tag + push — this triggers CI.
-git add -A && git commit -m "chore(release): v0.5.0"
+# 2. Tag and push — this is the whole release trigger.
 git tag v0.5.0
 git push origin main --tags
 
-# 4. CI gate + builds the engine wheel and creates the Release. Then, on your Mac,
-#    build the single .dmg (orb + embedded engine) and attach it to that Release:
+# 3. CI gates the checks, sets the version FROM the tag, builds the engine wheel,
+#    creates the GitHub Release, and pushes a "chore(release): v0.5.0 [skip ci]"
+#    commit with the bumped manifests back to main.
+
+# 4. On your Mac, pull that bump, then build + attach the single .dmg:
+git pull                            # picks up CI's version bump (so the .dmg is versioned right)
 make bundle                         # freeze engine -> sidecar -> the .dmg
 make publish-orb VERSION=0.5.0      # uploads the .dmg AND sets the release notes
 ```
+
+`make release VERSION=x` (local manifest bump) and `make release-check VERSION=x`
+still exist if you ever want to bump/verify by hand, but the tagged release no
+longer needs them — CI is authoritative.
 
 ## Changelog (automated)
 
@@ -52,14 +62,18 @@ producing one `.dmg` that contains both. See [`PACKAGING.md`](PACKAGING.md).
 
 Pushing the tag triggers `.github/workflows/release.yml`:
 
-1. **gate** (ubuntu) — ruff, format, mypy, pytest, and `bump_version.py --check`
-   confirming all three manifests equal the tag. Any failure aborts the release.
-2. **release** (ubuntu) — `uv build` makes the engine wheel/sdist and
-   `softprops/action-gh-release` creates the GitHub Release with them attached.
+1. **gate** (ubuntu) — ruff, format, mypy, pytest. The manifest-vs-tag check runs
+   here too but is **non-blocking** (a warning): the tag is authoritative, so a
+   version mismatch must never abort a tagged release.
+2. **release** (ubuntu) — sets the manifests from the tag (`bump_version.py`),
+   `uv build` makes the engine wheel/sdist, `softprops/action-gh-release` creates
+   the GitHub Release, and the bump is committed back to the default branch as
+   `chore(release): vX [skip ci]`.
 
-The orb `.dmg` is added by `make publish-orb` (step 3), which needs the GitHub CLI
-(`gh auth login`) and `cargo`/`tauri-cli` installed locally.
-`make release-check VERSION=0.2.0` verifies the manifests before tagging.
+The orb `.dmg` is added by `make publish-orb` (step 4) on a Mac, which needs the
+GitHub CLI (`gh auth login`) and `cargo`/`tauri-cli` installed locally. Branch
+protection note: CI pushes the bump commit with the default `GITHUB_TOKEN`, so
+direct pushes to the default branch must be allowed for the bot (or swap in a PAT).
 
 ## Versioning
 

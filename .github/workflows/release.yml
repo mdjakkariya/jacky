@@ -1,9 +1,14 @@
 # Publish a release when a version tag (vX.Y.Z) is pushed.
 #
-# Runs on Linux only (macOS CI minutes are ~10x the cost). CI does the cheap part:
-# gate the checks, build the Python engine wheel/sdist, and create the GitHub
-# Release. The macOS orb `.dmg` is built locally on a Mac and uploaded to the same
-# Release — see `docs/RELEASING.md` (`make package-orb` + `make publish-orb`).
+# The git **tag is the source of truth** for the version. You don't bump the
+# manifests by hand: CI sets them from the tag, builds the engine, creates the
+# GitHub Release, and commits the bump (incl. Cargo.lock) back to the default
+# branch — so a forgotten manifest bump can never fail or skip a release.
+#
+# Runs on Linux only (macOS CI minutes are ~10x the cost). CI builds the Python
+# engine wheel/sdist and creates the GitHub Release. The macOS orb `.dmg` is built
+# locally on a Mac and uploaded to the same Release — see `docs/RELEASING.md`
+# (`make bundle` + `make publish-orb`), after `git pull` picks up the bump.
 name: Release
 
 on:
@@ -11,10 +16,12 @@ on:
     tags: ["v*.*.*"]
 
 permissions:
-  contents: write # create the GitHub Release and upload assets
+  contents: write # create the GitHub Release, upload assets, and push the bump
 
 jobs:
-  # Gate: same checks as CI, plus the manifests must match the pushed tag.
+  # Gate: the same quality checks as CI. The version is NOT gated here — the tag is
+  # authoritative and the release job sets the manifests from it, so a version
+  # mismatch only warns (it must never abort a tagged release).
   gate:
     runs-on: ubuntu-latest
     steps:
@@ -28,20 +35,31 @@ jobs:
       - run: uv run ruff format --check .
       - run: uv run mypy
       - run: uv run pytest
-      - name: Versions match the tag
-        run: uv run python scripts/bump_version.py --check "${GITHUB_REF_NAME#v}"
+      - name: Manifest version vs tag (non-blocking)
+        run: |
+          uv run python scripts/bump_version.py --check "${GITHUB_REF_NAME#v}" \
+            || echo "::warning::manifests differ from ${GITHUB_REF_NAME}; CI will set them from the tag and commit it back."
 
   release:
     needs: gate
     runs-on: ubuntu-latest
     steps:
+      # Full history so we can commit the bump back to the default branch.
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - uses: astral-sh/setup-uv@v3
         with:
           enable-cache: true
       - run: uv python install 3.11
+
+      # Build the artifacts from the *tag* with the version taken from the tag, so
+      # the wheel/sdist are always versioned correctly regardless of what's committed.
+      - name: Set version from the tag (source of truth)
+        run: uv run python scripts/bump_version.py "${GITHUB_REF_NAME#v}"
       - name: Build engine (wheel + sdist)
         run: uv build # -> dist/*.whl, dist/*.tar.gz
+
       - name: Create the GitHub Release (engine attached; orb .dmg added locally)
         uses: softprops/action-gh-release@v2
         with:
@@ -60,3 +78,21 @@ jobs:
             `uv tool install ./autobot-*.whl` (or `pipx install ./autobot-*.whl`).
             See the README for prerequisites (Ollama or an Anthropic key, the
             STT/TTS models, Microphone + Automation permissions).
+
+      # Keep the repo in sync without a hand-written bump commit: set the manifests
+      # on the default branch to the tag version and push. [skip ci] stops this from
+      # re-triggering CI, and the tag trigger means it never re-triggers this release.
+      - name: Sync the version bump back to the default branch
+        env:
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git checkout -f "$DEFAULT_BRANCH"
+          uv run python scripts/bump_version.py "${GITHUB_REF_NAME#v}"
+          if git diff --quiet; then
+            echo "default branch already at ${GITHUB_REF_NAME#v} — nothing to commit."
+            exit 0
+          fi
+          git commit -am "chore(release): set manifests to ${GITHUB_REF_NAME} [skip ci]"
+          git push origin "HEAD:$DEFAULT_BRANCH"
