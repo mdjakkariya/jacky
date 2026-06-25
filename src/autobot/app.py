@@ -379,6 +379,13 @@ def build(
         register_file_tools(registry, choices=on_choices)
         log.info("file search ENABLED (Spotlight)")
 
+    if settings.allow_clipboard:
+        # Read/set the macOS clipboard (on-device).
+        from autobot.tools.clipboard import register_clipboard_tools
+
+        register_clipboard_tools(registry)
+        log.info("clipboard ENABLED (read/set)")
+
     # Phase 4: persistent personalization. The store is read into the prompt each
     # turn and grown via the (gated) memory tools.
     memory = None

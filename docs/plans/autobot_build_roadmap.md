@@ -108,7 +108,7 @@ permission gate + action-card pattern, so each is a small, consistent addition.
 
 **Track 1 — Capability growth (active).** More of what Jack can *do*:
 - [x] On-device file search + open / reveal in Finder, surfaced as clickable cards.
-- [ ] Clipboard read/write — "copy that", "what's on my clipboard" (small).
+- [x] Clipboard read/write — "copy that", "what's on my clipboard" (`tools/clipboard.py`).
 - [ ] Reminders & Calendar (EventKit via `osascript`) — "remind me at 5", "what's
   on my calendar" (WRITE/automation, gated).
 - [ ] Screenshot — capture screen/region to a file (`screencapture`); pairs with the
