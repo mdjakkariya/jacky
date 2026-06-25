@@ -95,18 +95,46 @@ Decisions made during the build that aren't captured above:
 - **Chat-first product** — chat is the default mode; the orb stays hidden until voice is enabled. Typed turns, "New chat", welcome screen, rotating input hints.
 - **On-demand voice + small build** — the Piper voice is no longer bundled (~115MB off the `.dmg`); voice/STT/wake download on demand via `voice_setup.py` (`/voice/status`, `/voice/download`) with progress in Settings. STT/mic/TTS build lazily on first voice use.
 - **Release automation** — git-cliff changelog + GitHub release notes; `make bundle` / `make publish-orb`; in-app update-available banner (GitHub Releases). `multiprocessing.freeze_support()` guards the frozen entry.
+- **File tools + generic action cards** — on-device Spotlight search (`tools/files.py`: `search_files`, `open_path`, `reveal_path`) with stop-word/fuzzy matching; a reusable engine→chat **action-card** channel (`ChoicesEvent` / `publish_choices` / `POST /action` → `Orchestrator.run_tool`) so any tool can offer clickable choices that run through the gate with no LLM turn.
+- **Dev debug report button** — a chat-header button (dev builds) copies a concise, per-session, redacted report (`/report/concise`, scoped via `mark_session`), distinct from the full GitHub-issue report.
+- **Public website + docs** — a static site under `docs/` (landing + getting-started), served by GitHub Pages from `/docs` (`.nojekyll`); matches the app theme + animated orb/chat showcase. Lean README with live badges + star-history; cookieless GoatCounter analytics; Codecov coverage in CI.
 
 ---
 
 ## Next directions
 
-Pick per priority; not strictly ordered.
+Current plan, ordered by value-for-effort. Every new tool reuses the registry +
+permission gate + action-card pattern, so each is a small, consistent addition.
 
-- **Capability growth (tools).** More of what Jack can *do*: calendar/reminders, notes, clipboard, screenshots, file search, richer web/app actions; multi-step plans.
-- **Memory depth.** Episodic/semantic recall (sqlite-vec RAG) so Jack remembers past conversations, not just a flat profile (the deferred Phase 4 item).
-- **Conversation & voice polish.** Streaming replies + markdown in chat, stop/copy; a voice picker (multiple Piper voices); push-to-talk toggle; barge-in tuning.
-- **Hardening & tiering.** Hardware profiler (auto STT/LLM/TTS tier by RAM/GPU), graceful degradation, more UI tests.
-- **Distribution & trust — DEFERRED** (needs an Apple Developer ID, not available yet). When resourced: code signing + notarization (removes the Gatekeeper warning, fixes the Accessibility/Automation "Unknown", and unlocks real in-place auto-update via the Tauri updater, replacing the notify-only banner).
+**Track 1 — Capability growth (active).** More of what Jack can *do*:
+- [x] On-device file search + open / reveal in Finder, surfaced as clickable cards.
+- [ ] Clipboard read/write — "copy that", "what's on my clipboard" (small).
+- [ ] Reminders & Calendar (EventKit via `osascript`) — "remind me at 5", "what's
+  on my calendar" (WRITE/automation, gated).
+- [ ] Screenshot — capture screen/region to a file (`screencapture`); pairs with the
+  action card to open/reveal it.
+- [ ] System toggles — volume, brightness, dark mode, Do Not Disturb, sleep (WRITE).
+- [ ] Notes — create/append a note.
+- [ ] Multi-step plans — chain tools in one turn (engine already supports it).
+
+**Track 2 — Memory depth.** Episodic/semantic recall (sqlite-vec + a small on-device
+embedding model) so Jack remembers past conversations, not just a flat profile (the
+deferred Phase 4 item).
+
+**Track 3 — Conversation & voice polish.** Streaming replies + markdown in chat
+(stop/copy); a voice picker (multiple Piper voices); push-to-talk toggle; barge-in
+tuning.
+
+**Track 4 — Hardening & tiering.** Hardware profiler (auto STT/LLM/TTS tier by
+RAM/GPU), graceful degradation, more UI/integration tests.
+
+**Track 5 — Site/launch follow-ups (alongside).** Fill in the GoatCounter code, enable
+Codecov, add screenshots / a short demo GIF to the site, set the repo's About URL.
+
+**Distribution & trust — DEFERRED** (needs an Apple Developer ID, not available yet).
+When resourced: code signing + notarization (removes the Gatekeeper warning, fixes the
+Accessibility/Automation "Unknown", and unlocks real in-place auto-update via the Tauri
+updater, replacing the notify-only banner).
 
 ---
 
