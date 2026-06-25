@@ -1,6 +1,6 @@
 [package]
 name = "jack-orb"
-version = "0.5.1"
+version = "0.5.2"
 description = "Jack — floating voice-assistant orb (thin Tauri client of the autobot daemon)"
 authors = ["Mohamed Jakkariya"]
 license = "Apache-2.0"
