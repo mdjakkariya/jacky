@@ -1,0 +1,42 @@
+name: "🔧 Task"
+description: "A concrete, scoped unit of work (often split out of a feature or epic)."
+title: "[task]: "
+labels: ["roadmap"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        A concrete piece of work for the
+        [project board](https://github.com/users/mdjakkariya/projects/1).
+        For a broad idea, use **Feature request** instead.
+  - type: textarea
+    id: scope
+    attributes:
+      label: Scope
+      description: What exactly needs to be done? A checklist is ideal.
+      placeholder: |
+        - [ ] …
+        - [ ] …
+    validations:
+      required: true
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Acceptance criteria
+      description: How do we know it's done?
+    validations:
+      required: false
+  - type: input
+    id: related
+    attributes:
+      label: Related issues
+      description: "Parent or related issues, e.g. #7."
+    validations:
+      required: false
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Before submitting
+      options:
+        - label: "Stays within the on-device / English-only / permission-gate constraints (CLAUDE.md)."
+          required: false

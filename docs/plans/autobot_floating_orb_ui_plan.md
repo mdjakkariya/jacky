@@ -53,7 +53,8 @@ swapping a cue, orb size. These are constants in one place.
 
 ## Tech choice: Tauri (locked)
 
-Per the roadmap's "Desktop UI" row and the user's "fast and optimised, not
+Per the design reference's "Desktop UI" row
+(`docs/architecture/design-reference.md`) and the user's "fast and optimised, not
 heavyweight" requirement:
 
 - **Tauri** (Rust shell + system webview) — a few-MB binary and low RAM vs
@@ -67,7 +68,7 @@ heavyweight" requirement:
   control and heavier per-window cost); **native Swift** (best native feel but a
   whole separate codebase from the Python engine — too much drag for now).
 
-> This is consistent with the roadmap note on Rust: we are NOT rewriting the
+> This is consistent with the "On Rust" note in the design reference: we are NOT rewriting the
 > engine in Rust. Only the UI shell is Rust, because that's where the native
 > window behaviour lives. Orchestration stays Python.
 

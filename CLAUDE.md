@@ -1,8 +1,8 @@
 # CLAUDE.md
 
 Guidelines for AI assistants (and humans) working in this repo — the single source
-of truth for *how* we build here. (For *what's planned*, see the roadmap; this file
-holds no status.)
+of truth for *how* we build here. (For *what's planned and its status*, see
+**GitHub Issues + Project #1**, never markdown; this file holds no status.)
 
 ## What this is
 
@@ -17,8 +17,18 @@ is the default**; voice is opt-in, and the speech models download on demand the 
 time it's enabled (they're not bundled). The LLM is local (Ollama) by default, with
 an optional cloud provider (Anthropic).
 
-- Roadmap (forward plan): `docs/plans/autobot_build_roadmap.md`.
-- Architecture diagram: `docs/architecture/architecture.svg`.
+- Planning & tracking: **GitHub Issues + [Project #1](https://github.com/users/mdjakkariya/projects/1)** (see "Planning & tracking" below).
+- Architecture diagram: `docs/architecture/architecture.svg`; design reference: `docs/architecture/design-reference.md`.
+
+## Planning & tracking
+
+Planning, feature requests, and status live in **GitHub Issues + Project #1**
+("Jack Assistent"), never in markdown. Do **not** create or edit tracking markdown
+(roadmaps, TODO docs, status checklists, "next steps" files) — that's what GitHub is
+for. To propose or plan work, open an issue (use the *Feature request* or *Task*
+template); it lands on the board automatically. To record *how something works*, add
+to `docs/` (durable design reference: `docs/architecture/design-reference.md`). Every
+PR links its issue with `Closes #NN`.
 
 ## Non-negotiable constraints
 
@@ -71,7 +81,7 @@ src/autobot/
   app.py       composition root + the run loop
   __main__.py  enables `python -m autobot`
 tests/unit/    fast tests that need no model runtime or microphone
-docs/          roadmap + architecture
+docs/          architecture + design reference (no tracking — see GitHub Issues/Project)
 ```
 
 ## How to add a component (the pattern)

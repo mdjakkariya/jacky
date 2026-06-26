@@ -132,7 +132,7 @@ cargo tauri build      # produces Jack.app
   granted. Today's behavior makes it *visible* over your current Space; this adds
   precise *placement*.
 - **Acoustic wake word** so the orb shows a true "listening" glow the instant you
-  say the wake word (engine-side; needs a wake model — see the roadmap).
+  say the wake word (engine-side; needs a wake model — see the main project README).
 - **Multi-monitor clamp**: if a saved position lands off a now-disconnected
   display, snap it back on-screen.
 - **Settings** in the tray (daemon URL, color) if it grows beyond lock/quit.
