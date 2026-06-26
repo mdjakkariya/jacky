@@ -186,6 +186,14 @@ fn request_voice(app: &tauri::AppHandle) {
 
 /// Open a URL in the user's default browser (e.g. the prefilled GitHub issue form).
 /// Constrained to https links so it can only ever open the web, never run anything.
+/// Return the app version (the compile-time `Cargo.toml` version, kept in sync
+/// with `tauri.conf.json`/`pyproject.toml` by the release bump script). Read by
+/// the About window so the version is never hard-coded in the webview.
+#[tauri::command]
+fn app_version() -> String {
+    env!("CARGO_PKG_VERSION").to_string()
+}
+
 #[tauri::command]
 fn open_external(url: String) {
     if !url.starts_with("https://") {
@@ -277,6 +285,7 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             open_settings_window,
             open_settings_voice,
+            app_version,
             open_external,
             reveal_in_finder,
             copy_to_clipboard,
@@ -335,6 +344,7 @@ fn main() {
                 MenuItem::with_id(app, "settings", "Settings…", true, Some("Command+Control+S"))?;
             let report =
                 MenuItem::with_id(app, "report", "Report an issue…", true, Some("Command+Control+R"))?;
+            let about = MenuItem::with_id(app, "about", "About Jack", true, None::<&str>)?;
             let quit = MenuItem::with_id(app, "quit", "Quit Jack", true, Some("Command+Control+Q"))?;
 
             // Dev builds get a "Clean up storage" item at the top for quick resets.
@@ -344,12 +354,12 @@ fn main() {
             #[cfg(debug_assertions)]
             let menu = Menu::with_items(
                 app,
-                &[&cleanup, &chat, &voice, &view, &lock, &size, &settings, &report, &quit],
+                &[&cleanup, &chat, &voice, &view, &lock, &size, &settings, &report, &about, &quit],
             )?;
             #[cfg(not(debug_assertions))]
             let menu = Menu::with_items(
                 app,
-                &[&chat, &voice, &view, &lock, &size, &settings, &report, &quit],
+                &[&chat, &voice, &view, &lock, &size, &settings, &report, &about, &quit],
             )?;
 
             let visible = Arc::new(AtomicBool::new(false));  // launch hidden (chat-first)
@@ -397,6 +407,7 @@ fn main() {
                     "voice" => request_voice(app),
                     "settings" => open_settings(app, ""),
                     "report" => open_settings(app, "report"),
+                    "about" => open_about(app),
                     #[cfg(debug_assertions)]
                     "cleanup" => eprintln!("[jack] {}", cleanup_storage(app)),
                     "quit" => app.exit(0),
@@ -514,6 +525,47 @@ fn install_edit_menu(app: &tauri::App) -> tauri::Result<()> {
     let menu = Menu::with_items(app, &[&edit])?;
     app.set_menu(menu)?;
     Ok(())
+}
+
+/// Open (or focus) the small About window: app version + a manual update check.
+///
+/// Like Settings, this flips the app to the Regular activation policy while open
+/// so the window comes forward and its button is clickable, then drops back to
+/// Accessory (no Dock icon, background presence) once it's closed.
+fn open_about(app: &tauri::AppHandle) {
+    #[cfg(target_os = "macos")]
+    {
+        let _ = app.set_activation_policy(tauri::ActivationPolicy::Regular);
+        activate_app();
+    }
+
+    if let Some(win) = app.get_webview_window("about") {
+        let _ = win.show();
+        let _ = win.set_focus();
+        return;
+    }
+
+    let handle = app.clone();
+    match WebviewWindowBuilder::new(app, "about", WebviewUrl::App("about.html".into()))
+        .title("About Jack")
+        .inner_size(360.0, 380.0)
+        .resizable(false)
+        .build()
+    {
+        Ok(win) => {
+            let _ = win.set_focus();
+            win.on_window_event(move |event| {
+                if matches!(
+                    event,
+                    tauri::WindowEvent::CloseRequested { .. } | tauri::WindowEvent::Destroyed
+                ) {
+                    #[cfg(target_os = "macos")]
+                    let _ = handle.set_activation_policy(tauri::ActivationPolicy::Accessory);
+                }
+            });
+        }
+        Err(e) => eprintln!("[jack] failed to open About: {e}"),
+    }
 }
 
 /// Open (or focus) the Settings window — a normal, focusable window.
