@@ -59,6 +59,15 @@ def test_not_built_until_first_real_use() -> None:
     assert built["n"] == 0
 
 
+def test_record_continuation_no_arg_uses_default_window() -> None:
+    # Regression: the proxy must keep the recorder's default so the orchestrator's
+    # cut-off re-open (which calls cont() with no argument) doesn't crash the turn.
+    io, built = _holder()
+    audio: Any = io.audio  # record_continuation is an optional, getattr-probed method
+    assert audio.record_continuation() == "cont"
+    assert built["n"] == 1
+
+
 def test_first_record_or_speak_builds_once() -> None:
     io, built = _holder()
     assert io.audio.record_clip() == "clip"

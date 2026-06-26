@@ -87,7 +87,10 @@ class _LazyAudio:
     def record_clip(self) -> Any:
         return self._audio().record_clip()
 
-    def record_continuation(self, timeout_s: float) -> Any:
+    def record_continuation(self, timeout_s: float = 2.0) -> Any:
+        # Keep the real recorder's default (``max_wait_s=2.0``) so callers that rely
+        # on it — e.g. the orchestrator's cut-off re-open, which calls this with no
+        # argument — work through the proxy instead of raising a missing-arg error.
         fn = getattr(self._audio(), "record_continuation", None)
         return fn(timeout_s) if callable(fn) else None
 
