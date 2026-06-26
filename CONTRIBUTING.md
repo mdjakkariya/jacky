@@ -24,15 +24,29 @@ files. There is no roadmap doc; `docs/` holds only durable design reference.
 - **Opening a PR?** Link the issue with `Closes #NN` so it closes and moves to
   *Done* on merge.
 
+### Title conventions
+
+Consistent titles keep the issue list scannable and the auto-generated changelog
+clean (it's built from commit subjects by git-cliff).
+
+- **Issues** — a type prefix in brackets (the templates add it): `[feat]:`,
+  `[task]:`, or `[bug]:`. Example: `[task]: Add a screenshot tool`.
+- **Branches** — `<type>/<short-slug>`, e.g. `feat/screenshot-tool` or
+  `docs/title-conventions`.
+- **Commits & PR titles** — [Conventional Commits](https://www.conventionalcommits.org)
+  (`feat:`, `fix:`, `perf:`, `refactor:`, `docs:`, `chore:`; `!` or a
+  `BREAKING CHANGE:` footer for breaking changes). **Squash-merge** each PR with a
+  Conventional Commit title, so a single clean entry lands on `main` and in the
+  changelog.
+
 ## Workflow
 
 1. **Open an issue first** (see *How we track work* above) for anything non-trivial,
    so we can agree on the approach before you spend time on it.
 2. Fork, branch, and make your change with tests for any new logic.
 3. **Run `make check`** (ruff lint + format, mypy strict, pytest) — it must pass.
-4. Use **Conventional Commits** (`feat:`, `fix:`, `perf:`, `refactor:`, `docs:`,
-   `chore:`; `!` or a `BREAKING CHANGE:` footer for breaking changes) — the changelog
-   is generated from these.
+4. Use **Conventional Commits** for commit subjects (see *Title conventions* above)
+   — the changelog is generated from these.
 5. Open a pull request that **links its issue** (`Closes #NN`) and fills in the PR
    template. The maintainer (@mdjakkariya) is auto-requested for review.
 
