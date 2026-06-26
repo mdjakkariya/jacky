@@ -13,6 +13,7 @@ import math
 import threading
 import time
 from collections.abc import Callable
+from typing import Any
 
 from autobot.config import Settings
 from autobot.core.events import AmplitudeSink, EventBus, OrbState, orb_state_for
@@ -106,6 +107,12 @@ def serve(settings: Settings | None = None) -> None:
     def publish_context(info: dict[str, object]) -> None:
         bus.publish_context(info, dev=settings.show_debug)
 
+    def publish_choices(title: str, items: list[dict[str, Any]]) -> None:
+        # Tag the card with the live mode, like confirmations. The chat drawer renders
+        # only chat-mode choices, so a search run *in voice mode* (acted on by speech)
+        # no longer leaves a stray card lingering in an otherwise-empty chat drawer.
+        bus.publish_choices(title, items, chat=_is_chat())
+
     orchestrator = build(
         settings,
         on_state=make_state_listener(bus, is_chat=_is_chat),
@@ -116,7 +123,7 @@ def serve(settings: Settings | None = None) -> None:
         on_confirm_clear=bus.publish_confirm_clear,
         poll_click=inbox.take,
         on_context=publish_context,
-        on_choices=bus.publish_choices,
+        on_choices=publish_choices,
     )
     holder["orch"] = orchestrator
     thread = threading.Thread(target=orchestrator.run, name="engine", daemon=True)

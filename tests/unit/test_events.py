@@ -125,6 +125,16 @@ def test_publish_choices_carries_items_and_chat_mode() -> None:
     }
 
 
+def test_publish_choices_voice_mode_is_tagged_so_chat_drawer_ignores_it() -> None:
+    # A search run in voice mode must publish mode "voice"; the chat drawer renders
+    # only chat-mode choices, so this keeps stray cards out of an empty chat.
+    bus = EventBus()
+    seen: list[dict[str, object]] = []
+    bus.subscribe(seen.append)
+    bus.publish_choices("Files matching 'a'", [{"label": "a.pdf"}], chat=False)
+    assert seen[-1]["mode"] == "voice"
+
+
 def test_publish_voice_download_carries_pct_and_done() -> None:
     bus = EventBus()
     seen: list[dict[str, object]] = []
