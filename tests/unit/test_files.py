@@ -7,14 +7,46 @@ from typing import Any
 
 from autobot.tools.files import (
     _choice_items,
+    _kinds_present,
     _name_predicate,
+    _prefix,
     _rank,
     _tokens,
+    _type_predicate,
     format_results,
     open_path,
     reveal_path,
     search_files,
 )
+
+
+def test_type_predicate_maps_known_category_to_content_type() -> None:
+    pred = _type_predicate("pdf")
+    assert pred == 'kMDItemContentTypeTree == "com.adobe.pdf"'
+    img = _type_predicate("photo")  # synonym -> image category
+    assert img == 'kMDItemContentTypeTree == "public.image"'
+
+
+def test_type_predicate_falls_back_to_extension() -> None:
+    # Unknown-but-extension-shaped word -> match the filename extension.
+    assert _type_predicate("xlsx") == 'kMDItemFSName == "*.xlsx"c'
+
+
+def test_type_predicate_none_for_empty_or_unfilterable() -> None:
+    assert _type_predicate(None) is None
+    assert _type_predicate("   ") is None
+    assert _type_predicate("something-not-a-type") is None
+
+
+def test_kinds_present_lists_distinct_extensions_in_order() -> None:
+    paths = ["/h/a.pdf", "/h/b.PDF", "/h/c.xlsx", "/h/d.md"]
+    assert _kinds_present(paths) == [".pdf", ".xlsx", ".md"]
+
+
+def test_prefix_drops_misheard_ending_but_keeps_short_tokens() -> None:
+    assert _prefix("Autobot") == "Autob"  # 7 -> drop last 2 (start kept)
+    assert _prefix("Samastor") == "Samast"
+    assert _prefix("cert") == "cert"  # short tokens unchanged (would match too much)
 
 
 def test_tokens_splits_and_drops_quotes_and_slashes() -> None:
@@ -107,6 +139,103 @@ def test_search_files_falls_back_to_fuzzy_or_query() -> None:
     assert any("||" in c for c in calls)  # fuzzy fallback fired
     assert "closest files" in out.lower()
     assert "certificate_Mohamed.pdf" in out
+
+
+def test_search_files_single_token_falls_back_to_prefix() -> None:
+    # "Autobot" misheard: exact substring misses, but the prefix still finds the file.
+    calls: list[str] = []
+
+    def fake(argv: list[str]) -> tuple[int, str]:
+        pred = argv[-1]
+        calls.append(pred)
+        if '"*Autobot*"' in pred:
+            return 0, ""  # no exact substring match
+        if '"*Autob*"' in pred:  # prefix-relaxed
+            return 0, "/Users/me/AutoBoard_notes.pdf\n"
+        return 0, ""
+
+    out = search_files("Autobot", runner=fake, mtime_of=lambda _p: 0.0)
+    assert any('"*Autob*"' in c for c in calls)  # prefix tier fired
+    assert "closest files" in out.lower()
+    assert "AutoBoard_notes.pdf" in out
+
+
+def test_search_files_prefix_and_tier_beats_or_explosion() -> None:
+    # Two words, neither an exact match; the prefix-AND tier (narrow) must be tried
+    # before widening to any-word OR (which would pull in unrelated common-word hits).
+    seen: list[str] = []
+
+    def fake(argv: list[str]) -> tuple[int, str]:
+        pred = argv[-1]
+        seen.append(pred)
+        if "&&" in pred and "*Samast*" in pred:  # prefix-relaxed AND
+            return 0, "/Users/me/Samastra_certificate.pdf\n"
+        if "&&" in pred:  # exact AND — no hit
+            return 0, ""
+        return 0, "/Users/me/unrelated_certificate.pdf\n"  # OR would over-match
+
+    out = search_files("Samastor certificate", runner=fake, mtime_of=lambda _p: 0.0)
+    assert not any("||" in p for p in seen)  # never needed the broad OR fallback
+    assert "Samastra_certificate.pdf" in out
+    assert "closest files" in out.lower()
+
+
+def test_rank_scores_whole_word_above_prefix_only() -> None:
+    # Exact-word match must rank above a file that only matches the relaxed prefix.
+    paths = ["/h/AutoBoard.pdf", "/h/Autobot_final.pdf"]
+    ranked = _rank(paths, ["Autobot"], lambda _p: 0.0)
+    assert ranked[0] == "/h/Autobot_final.pdf"  # whole "autobot" beats prefix "autob"
+
+
+def test_rank_prefers_word_boundary_match() -> None:
+    # "cert" at a word boundary should beat the same letters buried mid-word.
+    paths = ["/h/concert_tickets.pdf", "/h/my_cert.pdf"]
+    ranked = _rank(paths, ["cert"], lambda _p: 0.0)
+    assert ranked[0] == "/h/my_cert.pdf"  # boundary hit outranks "conCERT"
+
+
+def test_rank_breaks_score_ties_by_shorter_name() -> None:
+    paths = ["/h/certificate_of_completion_final.pdf", "/h/certificate.pdf"]
+    ranked = _rank(paths, ["certificate"], lambda _p: 0.0)
+    assert ranked[0] == "/h/certificate.pdf"  # shorter, less noise around the match
+
+
+def test_search_files_applies_type_filter() -> None:
+    seen: list[str] = []
+
+    def fake(argv: list[str]) -> tuple[int, str]:
+        pred = argv[-1]
+        seen.append(pred)
+        return 0, "/Users/me/mohamed-certificate.pdf\n"
+
+    out = search_files("certificate", file_type="pdf", runner=fake, mtime_of=lambda _p: 0.0)
+    assert 'kMDItemContentTypeTree == "com.adobe.pdf"' in seen[0]  # type ANDed in
+    assert "pdf file" in out.lower()
+    assert "mohamed-certificate.pdf" in out
+
+
+def test_search_files_type_missed_retries_without_type() -> None:
+    # No PDF, but the name exists as other formats -> report the miss, show the rest.
+    def fake(argv: list[str]) -> tuple[int, str]:
+        pred = argv[-1]
+        if "com.adobe.pdf" in pred:
+            return 0, ""  # no PDFs match
+        return 0, "/Users/me/mohamed-certificate.xlsx\n"
+
+    out = search_files("certificate", file_type="pdf", runner=fake, mtime_of=lambda _p: 0.0)
+    assert "didn't find any pdf" in out.lower()
+    assert "mohamed-certificate.xlsx" in out
+
+
+def test_search_files_broad_results_names_the_kinds_to_narrow() -> None:
+    # A broad result spanning formats should invite narrowing by type.
+    many = "".join(f"/Users/me/report_{i}.pdf\n" for i in range(70))
+    many += "/Users/me/report_x.xlsx\n/Users/me/report_y.docx\n"
+
+    out = search_files("report", runner=lambda _a: (0, many), mtime_of=lambda _p: 0.0)
+    assert "too broad" in out.lower()
+    assert "mix of" in out.lower()  # names the distinct extensions
+    assert ".pdf" in out
 
 
 def test_search_files_reports_runner_error() -> None:
