@@ -8,8 +8,9 @@ the dataclass default. There are no environment variables; the Settings view
 Secrets (API keys) are **not** stored here — they live in the macOS Keychain
 (:mod:`autobot.secrets`), so this file never contains credentials.
 
-English-only is a fixed product constraint (see the roadmap): the STT model is an
-English-only build and the LLM is instructed to answer in English.
+English-only is a fixed product constraint (see
+``docs/architecture/design-reference.md``): the STT model is an English-only build
+and the LLM is instructed to answer in English.
 """
 
 from __future__ import annotations

@@ -1,0 +1,54 @@
+name: "💡 Feature request"
+description: "Propose new behaviour or a capability for Jack."
+title: "[feat]: "
+labels: ["enhancement", "roadmap"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the idea! This becomes a tracked item on the
+        [project board](https://github.com/users/mdjakkariya/projects/1).
+        Keep proposals **on-device** and **English-only** (see `CLAUDE.md` constraints).
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem / motivation
+      description: What can't you do today, or what's awkward? Why does it matter?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed behaviour
+      description: What should Jack do, and how would you trigger it (spoken words / chat / UI)?
+    validations:
+      required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area / track
+      options:
+        - Capability (a new tool/action)
+        - Memory
+        - Conversation & voice
+        - Hardening & tiering
+        - UI / orb / chat
+        - Other
+    validations:
+      required: false
+  - type: textarea
+    id: context
+    attributes:
+      label: Additional context
+      description: Alternatives considered, mockups, links, constraints.
+    validations:
+      required: false
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Before submitting
+      options:
+        - label: "This stays on-device and English-only (no off-device data, no multilingual)."
+          required: false
+        - label: "I searched existing issues and this isn't a duplicate."
+          required: false

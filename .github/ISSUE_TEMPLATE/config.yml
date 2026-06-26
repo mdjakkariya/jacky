@@ -1,5 +1,5 @@
 blank_issues_enabled: true
 contact_links:
-  - name: "💡 Feature idea / question"
-    url: "https://github.com/mdjakkariya/autobot/discussions"
-    about: "For ideas, questions, or anything that isn't a bug, start a discussion."
+  - name: "💬 Question / discussion"
+    url: "https://github.com/mdjakkariya/jacky/discussions"
+    about: "For questions or open-ended discussion that isn't a bug, feature, or task."
