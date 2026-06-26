@@ -194,6 +194,8 @@
           <label class="switch"><input type="checkbox" id="allow_file_search"><span class="slider"></span></label></div>
         <div class="row"><span class="grow"><span class="label">Clipboard</span><div class="desc">Read &amp; set the clipboard (on-device)</div></span>
           <label class="switch"><input type="checkbox" id="allow_clipboard"><span class="slider"></span></label></div>
+        <div class="row"><span class="grow"><span class="label">Reminders</span><div class="desc">Create, list, complete &amp; delete reminders (on-device)</div></span>
+          <label class="switch"><input type="checkbox" id="allow_reminders"><span class="slider"></span></label></div>
         <div class="row"><span class="grow"><span class="label">File access</span><div class="desc">Read, copy &amp; edit files in folders you grant</div></span>
           <label class="switch"><input type="checkbox" id="allow_file_io"><span class="slider"></span></label></div>
         <div class="row"><span class="grow"><span class="label">Web search</span><div class="desc">Sends queries off-device</div></span>
@@ -301,7 +303,7 @@
 (function(){
   var API = new URLSearchParams(location.search).get("api") || "http://127.0.0.1:8765";
   var $ = function(id){ return document.getElementById(id); };
-  var CHECKS = ["tts_enabled","barge_in","aec","allow_app_control","allow_system_info","allow_memory","allow_file_search","allow_clipboard","allow_file_io","allow_web"];
+  var CHECKS = ["tts_enabled","barge_in","aec","allow_app_control","allow_system_info","allow_memory","allow_file_search","allow_clipboard","allow_reminders","allow_file_io","allow_web"];
 
   // tabs
   document.querySelectorAll(".tabs button").forEach(function(b){

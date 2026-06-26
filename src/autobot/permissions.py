@@ -41,6 +41,7 @@ AUTOMATION = "automation"
 _AUTOMATION_TARGETS = (
     "com.apple.systemevents",
     "com.apple.finder",
+    "com.apple.reminders",
     "com.apple.Safari",
     "com.google.Chrome",
     "com.microsoft.edgemac",

@@ -61,8 +61,8 @@ _DEFAULT_LOG_CONSOLE_LEVEL = "WARNING"
 # settings.json to add your own apps.
 _DEFAULT_STT_PROMPT = (
     "Commands for Jack: open or close apps like Safari, Chrome, Firefox, Microsoft Edge, "
-    "Finder, Mail, Calendar, Notes, Terminal, Spotify, Slack, Visual Studio Code, Music, "
-    "Messages, Photos, Preview, System Settings."
+    "Finder, Mail, Calendar, Reminders, Notes, Terminal, Spotify, Slack, Visual Studio Code, "
+    "Music, Messages, Photos, Preview, System Settings."
 )
 
 SAMPLE_RATE = 16_000
@@ -182,6 +182,7 @@ class Settings:
     allow_memory: bool = True
     allow_file_search: bool = True
     allow_clipboard: bool = True
+    allow_reminders: bool = True
     allow_file_io: bool = True
     access_store: str = "~/.autobot/access.json"
     memory_db: str = "~/.autobot/memory.db"

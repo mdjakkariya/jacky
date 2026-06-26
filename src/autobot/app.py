@@ -394,6 +394,16 @@ def build(
         register_clipboard_tools(registry)
         log.info("clipboard ENABLED (read/set)")
 
+    if settings.allow_reminders:
+        # macOS Reminders (create/list/complete/delete) via osascript; gated like
+        # everything else — list is READ_ONLY, create/complete are WRITE, delete
+        # confirms (DESTRUCTIVE). On-device.
+        from autobot.tools.reminders import register_reminders_tools
+
+        register_reminders_tools(registry)
+        log.info("reminders ENABLED (create/update/list/complete/delete)")
+        print("[reminders] reminders ENABLED — Jack can manage your Reminders.")
+
     # Phase 4: persistent personalization. The store is read into the prompt each
     # turn and grown via the (gated) memory tools.
     memory = None

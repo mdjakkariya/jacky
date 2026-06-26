@@ -109,8 +109,14 @@ permission gate + action-card pattern, so each is a small, consistent addition.
 **Track 1 — Capability growth (active).** More of what Jack can *do*:
 - [x] On-device file search + open / reveal in Finder, surfaced as clickable cards.
 - [x] Clipboard read/write — "copy that", "what's on my clipboard" (`tools/clipboard.py`).
-- [ ] Reminders & Calendar (EventKit via `osascript`) — "remind me at 5", "what's
-  on my calendar" (WRITE/automation, gated).
+- [x] Reminders (Reminders.app via `osascript`) — "remind me at 5", "what are my
+  reminders", "mark X done", "delete the X reminder" (`tools/reminders.py`). List is
+  READ_ONLY, create/complete are WRITE, delete is DESTRUCTIVE (confirmed); all behind
+  `requires=AUTOMATION`. Spoken times ("at 5", "tomorrow at 9am", "in 10 minutes")
+  parse to a native due/alarm date via the pure, unit-tested `parse_due`. Behind
+  `allow_reminders` in settings.json. **Calendar deferred** (split out below).
+- [ ] Calendar (Calendar.app via `osascript`) — "what's on my calendar", create
+  events (WRITE/automation, gated). Mirrors the reminders tool pattern.
 - [ ] Screenshot — capture screen/region to a file (`screencapture`); pairs with the
   action card to open/reveal it.
 - [ ] System toggles — volume, brightness, dark mode, Do Not Disturb, sleep (WRITE).
