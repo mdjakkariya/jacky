@@ -21,34 +21,74 @@
     font: 11px ui-monospace, Menlo, monospace; letter-spacing: .12em;
     color: rgba(157,184,255,.55); user-select: none; pointer-events: none;
   }
-  /* Confirmation cards — a macOS-notification-style stack under the orb. */
+  /* macOS-notification-style cards (confirmations + voice search results), shown
+     under the orb. One component, two uses, built for legibility + accessibility. */
   #cards {
-    position: absolute; left: 50%; bottom: 8px; transform: translateX(-50%);
-    width: 92%; max-width: 380px; display: flex; flex-direction: column; gap: 8px;
-    z-index: 10; pointer-events: none;
+    position: absolute; left: 50%; bottom: 10px; transform: translateX(-50%);
+    width: calc(100% - 20px); max-width: 360px;
+    display: flex; flex-direction: column; gap: 8px; z-index: 10; pointer-events: none;
+  }
+  /* When a card is up, stack a small orb above it (no overlap) and flow the card
+     in normal layout so the window can size to fit both. */
+  body.has-card { flex-direction: column; justify-content: flex-start; padding-top: 12px; }
+  body.has-card .stage {
+    width: 116px; height: 116px; max-width: 116px; max-height: 116px; flex: 0 0 auto;
+  }
+  body.has-card #cards {
+    position: static; transform: none; margin: 8px auto 0; width: calc(100% - 24px);
   }
   .card {
-    pointer-events: auto;
-    background: rgba(28,28,32,.72); -webkit-backdrop-filter: blur(22px); backdrop-filter: blur(22px);
-    border: .5px solid rgba(255,255,255,.14); border-radius: 14px;
-    box-shadow: 0 8px 30px rgba(0,0,0,.45);
-    padding: 11px 13px; color: #fff;
+    pointer-events: auto; color: #fff; text-align: left;
+    background: rgba(34,34,38,.82);
+    -webkit-backdrop-filter: blur(28px) saturate(140%); backdrop-filter: blur(28px) saturate(140%);
+    border: .5px solid rgba(255,255,255,.16); border-radius: 16px;
+    box-shadow: 0 12px 40px rgba(0,0,0,.5);
+    padding: 13px 14px;
     font: 13px -apple-system, BlinkMacSystemFont, "SF Pro Text", system-ui, sans-serif;
     animation: cardIn .18s ease-out;
   }
-  @keyframes cardIn { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
-  .card .ttl { font-weight: 600; margin-bottom: 2px; }
-  .card .msg { opacity: .92; line-height: 1.3; overflow-wrap: anywhere; }
-  .card .row { display: flex; gap: 8px; margin-top: 9px; }
-  .card .btn {
-    flex: 1; border: none; border-radius: 9px; padding: 6px 0; cursor: pointer;
-    font: 600 12px -apple-system, system-ui, sans-serif; color: #fff;
+  @keyframes cardIn { from { opacity: 0; transform: translateY(8px) scale(.985); } to { opacity: 1; transform: none; } }
+  @media (prefers-reduced-motion: reduce) { .card { animation: none; } }
+  /* Header: a Jack "app icon" + title (+ body), like a notification. */
+  .card .hd { display: grid; grid-template-columns: 30px 1fr; gap: 11px; align-items: start; }
+  .card .ic {
+    width: 30px; height: 30px; border-radius: 8px; font-size: 15px; flex: 0 0 auto;
+    display: flex; align-items: center; justify-content: center;
+    background: radial-gradient(120% 120% at 35% 25%, #b884ff 0%, #7a3ff0 55%, #4a1fb8 100%);
+    box-shadow: 0 2px 8px rgba(120,60,240,.45);
   }
-  .card .btn.no  { background: rgba(255,255,255,.14); }
+  .card .tx { min-width: 0; }
+  .card .ttl { font-weight: 650; font-size: 13px; }
+  .card .msg { margin-top: 2px; font-size: 13px; line-height: 1.38; opacity: .92; overflow-wrap: anywhere; }
+  /* Actions: right-aligned, comfortable tap targets. */
+  .card .row { display: flex; gap: 8px; justify-content: flex-end; margin-top: 12px; }
+  .card .btn {
+    border: none; border-radius: 9px; padding: 7px 16px; min-height: 30px; cursor: pointer;
+    font: 600 12.5px -apple-system, system-ui, sans-serif; color: #fff;
+    background: rgba(255,255,255,.16); transition: filter .12s ease, transform .06s ease;
+  }
   .card .btn.yes { background: #2f6fff; }
   .card.danger .btn.yes { background: #ff453a; }
+  .card .btn:hover { filter: brightness(1.12); }
   .card .btn:active { transform: scale(.97); }
-  .card .hint { margin-top: 6px; font-size: 11px; opacity: .5; }
+  .card .btn:focus-visible { outline: 2px solid #9db8ff; outline-offset: 2px; }
+  .card .btn:disabled { opacity: .5; cursor: default; }
+  .card .hint { margin-top: 9px; font-size: 11px; opacity: .5; }
+  /* Voice search preview: a list of top file matches, each with actions. */
+  .card .list { margin-top: 10px; }
+  .card .citem { padding: 8px 0; border-top: .5px solid rgba(255,255,255,.10); }
+  .card .citem:first-child { border-top: none; padding-top: 2px; }
+  .card .cname { font-weight: 600; font-size: 12.5px; overflow-wrap: anywhere; }
+  .card .csub { font-size: 11px; opacity: .55; overflow-wrap: anywhere; margin-top: 1px; }
+  .card .crow { display: flex; gap: 6px; margin-top: 7px; }
+  .card .crow .btn { padding: 5px 13px; }
+  .card .cstatus { font-size: 11px; opacity: .85; margin-top: 6px; color: #7fd4a0; }
+  .card .cstatus:empty { display: none; }
+  /* Off-screen live region so VoiceOver announces the prompt/results. */
+  .a11y-live {
+    position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0;
+    overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0;
+  }
 </style>
 </head>
 <body>
@@ -58,6 +98,7 @@
     <div id="conn">connecting…</div>
   </div>
   <div id="cards"></div>
+  <div id="a11y-live" class="a11y-live" role="status" aria-live="assertive"></div>
 
 <script>
 /*
@@ -180,8 +221,9 @@
       if(msg.type==="state"&&SC[msg.value]){var prev=state;state=msg.value;if(prev!==state)onStateChange(prev,state);}
       else if(msg.type==="amplitude"){liveAmp=Math.max(0,Math.min(1,+msg.value||0));}
       else if(msg.type==="visibility"){ if(msg.value==="hide") requestHide(); else showOrb(); }
-      else if(msg.type==="confirm"){ if(msg.mode!=="chat") showCard(msg.text, msg.kind); }
+      else if(msg.type==="confirm"){ if(msg.mode!=="chat"){ clearChoices(); showCard(msg.text, msg.kind); } }
       else if(msg.type==="confirm_clear"){ clearCards(); }
+      else if(msg.type==="choices"){ if(msg.mode==="voice") showChoicesCard(msg); }
     };
     ws.onclose=function(){scheduleReconnect();};
     ws.onerror=function(){try{ws.close();}catch(e){}};
@@ -200,26 +242,47 @@
   // A persistent card stack under the orb. Answer by voice ("proceed"/"cancel")
   // OR by clicking — the click POSTs to the daemon, which hands it to the engine.
   var API_BASE = WS_URL.replace(/^ws/,"http").replace(/\/ws$/,"");
+  // Announce text to screen readers via the off-screen assertive live region.
+  // Clearing first then setting (next tick) makes VoiceOver re-read identical text.
+  function announce(text){
+    var el=document.getElementById("a11y-live"); if(!el) return;
+    el.textContent=""; setTimeout(function(){ el.textContent=text||""; }, 40);
+  }
+  // Confirmation card: an accessible alert dialog (icon + title + body + actions).
+  // Answer by voice ("proceed"/"cancel"), by click, or by keyboard (Esc cancels;
+  // Tab cycles the buttons). Focus defaults to the SAFE choice on destructive asks.
   function showCard(text, kind){
     try{ showOrb(); }catch(e){}   // make sure the orb is visible so the card shows
     var cards=document.getElementById("cards"); if(!cards) return;
+    var old=document.getElementById("confirm-card"); if(old) old.remove();  // one at a time
     kind = kind || "danger";
-    var el=document.createElement("div"); el.className="card " + kind;
     var ttl = kind === "read" ? "Allow access" : (kind === "write" ? "Allow change" : "Confirm");
+    var icon = kind === "read" ? "🔒" : (kind === "write" ? "✎" : "⚠️");
     var yes = kind === "danger" ? "Proceed" : "Allow";
     var no = kind === "danger" ? "Cancel" : "Not now";
-    el.innerHTML='<div class="ttl"></div><div class="msg"></div>'
-      + '<div class="row"><button class="btn no"></button>'
-      + '<button class="btn yes"></button></div>'
+    var el=document.createElement("div"); el.className="card " + kind; el.id="confirm-card";
+    el.setAttribute("role","alertdialog");
+    el.setAttribute("aria-labelledby","cf-ttl");
+    el.setAttribute("aria-describedby","cf-msg");
+    el.innerHTML='<div class="hd"><div class="ic" aria-hidden="true"></div>'
+      + '<div class="tx"><div class="ttl" id="cf-ttl"></div><div class="msg" id="cf-msg"></div></div></div>'
+      + '<div class="row"><button type="button" class="btn no"></button>'
+      + '<button type="button" class="btn yes"></button></div>'
       + '<div class="hint">…or say “' + (kind==="danger"?"proceed":"allow") + '” / “cancel”.</div>';
+    el.querySelector(".ic").textContent = icon;
     el.querySelector(".ttl").textContent = ttl;
-    el.querySelector(".no").textContent = no;
-    el.querySelector(".yes").textContent = yes;
     el.querySelector(".msg").textContent = text || "Are you sure?";
-    el.querySelector(".yes").addEventListener("click",function(){ sendConfirm(true); });
-    el.querySelector(".no").addEventListener("click",function(){ sendConfirm(false); });
+    var noBtn=el.querySelector(".no"), yesBtn=el.querySelector(".yes");
+    noBtn.textContent = no; yesBtn.textContent = yes;
+    noBtn.setAttribute("aria-label", no + " — " + ttl);
+    yesBtn.setAttribute("aria-label", yes + " — " + ttl);
+    yesBtn.addEventListener("click",function(){ sendConfirm(true); });
+    noBtn.addEventListener("click",function(){ sendConfirm(false); });
     cards.appendChild(el);
-    growForCards();
+    enterCardMode();
+    announce(ttl + ". " + (text || ""));
+    // Destructive → focus Cancel (a stray Enter shouldn't delete); else the action.
+    setTimeout(function(){ (kind==="danger"?noBtn:yesBtn).focus(); }, 50);
   }
   function sendConfirm(answer){
     try{
@@ -231,25 +294,127 @@
   }
   function clearCards(){
     var cards=document.getElementById("cards"); if(cards) cards.innerHTML="";
-    restoreSize();
+    exitCardMode();
   }
 
-  // Grow the orb window so the card isn't clipped, restore when cleared (Tauri).
-  var _baseSize=null;
-  function growForCards(){
-    if(!tauriWin||!tauriApi||!tauriApi.PhysicalSize) return;
+  // --- voice search preview ------------------------------------------------
+  // In voice mode a file search shows its top matches as a transient card on the
+  // orb (the chat drawer has its own list). Act by voice ("open the first one"), by
+  // tapping Open/Reveal, or by keyboard (Esc dismisses). It clears when the next turn
+  // starts, so a stale preview never lingers — and because it lives on the orb, it
+  // can't leak into the chat log.
+  function clearChoices(){
+    var el=document.getElementById("choices-card");
+    if(el){ el.remove(); if(!cardsPresent()) exitCardMode(); }
+  }
+  function runChoiceAction(act, btn, statusEl, row){
+    row.querySelectorAll("button").forEach(function(b){ b.disabled=true; });
+    statusEl.textContent="Working…";
+    fetch(API_BASE+"/action",{method:"POST",headers:{"content-type":"application/json"},
+      body:JSON.stringify({tool:act.tool,args:act.args||{}})})
+      .then(function(r){ return r.json(); })
+      .then(function(r){ statusEl.textContent=(r&&r.result)?r.result:"Done"; })
+      .catch(function(){ statusEl.textContent="Couldn't do that"; })
+      .finally(function(){ row.querySelectorAll("button").forEach(function(b){ b.disabled=false; }); });
+  }
+  function showChoicesCard(msg){
+    if(!msg||!msg.items||!msg.items.length) return;
+    try{ showOrb(); }catch(e){}
     var cards=document.getElementById("cards"); if(!cards) return;
+    clearChoices();
+    var top=msg.items.slice(0,3);   // a glanceable preview — say/scroll for the rest
+    var el=document.createElement("div"); el.className="card"; el.id="choices-card";
+    el.setAttribute("role","group");
+    el.setAttribute("aria-labelledby","ch-ttl");
+    el.innerHTML='<div class="hd"><div class="ic" aria-hidden="true">🔎</div>'
+      + '<div class="tx"><div class="ttl" id="ch-ttl"></div></div></div>'
+      + '<div class="list"></div>';
+    el.querySelector(".ttl").textContent = msg.title || "Top matches";
+    var list=el.querySelector(".list");
+    top.forEach(function(item,i){
+      var it=document.createElement("div"); it.className="citem"; it.setAttribute("role","group");
+      var name=document.createElement("div"); name.className="cname";
+      name.textContent=(i+1)+". "+(item.label||""); it.appendChild(name);
+      if(item.sublabel){ var s=document.createElement("div"); s.className="csub"; s.textContent=item.sublabel; it.appendChild(s); }
+      var row=document.createElement("div"); row.className="crow";
+      var status=document.createElement("div"); status.className="cstatus";
+      status.setAttribute("role","status"); status.setAttribute("aria-live","polite");
+      (item.actions||[]).forEach(function(act){
+        if(act.copy!=null) return;   // "copy path" is a chat affordance; skip on the orb
+        var b=document.createElement("button"); b.type="button"; b.className="btn"; b.textContent=act.label||"Open";
+        b.setAttribute("aria-label",(act.label||"Open")+" "+(item.label||"file"));
+        b.addEventListener("click",function(){ runChoiceAction(act,b,status,row); });
+        row.appendChild(b);
+      });
+      it.appendChild(row); it.appendChild(status); list.appendChild(it);
+    });
+    var more=msg.items.length-top.length;
+    var hint=document.createElement("div"); hint.className="hint";
+    hint.textContent=(more>0?("+"+more+" more · "):"")+"say “open the first one”.";
+    el.appendChild(hint);
+    cards.appendChild(el);
+    enterCardMode();
+    announce((msg.title||"Top matches")+", "+top.length+(top.length===1?" result.":" results."));
+    setTimeout(function(){ var b=el.querySelector(".btn"); if(b) b.focus(); }, 50);
+  }
+
+  // --- window sizing for cards (Tauri) -------------------------------------
+  // The orb window is tiny (240px); a notification needs room. While a card is up we
+  // widen the window to a readable width, stack the orb above the card (see the
+  // body.has-card CSS), then size the height to fit — restoring both on dismiss.
+  var CARD_W=340, _baseSize=null;
+  function cardsPresent(){ var c=document.getElementById("cards"); return !!(c && c.children.length); }
+  function enterCardMode(){
+    document.body.classList.add("has-card");
+    sizeWindowForCards();
+  }
+  function exitCardMode(){
+    document.body.classList.remove("has-card");
+    restoreSize();
+  }
+  function sizeWindowForCards(){
+    if(!tauriWin||!tauriApi||!tauriApi.PhysicalSize) return;
+    var dprNow=Math.min(window.devicePixelRatio||1,2);
     tauriWin.outerSize().then(function(sz){
       if(!_baseSize) _baseSize={w:sz.width,h:sz.height};
-      var extra=Math.round((cards.offsetHeight+24)*(window.devicePixelRatio||1));
-      tauriWin.setSize(new tauriApi.PhysicalSize(_baseSize.w, _baseSize.h+extra));
+      var w=Math.round(CARD_W*dprNow);
+      suppressSave=true;
+      tauriWin.setSize(new tauriApi.PhysicalSize(w, sz.height));   // widen first, let it reflow
+      requestAnimationFrame(function(){
+        var h=Math.round((document.body.scrollHeight+8)*dprNow);
+        tauriWin.setSize(new tauriApi.PhysicalSize(w, h));
+        try{ ensureOnScreen(); }catch(e){}    // nudge back if widening ran off the edge
+        setTimeout(function(){ suppressSave=false; }, 200);
+      });
     }).catch(function(){});
   }
   function restoreSize(){
-    if(!tauriWin||!tauriApi||!tauriApi.PhysicalSize||!_baseSize) return;
-    tauriWin.setSize(new tauriApi.PhysicalSize(_baseSize.w,_baseSize.h));
+    if(!tauriWin||!tauriApi||!tauriApi.PhysicalSize||!_baseSize){ _baseSize=null; return; }
+    suppressSave=true;
+    try{ tauriWin.setSize(new tauriApi.PhysicalSize(_baseSize.w,_baseSize.h)); }catch(e){}
+    try{ ensureOnScreen(); }catch(e){}
     _baseSize=null;
+    setTimeout(function(){ suppressSave=false; }, 200);
   }
+
+  // Keyboard support for cards: Esc cancels a confirmation / dismisses a preview;
+  // Tab is trapped inside the open card so focus can't wander behind it.
+  document.addEventListener("keydown",function(e){
+    var confirm=document.getElementById("confirm-card");
+    var choices=document.getElementById("choices-card");
+    var card=confirm||choices; if(!card) return;
+    if(e.key==="Escape"){
+      e.preventDefault();
+      if(confirm) sendConfirm(false); else clearChoices();
+      return;
+    }
+    if(e.key==="Tab"){
+      var btns=card.querySelectorAll("button"); if(!btns.length) return;
+      var first=btns[0], last=btns[btns.length-1], a=document.activeElement;
+      if(e.shiftKey && (a===first || !card.contains(a))){ e.preventDefault(); last.focus(); }
+      else if(!e.shiftKey && (a===last || !card.contains(a))){ e.preventDefault(); first.focus(); }
+    }
+  });
 
   // --- "come to me": glide to the active screen when engaged (Tauri only) ----
   // OFF by default: the orb stays parked wherever you put it. Opt in by setting
@@ -319,6 +484,9 @@
 
   function onStateChange(prev,next){
     playEarcon(next);   // audible status cue, alongside the orb's color/animation
+    // A new turn began (the user spoke / Jack is working): drop any search preview
+    // from the previous turn so it doesn't linger over a fresh interaction.
+    if(prev==="idle" && (next==="listening"||next==="thinking")) clearChoices();
     if(!tauriWin) return;
     // Presence: any engaged state shows the orb (this is how the wake word brings
     // it back); returning to idle either honors a pending dismiss or restarts the
