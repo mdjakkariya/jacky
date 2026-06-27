@@ -294,10 +294,13 @@ class AnthropicLanguageModel:
         # the recent turns verbatim and fold everything older into this (cheaper, and
         # preserves the gist instead of dropping it).
         self._summary = ""
-        # Running token/cost tally for the process, surfaced in the log each turn.
+        # Running token/cost tally for this session, surfaced in the log + chat meter.
+        # ``_session_cost_priced`` distinguishes "$0.00 so far" from "no list price for
+        # this model" — only the latter hides the cost row in the UI.
         self._session_in = 0
         self._session_out = 0
         self._session_cost = 0.0
+        self._session_cost_priced = False
         if client is not None:  # injected (tests)
             self._client = client
         else:
@@ -359,6 +362,7 @@ class AnthropicLanguageModel:
         cost_str = f"{cost:.5f}" if cost is not None else "n/a"
         if cost is not None:
             self._session_cost += cost
+            self._session_cost_priced = True
         pct = round(100 * prompt_total / self._window) if prompt_total and self._window else 0
         _log.info(
             "cloud usage model=%s input_tokens=%d output_tokens=%d cache_read=%d cache_write=%d "
@@ -647,9 +651,10 @@ class AnthropicLanguageModel:
     def new_session(self) -> None:
         """Discard all conversation history and start a fresh session.
 
-        Clears the running summary and per-turn usage trackers too, so the context
-        meter resets to empty. The model config (window, client) is untouched — only
-        the conversation is wiped. Drives the chat's "New chat" action.
+        Clears the running summary, per-turn usage trackers, and the session token/cost
+        tally, so both the context meter and the session price reset to empty. The model
+        config (window, client) is untouched — only the conversation is wiped. Drives the
+        chat's "New chat" action.
         """
         self._history = []
         self._summary = ""
@@ -658,6 +663,10 @@ class AnthropicLanguageModel:
         self._last_cache_write = 0
         self._last_turn_in = 0
         self._last_turn_out = 0
+        self._session_in = 0
+        self._session_out = 0
+        self._session_cost = 0.0
+        self._session_cost_priced = False
         _log.info("cloud session reset (new chat)")
 
     @property
@@ -677,6 +686,9 @@ class AnthropicLanguageModel:
             "turn_in": self._last_turn_in,
             "turn_out": self._last_turn_out,
             "model": self._settings.anthropic_model,
+            # Estimated session cost in USD; None when this model has no list price
+            # (the UI then hides the cost row instead of showing a misleading $0.00).
+            "price": self._session_cost if self._session_cost_priced else None,
         }
 
     @property
