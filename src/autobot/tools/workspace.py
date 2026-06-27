@@ -31,7 +31,7 @@ def set_working_directory(path: str, broker: AccessBroker, policy: AccessPolicy)
         return f"That's not a folder: {folder}"
     try:
         policy.set_cwd(folder)
-    except (AccessDeniedError, Exception) as exc:  # never raise out of a tool handler
+    except Exception as exc:  # a tool handler must never raise out
         _log.warning("set_working_directory failed: %s", exc)
         return f"I couldn't switch to that folder: {exc}"
     _log.info("active folder set via tool name=%r", folder.name)

@@ -69,7 +69,7 @@ def test_list_files_shows_existing_files(tmp_path: Path) -> None:
     tools.create_file("a.txt", "x")
     tools.create_file("dir/b.txt", "y")
     msg = tools.list_files()
-    assert "a.txt" in msg and "b.txt" in msg
+    assert "a.txt" in msg and "dir/b.txt" in msg
 
 
 def test_list_files_on_empty_workspace(tmp_path: Path) -> None:
