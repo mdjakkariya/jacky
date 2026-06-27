@@ -143,3 +143,35 @@ def test_write_file_handler_with_content_writes(tmp_path: Path) -> None:
     assert isinstance(out, str)
     assert "wrote" in out.lower()
     assert target.read_text() == "hello world"
+
+
+def test_read_file_text_handler_without_path_returns_message(tmp_path: Path) -> None:
+    """read_file_text with no path must not raise; it asks which file to read."""
+    spec = _registry_with_fileio(tmp_path).get("read_file_text")
+    assert spec is not None
+    out = spec.handler()  # no path arg
+    assert isinstance(out, str) and "path" in out.lower()
+
+
+def test_copy_file_to_clipboard_handler_without_path_returns_message(tmp_path: Path) -> None:
+    """copy_file_to_clipboard with no path must not raise; it asks which file to copy."""
+    spec = _registry_with_fileio(tmp_path).get("copy_file_to_clipboard")
+    assert spec is not None
+    out = spec.handler()  # no path arg
+    assert isinstance(out, str) and "path" in out.lower()
+
+
+def test_write_file_handler_without_path_returns_message(tmp_path: Path) -> None:
+    """write_file with no path must not raise; it asks where to save."""
+    spec = _registry_with_fileio(tmp_path).get("write_file")
+    assert spec is not None
+    out = spec.handler()  # no path, no content
+    assert isinstance(out, str) and "path" in out.lower()
+
+
+def test_edit_file_handler_without_path_returns_message(tmp_path: Path) -> None:
+    """edit_file with no path must not raise; it asks which file to edit."""
+    spec = _registry_with_fileio(tmp_path).get("edit_file")
+    assert spec is not None
+    out = spec.handler()  # no path/find/replace
+    assert isinstance(out, str) and "path" in out.lower()
