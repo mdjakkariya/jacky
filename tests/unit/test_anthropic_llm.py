@@ -478,3 +478,23 @@ def test_system_prompt_includes_memory_when_present() -> None:
     )
     sys = model._system()
     assert "MD" in sys and "Jack" in sys
+
+
+def test_run_turn_forces_final_answer_at_round_cap() -> None:
+    # 8 rounds each request a (distinct) tool and never finish; at the cap a final
+    # tools-disabled call synthesizes the reply, not the canned "too many steps" line.
+    responses = [
+        SimpleNamespace(
+            content=[_block(type="tool_use", id=f"t{i}", name="open_app", input={"name": f"X{i}"})],
+            usage=SimpleNamespace(input_tokens=5, output_tokens=2),
+        )
+        for i in range(8)
+    ]
+    responses.append(SimpleNamespace(content=[_block(type="text", text="Here's what I managed.")]))
+    model = AnthropicLanguageModel(
+        Settings(llm_provider="anthropic"), _registry(), client=FakeClient(responses)
+    )
+    reply = model.run_turn("loop", lambda c: ToolResult(name=c.name, content="ok", ok=True))
+    assert reply == "Here's what I managed."  # forced final answer, not the canned line
+    # The 9th (final) create was made with no tools.
+    assert "tools" not in model._client.messages.calls[-1]

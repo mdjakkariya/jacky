@@ -598,7 +598,7 @@ class AnthropicLanguageModel:
                 reply = last_fail or "I couldn't complete that, so I stopped."
                 break
         else:
-            reply = reply or "Sorry, that took too many steps."
+            reply = self._final_answer_no_tools()
 
         self._last_prompt_total = prompt_total
         self._last_cache_read = cache_read
@@ -615,6 +615,29 @@ class AnthropicLanguageModel:
         self._maybe_compact(prompt_total)
         self._history = trim_history(self._history, _HARD_MAX_MESSAGES)
         return reply
+
+    def _final_answer_no_tools(self) -> str:
+        """One tools-disabled call to synthesize a final reply when the cap is hit.
+
+        The history ends with the last round's tool_results (a complete pairing), so
+        a tool-free request yields a clean final reply. Appends the assistant message
+        so the history stays faithful. Falls back to a short line on failure.
+        """
+        _log.info("cloud tool-round cap reached; forcing a final answer without tools")
+        try:
+            resp = self._client.messages.create(
+                model=self._settings.anthropic_model,
+                max_tokens=self._settings.anthropic_max_tokens,
+                temperature=self._settings.llm_temperature,
+                system=self._system(),
+                messages=with_cache_breakpoint(self._history),
+            )
+        except Exception:
+            _log.warning("cloud forced final answer failed")
+            return "Sorry, that took too many steps."
+        content = _get(resp, "content") or []
+        self._history.append({"role": "assistant", "content": [_block_to_dict(b) for b in content]})
+        return text_from_content(content) or "Sorry, that took too many steps."
 
     def new_session(self) -> None:
         """Discard all conversation history and start a fresh session.
