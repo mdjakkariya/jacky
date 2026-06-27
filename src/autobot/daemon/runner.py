@@ -116,6 +116,9 @@ def serve(settings: Settings | None = None) -> None:
     def publish_step(index: int, tool: str, label: str, status: str) -> None:
         bus.publish_step(index, tool, label, status)
 
+    def publish_workspace(path: str, name: str) -> None:
+        bus.publish_workspace(path, name)
+
     orchestrator = build(
         settings,
         on_state=make_state_listener(bus, is_chat=_is_chat),
@@ -128,6 +131,7 @@ def serve(settings: Settings | None = None) -> None:
         on_context=publish_context,
         on_choices=publish_choices,
         on_step=publish_step,
+        on_workspace=publish_workspace,
     )
     holder["orch"] = orchestrator
     thread = threading.Thread(target=orchestrator.run, name="engine", daemon=True)

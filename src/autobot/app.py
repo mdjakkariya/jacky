@@ -308,6 +308,7 @@ def build(
     on_context: Callable[[dict[str, object]], None] | None = None,
     on_choices: ChoicesSink | None = None,
     on_step: Callable[[int, str, str, str], None] | None = None,
+    on_workspace: Callable[[str, str], None] | None = None,
 ) -> Orchestrator:
     """Compose a fully wired :class:`Orchestrator`.
 
@@ -341,6 +342,10 @@ def build(
         on_step: Optional sink (index, tool, label, status) fed once per tool step
             (running, then done/failed), so the chat drawer can show a live step
             trace; the daemon wires it to the bus's ``publish_step``.
+        on_workspace: Optional sink (path, name) called whenever the active folder
+            changes (e.g. via ``set_working_directory``), so the chat drawer can
+            update its folder chip; the daemon wires it to the bus's
+            ``publish_workspace``.
 
     Returns:
         A ready-to-run orchestrator. Constructing it loads the STT model, opens
@@ -367,7 +372,12 @@ def build(
     from pathlib import Path as _Path
 
     workspace_root = _Path(settings.sandbox_dir).expanduser().resolve()
-    access_policy = AccessPolicy(settings.access_store, workspace_root, on_cwd_change=None)
+
+    def _cwd_changed(p: _Path) -> None:
+        if on_workspace is not None:
+            on_workspace(str(p), p.name)
+
+    access_policy = AccessPolicy(settings.access_store, workspace_root, on_cwd_change=_cwd_changed)
     set_active_policy(access_policy)  # so the Settings access endpoints can manage grants
     if settings.allow_app_control:
         # macOS app lifecycle by voice; gated like everything else (uninstall
