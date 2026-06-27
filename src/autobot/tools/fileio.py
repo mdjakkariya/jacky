@@ -44,6 +44,8 @@ def _read_text(resolved: Path, cap: int) -> tuple[str | None, str]:
 
 def read_file_text(path: str, broker: AccessBroker) -> str:
     """Return a text file's contents (gated; bounded for the conversation)."""
+    if not path:
+        return "Which file should I read? Tell me its path."
     try:
         resolved = broker.ensure(path, write=False)
     except (AccessDeniedError, PermissionError) as exc:
@@ -59,6 +61,8 @@ def copy_file_to_clipboard(
     path: str, broker: AccessBroker, clip_runner: ClipRunner | None = None
 ) -> str:
     """Read a file and put its contents on the clipboard — without showing them here."""
+    if not path:
+        return "Which file should I copy? Tell me its path."
     try:
         resolved = broker.ensure(path, write=False)
     except (AccessDeniedError, PermissionError) as exc:
@@ -75,11 +79,15 @@ def copy_file_to_clipboard(
 
 def write_file(path: str, content: str, broker: AccessBroker) -> str:
     """Create or overwrite a text file (gated; creates parent folders as needed)."""
+    if not path:
+        return "Where should I save it? Tell me the file path."
+    if not content:
+        return "I didn't get any text to write — include the file's content and try again."
     try:
         resolved = broker.ensure(path, write=True)
     except (AccessDeniedError, PermissionError) as exc:
         return str(exc)
-    body = content or ""
+    body = content
     try:
         resolved.parent.mkdir(parents=True, exist_ok=True)  # create folders within the grant
         resolved.write_text(body, encoding="utf-8")
@@ -92,6 +100,8 @@ def write_file(path: str, content: str, broker: AccessBroker) -> str:
 
 def edit_file(path: str, find: str, replace: str, broker: AccessBroker) -> str:
     """Replace exact text in a file (gated). Replaces every occurrence of ``find``."""
+    if not path:
+        return "Which file should I edit? Tell me its path."
     if not find:
         return "Tell me the exact text to replace."
     try:
@@ -131,7 +141,7 @@ def register_file_io_tools(
                 "properties": {"path": {"type": "string", "description": "Full path to the file."}},
                 "required": ["path"],
             },
-            handler=lambda path: read_file_text(path, broker),
+            handler=lambda path="": read_file_text(path, broker),
             risk=Risk.READ_ONLY,
             ack="Reading that file.",
         )
@@ -150,7 +160,7 @@ def register_file_io_tools(
                 "properties": {"path": {"type": "string", "description": "Full path to the file."}},
                 "required": ["path"],
             },
-            handler=lambda path: copy_file_to_clipboard(path, broker, clip_runner),
+            handler=lambda path="": copy_file_to_clipboard(path, broker, clip_runner),
             risk=Risk.WRITE,
             ack="Copying that file.",
         )
@@ -173,7 +183,7 @@ def register_file_io_tools(
                 },
                 "required": ["path", "content"],
             },
-            handler=lambda path, content: write_file(path, content, broker),
+            handler=lambda path="", content="": write_file(path, content, broker),
             risk=Risk.WRITE,
             ack="Writing that file.",
         )
@@ -196,7 +206,7 @@ def register_file_io_tools(
                 },
                 "required": ["path", "find", "replace"],
             },
-            handler=lambda path, find, replace: edit_file(path, find, replace, broker),
+            handler=lambda path="", find="", replace="": edit_file(path, find, replace, broker),
             risk=Risk.WRITE,
             ack="Editing that file.",
         )
