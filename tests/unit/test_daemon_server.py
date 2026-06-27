@@ -10,10 +10,10 @@ import pytest
 
 pytest.importorskip("fastapi")
 
-from fastapi.testclient import TestClient  # noqa: E402
+from fastapi.testclient import TestClient
 
-from autobot.core.events import EventBus, OrbState  # noqa: E402
-from autobot.daemon.server import create_app, run_daemon  # noqa: E402
+from autobot.core.events import EventBus, OrbState
+from autobot.daemon.server import create_app, run_daemon
 
 
 def test_healthz_reports_current_state() -> None:
