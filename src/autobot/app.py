@@ -509,6 +509,10 @@ def build(
     broker = AccessBroker(access_policy, confirmer)
     register_filesystem_tools(registry, broker)  # now active-folder aware
 
+    from autobot.tools.workspace import register_workspace_tools
+
+    register_workspace_tools(registry, broker, access_policy)
+
     if settings.allow_file_io:
         # Broad read/copy/write/edit, scoped by the access policy; first use of a new
         # folder asks for a grant via the same confirmer the gate uses.

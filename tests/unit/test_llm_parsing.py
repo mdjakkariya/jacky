@@ -226,3 +226,9 @@ def test_estimate_catches_a_large_incoming_message() -> None:
     big_user_msg = {"role": "user", "content": "b" * 4000}
     est = estimate_tokens([*history, big_user_msg], chars_per_token=4)
     assert needs_compaction(est, context_tokens=1200, threshold=0.85) is True
+
+
+def test_system_prompt_mentions_active_folder() -> None:
+    from autobot.llm.ollama_llm import system_prompt
+
+    assert "active folder" in system_prompt("chat").lower()
