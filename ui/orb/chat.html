@@ -181,7 +181,8 @@
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 10a3 3 0 0 1 6 0"/><rect x="8" y="9" width="8" height="9" rx="4"/><path d="M8 12H4M16 12h4M8 16l-3 2M16 16l3 2M8.5 9.2 6.5 7M15.5 9.2 17.5 7M12 5V3"/></svg>
         <span class="dbgtip" id="dbgTip">Copied</span>
       </button>
-      <span id="folder" class="folder hidden" aria-label="Active folder">
+      <span id="folder" class="folder hidden" role="button" tabindex="0"
+            aria-label="Active folder" aria-haspopup="true" aria-expanded="false">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>
         <span id="folderName" class="fname"></span>
       </span>
@@ -517,35 +518,101 @@
 
   // Active-folder chip + modal. Driven by the "workspace" WS frame and GET /workspace.
   var workspacePath = "";
+
+  // refreshWorkspace: single source of truth — fetches /workspace and updates BOTH
+  // the chip (name + visibility) and the open modal fields (path, grants).
+  async function refreshWorkspace(){
+    try {
+      var r = await fetch(API + "/workspace"); var w = await r.json();
+      workspacePath = w.path || "";
+      var chip = $("folder"); if(chip){
+        chip.style.display = workspacePath ? "inline-flex" : "none";
+        chip.classList.toggle("hidden", !workspacePath);
+      }
+      var nm = $("folderName"); if(nm) nm.textContent = w.name || "";
+      var fp = $("folderPath"); if(fp) fp.textContent = w.path || "(none)";
+      var grants = (w.grants || []).map(function(g){ return g.path + " (" + g.mode + ")"; });
+      var fg = $("folderGrants"); if(fg) fg.textContent = grants.length ? ("Granted: " + grants.join(", ")) : "";
+    } catch(e){}
+  }
+
   function renderWorkspace(m){
+    // Called from the WS "workspace" event — update chip only (modal may not be open).
     workspacePath = m.path || "";
     var chip = $("folder"); if(!chip) return;
     chip.style.display = workspacePath ? "inline-flex" : "none";
     chip.classList.toggle("hidden", !workspacePath);
     var nm = $("folderName"); if(nm) nm.textContent = m.name || "";
   }
-  async function openFolderDetail(){
+
+  function openFolderDetail(){
     var d = $("folderDetail"); if(!d) return;
-    try {
-      var r = await fetch(API + "/workspace"); var w = await r.json();
-      workspacePath = w.path || workspacePath;
-      $("folderPath").textContent = w.path || "(none)";
-      var grants = (w.grants || []).map(function(g){ return g.path + " (" + g.mode + ")"; });
-      $("folderGrants").textContent = grants.length ? ("Granted: " + grants.join(", ")) : "";
-    } catch(e){}
-    d.classList.toggle("hidden");
+    if(!d.classList.contains("hidden")) return;  // already open
+    refreshWorkspace();  // populate/refresh path + grants before showing
+    d.classList.remove("hidden");
+    var chip = $("folder"); if(chip) chip.setAttribute("aria-expanded", "true");
   }
-  function revealWorkspace(){ if(workspacePath && tauri()) tauri().invoke("reveal_in_finder", {path: workspacePath}); }
+
+  function closeFolderDetail(){
+    var d = $("folderDetail"); if(!d) return;
+    d.classList.add("hidden");
+    var chip = $("folder"); if(chip) chip.setAttribute("aria-expanded", "false");
+  }
+
+  function toggleFolderDetail(){
+    var d = $("folderDetail"); if(!d) return;
+    if(d.classList.contains("hidden")){ openFolderDetail(); } else { closeFolderDetail(); }
+  }
+
+  function revealWorkspace(){
+    if(workspacePath && tauri()) tauri().invoke("reveal_in_finder", {path: workspacePath});
+  }
+
   async function changeFolder(){
     if(!tauri()) return;
     var picked; try { picked = await tauri().invoke("pick_folder"); } catch(e){ return; }
     if(!picked) return;  // cancelled
     try { await fetch(API + "/workspace", {method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify({path: picked})}); } catch(e){}
-    // The engine emits a "workspace" frame on success; the chip updates from it.
+    // Refresh immediately so the modal shows the new folder without depending on the WS event.
+    await refreshWorkspace();
+    // Leave the modal open so the user can see the new path / reveal it.
   }
-  if($("folder")) $("folder").addEventListener("click", openFolderDetail);
-  if($("folderReveal")) $("folderReveal").addEventListener("click", revealWorkspace);
-  if($("folderChange")) $("folderChange").addEventListener("click", changeFolder);
+
+  var folderChip = $("folder");
+  if(folderChip){
+    folderChip.addEventListener("click", function(e){
+      e.stopPropagation();  // don't let the outside-click handler immediately close it
+      toggleFolderDetail();
+    });
+    folderChip.addEventListener("keydown", function(e){
+      if(e.key === "Enter" || e.key === " "){ e.preventDefault(); e.stopPropagation(); toggleFolderDetail(); }
+    });
+  }
+  if($("folderReveal")) $("folderReveal").addEventListener("click", function(e){
+    e.stopPropagation();  // stay inside the modal
+    revealWorkspace();
+  });
+  if($("folderChange")) $("folderChange").addEventListener("click", function(e){
+    e.stopPropagation();  // modal stays open during picker + refresh
+    changeFolder();
+  });
+
+  // Outside-click: close the folder modal when clicking anywhere outside it or the chip.
+  document.addEventListener("click", function(e){
+    var d = $("folderDetail"), chip = $("folder");
+    if(!d || d.classList.contains("hidden")) return;
+    if((d && d.contains(e.target)) || (chip && chip.contains(e.target))) return;
+    closeFolderDetail();
+  });
+
+  // Escape key: close the folder modal (Escape already closes the drawer via closeDrawer;
+  // check the modal first so Escape closes only the modal, not the whole drawer, when open).
+  document.addEventListener("keydown", function(e){
+    if(e.key === "Escape"){
+      var d = $("folderDetail");
+      if(d && !d.classList.contains("hidden")){ e.stopPropagation(); closeFolderDetail(); }
+    }
+  }, true);  // capture phase so this runs before the drawer's keydown listener
 
   // Live tool-step trace (type "step"): one row per step, updated in place by index.
   // Cleared when the assistant's reply bubble arrives (see clearSteps()).
@@ -656,7 +723,7 @@
     } catch(e){ setTimeout(connect, 1500); }
   }
   connect();
-  (async function(){ try { var r = await fetch(API + "/workspace"); var w = await r.json(); if(w.path) renderWorkspace(w); } catch(e){} })();
+  refreshWorkspace();  // populate chip (and modal if open) on load
 
   // --- update notify (Phase 0) ----------------------------------------------
   // Checks GitHub Releases for a newer version and shows a one-line banner. Anonymous
