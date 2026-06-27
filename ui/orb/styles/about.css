@@ -1,0 +1,38 @@
+/* About panel — entry sheet. Layer order + shared imports, then about-specific
+   component CSS moved verbatim from about.html (tokens now come from tokens.css). */
+@layer reset, base, components, utilities;
+@import url("./tokens.css");
+@import url("./reset.css") layer(reset);
+@import url("./base.css") layer(base);
+
+@layer components {
+  body {
+    background: var(--bg);
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    text-align: center; padding: 26px 24px 22px; min-height: 100vh;
+  }
+  .icon { width: 84px; height: 84px; margin-bottom: 12px; border-radius: 19px; image-rendering: -webkit-optimize-contrast; }
+  h1 { font-size: 20px; font-weight: 600; margin: 0 0 1px; }
+  .version { color: var(--muted); font-size: 12.5px; margin: 0 0 6px; }
+  .tagline { color: var(--muted); font-size: 11.5px; margin: 0 0 18px; max-width: 260px; }
+  button {
+    font: inherit; font-weight: 500; cursor: pointer; border-radius: 8px;
+    border: .5px solid var(--btn-line); background: var(--btn-bg); color: var(--text);
+    padding: 7px 16px; transition: opacity .12s;
+  }
+  button:hover { opacity: .85; }
+  button:disabled { opacity: .5; cursor: default; }
+  button.primary { background: var(--accent); border-color: transparent; color: #fff; }
+  #status { margin-top: 12px; min-height: 18px; font-size: 12.5px; }
+  #status.ok { color: var(--ok); }
+  #status.warn { color: var(--warn); }
+  #status.err { color: var(--muted); }
+  #update-link { display: none; margin-top: 10px; }
+  .spinner {
+    display: inline-block; width: 13px; height: 13px; border: 2px solid var(--muted);
+    border-top-color: transparent; border-radius: 50%; animation: spin .7s linear infinite;
+    vertical-align: -2px; margin-right: 6px;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .note { margin: 14px 0 0; color: var(--muted); font-size: 10.5px; max-width: 260px; }
+}

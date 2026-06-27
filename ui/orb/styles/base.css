@@ -1,0 +1,8 @@
+/* Element defaults shared across pages. Page-specific body layout (flex, padding,
+   background) and any line-height tweaks live in the per-page entry sheet. The
+   "Segoe UI" fallback is inert on macOS (-apple-system wins) but kept for parity. */
+body {
+  font: 13px/1.45 -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  color: var(--text);
+}
