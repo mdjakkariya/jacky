@@ -130,6 +130,9 @@ def create_app(
         try:
             # Replay the current state so a late joiner renders correctly at once.
             await websocket.send_json(StateEvent(bus.last_state).message())
+            # Replay the active folder so the chat drawer shows the current cwd immediately.
+            if bus.last_workspace is not None:
+                await websocket.send_json(bus.last_workspace)
             while True:
                 await websocket.send_json(await queue.get())
         except (WebSocketDisconnect, asyncio.CancelledError):
@@ -302,6 +305,26 @@ def create_app(
         threading.Thread(target=run, name="voice-download", daemon=True).start()
         return {"ok": True, "started": True}
 
+    async def get_workspace() -> dict[str, Any]:
+        """Report the active folder (cwd) + granted folders (for the chat folder modal)."""
+        from autobot.tools.access import active_policy
+
+        pol = active_policy()
+        if pol is None:
+            return {"path": "", "name": "", "grants": []}
+        grants = [{"path": g.path, "mode": g.mode.name.lower()} for g in pol.grants()]
+        return {"path": str(pol.cwd), "name": pol.cwd.name, "grants": grants}
+
+    async def post_workspace(request: Request) -> dict[str, Any]:
+        """Set the active folder (``{path}``) through the gate (grant card applies)."""
+        payload = await request.json()
+        if not isinstance(payload, dict) or "path" not in payload or on_action is None:
+            return {"ok": False, "error": "expected {path} / action unavailable"}
+        result = await asyncio.to_thread(
+            on_action, "set_working_directory", {"path": str(payload["path"])}
+        )
+        return {"ok": True, "result": result}
+
     async def get_access() -> dict[str, Any]:
         """List the folders the user has granted Jack access to (for Settings)."""
         from autobot.tools.access import active_policy
@@ -385,6 +408,8 @@ def create_app(
     app.add_api_route("/secret", post_secret, methods=["POST"])
     app.add_api_route("/confirm", post_confirm, methods=["POST"])
     app.add_api_route("/action", post_action, methods=["POST"])
+    app.add_api_route("/workspace", get_workspace, methods=["GET"])
+    app.add_api_route("/workspace", post_workspace, methods=["POST"])
     app.add_api_route("/access", get_access, methods=["GET"])
     app.add_api_route("/access/grant", post_access_grant, methods=["POST"])
     app.add_api_route("/access/revoke", post_access_revoke, methods=["POST"])
