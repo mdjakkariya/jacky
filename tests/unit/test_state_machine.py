@@ -812,7 +812,31 @@ def test_ack_phrase_maps_risk_to_the_right_pool() -> None:
     assert _ack_phrase(None) in _THINKING_ACKS  # unknown tool -> thinking
 
 
-def test_execute_emits_running_then_done_step() -> None:
+def test_chat_turn_emits_running_then_done_step() -> None:
+    from autobot.orchestrator.wake_gate import PassThroughGate
+    from autobot.tts.null_tts import NullTTS
+
+    steps: list[tuple[int, str, str, str]] = []
+    orch = Orchestrator(
+        settings=Settings(interaction_mode="chat"),
+        audio=_FakeAudio(),
+        stt=_FakeSTT("create a file"),
+        llm=_ToolingLLM(),
+        gate=_RecordingGate(),  # type: ignore[arg-type]
+        wake_gate=PassThroughGate(),
+        tts=NullTTS(),
+        on_step=lambda i, tool, label, status: steps.append((i, tool, label, status)),
+    )
+    orch.run_text_turn("create a file")
+    # A typed (chat) turn drives the chat-drawer trace: running step then done, same index.
+    assert (0, "create_file", "Create file", "running") in steps
+    assert (0, "create_file", "Create file", "done") in steps
+
+
+def test_voice_turn_does_not_emit_steps_to_chat_trace() -> None:
+    # The step trace is a chat-drawer surface; a voice turn surfaces via spoken cues,
+    # so it must NOT emit step events — otherwise a voice turn's trace lingers in the
+    # chat drawer (nothing calls clearSteps for a voice turn) and stale rows pile up.
     from autobot.orchestrator.wake_gate import PassThroughGate
     from autobot.tts.null_tts import NullTTS
 
@@ -828,9 +852,7 @@ def test_execute_emits_running_then_done_step() -> None:
         on_step=lambda i, tool, label, status: steps.append((i, tool, label, status)),
     )
     orch.run_once()
-    # The single tool call emits a running step then a done step, same index.
-    assert (0, "create_file", "Create file", "running") in steps
-    assert (0, "create_file", "Create file", "done") in steps
+    assert steps == []  # voice turns surface via spoken cues, not the chat trace
 
 
 def test_voice_cue_dedupes_repeated_phrases_within_a_turn() -> None:

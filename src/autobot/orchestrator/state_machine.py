@@ -546,8 +546,14 @@ class Orchestrator:
         return result
 
     def _emit_step(self, index: int, tool: str, label: str, status: str) -> None:
-        """Publish a tool-step update to the UI, if a sink is wired. Never raises."""
-        if self._on_step is None:
+        """Publish a tool-step update to the UI, if a sink is wired. Never raises.
+
+        The step trace is a *chat-drawer* surface; a voice turn surfaces its steps via
+        spoken cues instead. So we don't emit for a voice turn — otherwise a voice
+        turn's rows render in the chat drawer with nothing to clear them (clearSteps
+        only runs on a chat reply), and pile up as a stale trace across turns.
+        """
+        if self._on_step is None or not self.in_chat_mode():
             return
         try:
             self._on_step(index, tool, label, status)
