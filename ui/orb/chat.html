@@ -145,6 +145,13 @@
   .spinner{width:24px;height:24px;border-radius:50%;border:2.5px solid var(--field-line);border-top-color:var(--accent);animation:spin .8s linear infinite;}
   @keyframes spin{to{transform:rotate(360deg);}}
   .hidden{display:none !important;}
+  .steptrace{align-self:flex-start;max-width:82%;display:flex;flex-direction:column;gap:4px;
+    font-size:12px;color:var(--muted);padding:4px 2px;}
+  .steptrace .row{display:flex;align-items:center;gap:7px;}
+  .steptrace .dot{width:6px;height:6px;border-radius:50%;background:var(--muted);flex:none;}
+  .steptrace .row.done .dot{background:#34c759;}
+  .steptrace .row.failed .dot{background:var(--danger);}
+  .steptrace .row.running .label{opacity:.9;} .steptrace .row.done .label,.steptrace .row.failed .label{opacity:.6;}
 </style>
 </head>
 <body>
@@ -324,7 +331,7 @@
   // A single, shared typing indicator (never more than one).
   var typingEl = null;
   function showTyping(){ if(!typingEl){ typingEl = document.createElement("div"); typingEl.className = "typing"; typingEl.setAttribute("aria-label", "Jack is typing"); typingEl.innerHTML = "<span></span><span></span><span></span>"; log.appendChild(typingEl); } scroll(); }
-  function hideTyping(){ if(typingEl){ typingEl.remove(); typingEl = null; } }
+  function hideTyping(){ clearSteps(); if(typingEl){ typingEl.remove(); typingEl = null; } }
 
   // One turn at a time: while a turn is in flight (including while a confirmation
   // card is waiting for you), lock the input so a second message can't queue up
@@ -484,6 +491,29 @@
     log.appendChild(card); scroll();
   }
 
+  // Live tool-step trace (type "step"): one row per step, updated in place by index.
+  // Cleared when the assistant's reply bubble arrives (see clearSteps()).
+  var stepTrace = null;
+  function renderStep(m){
+    if(!stepTrace){
+      stepTrace = document.createElement("div");
+      stepTrace.className = "steptrace";
+      $("log").appendChild(stepTrace);
+    }
+    var row = stepTrace.querySelector('[data-i="' + m.index + '"]');
+    if(!row){
+      row = document.createElement("div");
+      row.setAttribute("data-i", m.index);
+      row.innerHTML = '<span class="dot"></span><span class="label"></span>';
+      stepTrace.appendChild(row);
+    }
+    row.className = "row " + (m.status || "running");
+    var suffix = m.status === "done" ? " ✓" : m.status === "failed" ? " ✗" : "…";
+    row.querySelector(".label").textContent = (m.label || m.tool) + suffix;
+    $("log").scrollTop = $("log").scrollHeight;
+  }
+  function clearSteps(){ if(stepTrace){ stepTrace.remove(); stepTrace = null; } }
+
   // Per-session context meter in the header (percent ring; in dev builds, tap the
   // ring to expand a detail card). Driven by the engine's "context" event each turn.
   var CTX_CIRC = 94.2, lastCtx = null;
@@ -563,6 +593,7 @@
         else if(m.type === "confirm_clear") clearConfirm();
         else if(m.type === "context") renderContext(m);
         else if(m.type === "choices" && m.mode !== "voice") showChoices(m);
+        else if(m.type === "step") renderStep(m);
       };
       ws.onclose = function(){ setTimeout(connect, 1500); };
     } catch(e){ setTimeout(connect, 1500); }
