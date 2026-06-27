@@ -121,6 +121,32 @@ def test_run_turn_forces_final_answer_at_round_cap() -> None:
     assert "tools" not in model._client.calls[-1]
 
 
+def test_run_turn_mixed_round_continues_when_one_call_is_new() -> None:
+    # A round that mixes a previously-failed repeat with a brand-new call must NOT
+    # stop early: the new call runs and the loop proceeds to a final answer.
+    responses = [
+        _resp(tool_calls=[_tc("open_path", {"path": "/nope"})]),  # round 1: fails
+        _resp(  # round 2: the failed repeat + a new call
+            tool_calls=[
+                _tc("open_path", {"path": "/nope"}),
+                _tc("list_files", {"path": "~/Downloads"}),
+            ]
+        ),
+        _resp(content="Here's the listing."),  # round 3: final text
+    ]
+    model = _model(responses)
+    runs: list[str] = []
+
+    def execute(call: ToolCall) -> ToolResult:
+        runs.append(call.name)
+        ok = call.name != "open_path"
+        return ToolResult(name=call.name, content="ok" if ok else "No access.", ok=ok)
+
+    reply = model.run_turn("open then list", execute)
+    assert reply == "Here's the listing."  # did not stop early
+    assert runs == ["open_path", "list_files"]  # failed repeat not re-run; new call ran once
+
+
 def test_history_keeps_tool_messages_across_turns() -> None:
     # Turn 1 runs a tool; turn 2 must see the prior tool exchange in the sent messages.
     model = _model(

@@ -339,7 +339,7 @@ class OllamaLanguageModel:
                 "planned tools=%s model=%s", [c.name for c in calls], self._settings.llm_model
             )
             all_repeat = True  # did this round only re-issue calls that already failed?
-            last_fail = ""
+            last_fail = ""  # most recent cached failure text this round; used only when all_repeat
             for call in calls:
                 key = call.name + "\0" + json.dumps(call.arguments, sort_keys=True, default=str)
                 if key in failed:
