@@ -140,6 +140,18 @@ def test_load_falls_back_when_saved_cwd_is_invalid(tmp_path: Path) -> None:
     assert pol.cwd == ws.resolve()  # invalid saved cwd -> default workspace
 
 
+def test_load_falls_back_when_saved_cwd_not_granted(tmp_path: Path) -> None:
+    from autobot.tools.access import AccessPolicy
+
+    ws = tmp_path / "workspace"
+    other = tmp_path / "other"
+    other.mkdir()  # exists, but never granted
+    store = tmp_path / "access.json"
+    store.write_text(f'{{"cwd": "{other}", "grants": []}}', encoding="utf-8")
+    pol = AccessPolicy(store, ws)
+    assert pol.cwd == ws.resolve()  # exists but ungranted -> default workspace
+
+
 def test_set_cwd_refuses_denylisted_path(tmp_path: Path) -> None:
     from autobot.tools.access import AccessDeniedError, AccessPolicy
 

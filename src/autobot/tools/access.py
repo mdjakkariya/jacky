@@ -180,9 +180,9 @@ class AccessPolicy:
         target = Path(path).expanduser().resolve()
         if _is_denied(target):
             raise AccessDeniedError(f"{target} is a protected location")
-        if not self._covered(target, Mode.WRITE):
-            raise NeedsAccessError(target, Mode.WRITE)
         with self._lock:
+            if not self._covered(target, Mode.WRITE):
+                raise NeedsAccessError(target, Mode.WRITE)
             self._cwd = target
             self._save()
         _log.info("active folder set to %s", target)
