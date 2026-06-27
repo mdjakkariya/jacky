@@ -327,6 +327,7 @@ class Orchestrator:
         on_state: StateListener | None = _print_transition,
         memory: MemoryStore | None = None,
         on_context: Callable[[dict[str, Any]], None] | None = None,
+        on_step: Callable[[int, str, str, str], None] | None = None,
         on_show: Callable[[], None] | None = None,
         release_voice_io: Callable[[], None] | None = None,
     ) -> None:
@@ -350,11 +351,14 @@ class Orchestrator:
         self._memory = memory
         # Sink for per-turn context-window usage (drives the chat meter), if wired.
         self._on_context = on_context
+        # Sink for per-tool-step progress (running/done/failed), if wired.
+        self._on_step = on_step
         # Asks the UI to re-show the orb (voice UI). Fired when a voice turn is
         # addressed to Jack while the orb may be hidden, so "Jack, …" brings it back.
         self._on_show = on_show
         self._sm = StateMachine(on_change=on_state)
-        self._acknowledged = False  # spoke a filler this turn?
+        self._step_index = 0  # tool-step counter within the current turn
+        self._last_spoken_ack = ""  # last per-step voice cue, to dedupe back-to-back repeats
         self._dismissed = False  # did this turn call the dismiss tool ("go away")?
         # Whether we're in an active conversation. Drives the orb's "listening"
         # animation: only animate while engaged, not during passive always-on
@@ -521,23 +525,42 @@ class Orchestrator:
             _log.exception("releasing voice I/O failed")
 
     def _execute(self, call: ToolCall) -> ToolResult:
-        """Executor handed to the LLM: mark EXECUTING and run through the gate."""
+        """Executor handed to the LLM: mark EXECUTING, surface the step, run the gate."""
         self._sm.transition(State.EXECUTING)
         if call.name == "dismiss":
-            # The user asked Jack to go away: don't keep a follow-up window open —
-            # require the wake word to come back (handled after the turn).
             self._dismissed = True
-        # Acknowledge once per turn so a slow tool call isn't silent — phrased to fit
-        # the actual action (e.g. "Opening that"), staying silent for tools like
-        # dismiss where a filler would be jarring.
-        if self._settings.speak_acknowledgements and not self._acknowledged and not self._text_mode:
-            self._acknowledged = True
+        index = self._step_index
+        self._step_index += 1
+        label = self._step_label(call)
+        self._emit_step(index, call.name, label, "running")
+        # Voice: a short cue per step so a multi-step chain isn't silent — deduped so
+        # the same phrase isn't spoken back-to-back, and silent (ack="") tools say nothing.
+        if self._settings.speak_acknowledgements and not self._text_mode:
             phrase = self._ack_for(call)
-            if phrase:
+            if phrase and phrase != self._last_spoken_ack:
+                self._last_spoken_ack = phrase
                 self._tts.speak(phrase)
         result = self._gate.execute(call)
+        self._emit_step(index, call.name, label, "done" if result.ok else "failed")
         self._transcript.tool(call.name, call.arguments, result.ok, result.content)
         return result
+
+    def _emit_step(self, index: int, tool: str, label: str, status: str) -> None:
+        """Publish a tool-step update to the UI, if a sink is wired. Never raises."""
+        if self._on_step is None:
+            return
+        try:
+            self._on_step(index, tool, label, status)
+        except Exception:  # a UI hiccup must never break a turn
+            _log.exception("on_step sink failed")
+
+    def _step_label(self, call: ToolCall) -> str:
+        """A short human label for a tool step: its ack phrasing, else a tidy name."""
+        ack_of = getattr(self._gate, "ack_of", None)
+        ack = ack_of(call.name) if callable(ack_of) else None
+        if ack:  # the tool's own phrasing, e.g. "Opening {target}" -> "Opening Spotify"
+            return _format_ack(ack, call.arguments).rstrip(".")
+        return call.name.replace("_", " ").capitalize()
 
     def _set_delivery(self, mode: str) -> None:
         """Tell the LLM whether this turn's reply is spoken (voice) or shown (chat).
@@ -804,7 +827,8 @@ class Orchestrator:
         self._transcript.user(command, transcription.confidence)
 
         self._sm.transition(State.PLANNING)
-        self._acknowledged = False  # reset per turn; _execute may speak a filler
+        self._step_index = 0
+        self._last_spoken_ack = ""
         self._dismissed = False  # reset per turn; set if the dismiss tool runs
         self._set_delivery("voice")  # this reply is spoken
         started = time.perf_counter()
@@ -871,7 +895,8 @@ class Orchestrator:
             # Force the state (the voice loop, paused in chat mode, may have left the
             # machine in LISTENING) — go straight to "thinking" for a typed turn.
             self._sm.reset(State.PLANNING)
-            self._acknowledged = False
+            self._step_index = 0
+            self._last_spoken_ack = ""
             self._dismissed = False
             self._set_delivery("chat")  # this reply is shown as text, not spoken
             started = time.perf_counter()

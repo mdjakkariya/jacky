@@ -113,6 +113,9 @@ def serve(settings: Settings | None = None) -> None:
         # no longer leaves a stray card lingering in an otherwise-empty chat drawer.
         bus.publish_choices(title, items, chat=_is_chat())
 
+    def publish_step(index: int, tool: str, label: str, status: str) -> None:
+        bus.publish_step(index, tool, label, status)
+
     orchestrator = build(
         settings,
         on_state=make_state_listener(bus, is_chat=_is_chat),
@@ -124,6 +127,7 @@ def serve(settings: Settings | None = None) -> None:
         poll_click=inbox.take,
         on_context=publish_context,
         on_choices=publish_choices,
+        on_step=publish_step,
     )
     holder["orch"] = orchestrator
     thread = threading.Thread(target=orchestrator.run, name="engine", daemon=True)
