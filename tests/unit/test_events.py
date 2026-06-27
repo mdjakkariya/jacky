@@ -108,7 +108,27 @@ def test_publish_context_carries_pct_and_dev_flag() -> None:
         "cache_write": 1_000,
         "turn_in": 3_426,
         "turn_out": 23,
+        "price": None,  # absent from info -> None (UI hides the row)
     }
+
+
+def test_publish_context_carries_session_price() -> None:
+    bus = EventBus()
+    seen: list[dict[str, object]] = []
+    bus.subscribe(seen.append)
+    bus.publish_context(
+        {"used": 50_000, "window": 200_000, "model": "claude-haiku-4-5", "price": 0.0123},
+    )
+    assert seen[-1]["price"] == 0.0123
+
+
+def test_publish_context_price_defaults_to_none_when_absent() -> None:
+    # Local (Ollama) reports no price; the wire carries None so the cost row hides.
+    bus = EventBus()
+    seen: list[dict[str, object]] = []
+    bus.subscribe(seen.append)
+    bus.publish_context({"used": 10, "window": 100})
+    assert seen[-1]["price"] is None
 
 
 def test_publish_choices_carries_items_and_chat_mode() -> None:

@@ -152,7 +152,9 @@ class ContextEvent:
     """Per-session context-window usage, for the chat meter.
 
     ``used`` is the real prompt size (input + cached tokens), ``window`` the model's
-    limit. ``dev`` gates the detailed breakdown to dev builds. Sent after each turn.
+    limit. ``price`` is the estimated USD cost of this session (cloud only); ``None``
+    for local models or when the cloud model has no list price, so the UI hides the
+    cost row. ``dev`` gates the detailed breakdown to dev builds. Sent after each turn.
     """
 
     used: int
@@ -163,6 +165,7 @@ class ContextEvent:
     cache_write: int | None = None
     turn_in: int = 0
     turn_out: int = 0
+    price: float | None = None
 
     def message(self) -> dict[str, object]:
         """Serialize to the wire shape clients consume."""
@@ -178,6 +181,7 @@ class ContextEvent:
             "cache_write": self.cache_write,
             "turn_in": self.turn_in,
             "turn_out": self.turn_out,
+            "price": self.price,
         }
 
 
@@ -363,8 +367,9 @@ class EventBus:
         """Broadcast this turn's context-window usage (drives the chat meter).
 
         ``info`` is the model's :meth:`context_usage` payload: used, window, model,
-        and (cloud only) cache_read / cache_write.
+        (cloud only) cache_read / cache_write, and (cloud only) price.
         """
+        price = info.get("price")
         self._emit(
             ContextEvent(
                 used=int(info.get("used", 0) or 0),
@@ -375,6 +380,7 @@ class EventBus:
                 cache_write=info.get("cache_write"),
                 turn_in=int(info.get("turn_in", 0) or 0),
                 turn_out=int(info.get("turn_out", 0) or 0),
+                price=float(price) if price is not None else None,
             ).message()
         )
 

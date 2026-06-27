@@ -452,6 +452,58 @@ def test_estimate_cost_usd_unknown_model_returns_none() -> None:
     assert estimate_cost_usd("some-future-model", 100, 100) is None
 
 
+def test_context_usage_reports_session_price_for_priced_model() -> None:
+    # Default model (claude-haiku-4-5) is in the pricing table: 1M in @ $1 + 1M out @ $5 = $6.
+    resp = SimpleNamespace(
+        content=[_block(type="text", text="Hi.")],
+        usage=SimpleNamespace(input_tokens=1_000_000, output_tokens=1_000_000),
+    )
+    model = AnthropicLanguageModel(
+        Settings(llm_provider="anthropic"), _registry(), client=FakeClient([resp])
+    )
+    model.run_turn("hi", lambda c: ToolResult(name=c.name, content=""))
+    usage = model.context_usage()
+    assert usage is not None
+    assert usage["price"] == 6.0
+
+
+def test_context_usage_price_is_none_for_unpriced_model() -> None:
+    # An unknown model has no list price: report None (the UI hides the row) rather
+    # than a misleading $0.00.
+    resp = SimpleNamespace(
+        content=[_block(type="text", text="Hi.")],
+        usage=SimpleNamespace(input_tokens=100, output_tokens=8),
+    )
+    model = AnthropicLanguageModel(
+        Settings(llm_provider="anthropic", anthropic_model="some-future-model"),
+        _registry(),
+        client=FakeClient([resp]),
+    )
+    model.run_turn("hi", lambda c: ToolResult(name=c.name, content=""))
+    usage = model.context_usage()
+    assert usage is not None
+    assert usage["price"] is None
+
+
+def test_session_price_resets_on_new_session() -> None:
+    # "Price of the current session" must start fresh on New chat, not carry over.
+    def _resp() -> SimpleNamespace:
+        return SimpleNamespace(
+            content=[_block(type="text", text="Hi.")],
+            usage=SimpleNamespace(input_tokens=1_000_000, output_tokens=1_000_000),
+        )
+
+    model = AnthropicLanguageModel(
+        Settings(llm_provider="anthropic"), _registry(), client=FakeClient([_resp(), _resp()])
+    )
+    model.run_turn("hi", lambda c: ToolResult(name=c.name, content=""))
+    model.new_session()
+    model.run_turn("hi again", lambda c: ToolResult(name=c.name, content=""))
+    usage = model.context_usage()
+    assert usage is not None
+    assert usage["price"] == 6.0  # one turn's cost, not two accumulated
+
+
 def test_run_turn_accumulates_token_usage() -> None:
     resp = SimpleNamespace(
         content=[_block(type="text", text="Hi.")],
