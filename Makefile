@@ -2,7 +2,7 @@
 # First time:  make setup
 
 .DEFAULT_GOAL := help
-.PHONY: help setup install lint format typecheck test check run hooks clean release release-check changelog changelog-preview package-orb publish-orb freeze bundle voice
+.PHONY: help setup install lint format typecheck test ui-test check run hooks clean release release-check changelog changelog-preview package-orb publish-orb freeze bundle voice
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) \
@@ -30,6 +30,10 @@ typecheck: ## Static type-check with mypy
 
 test: ## Run the test suite with coverage
 	uv run pytest
+
+ui-test: ## Run the UI unit tests (Vitest + happy-dom; dev-only, needs Node ≥ 20)
+	npm --prefix ui install
+	npm --prefix ui test
 
 check: ## Everything CI runs: lint + format check + types + tests
 	uv run ruff check .
