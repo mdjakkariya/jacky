@@ -209,6 +209,31 @@ class ChoicesEvent:
 
 
 @dataclass(frozen=True, slots=True)
+class StepEvent:
+    """One tool step within a turn — for the chat drawer's live progress trace.
+
+    ``status`` is ``"running"`` (emitted before the tool runs), then ``"done"`` or
+    ``"failed"`` once the gate returns. ``index`` is the step's position in the
+    current turn (0-based) so a client can update the same row in place.
+    """
+
+    index: int
+    tool: str
+    label: str
+    status: str
+
+    def message(self) -> dict[str, object]:
+        """Serialize to the wire shape clients consume."""
+        return {
+            "type": "step",
+            "index": self.index,
+            "tool": self.tool,
+            "label": self.label,
+            "status": self.status,
+        }
+
+
+@dataclass(frozen=True, slots=True)
 class VoiceDownloadEvent:
     """Progress of the on-demand voice-model download (drives the Settings bar).
 
@@ -349,6 +374,10 @@ class EventBus:
     def publish_choices(self, title: str, items: list[dict[str, Any]], chat: bool = True) -> None:
         """Broadcast a set of selectable actions for the chat drawer to render."""
         self._emit(ChoicesEvent(title, items, chat=chat).message())
+
+    def publish_step(self, index: int, tool: str, label: str, status: str) -> None:
+        """Broadcast a tool-step update (running/done/failed) for the chat trace."""
+        self._emit(StepEvent(index, tool, label, status).message())
 
     def _emit(self, message: dict[str, object]) -> None:
         with self._lock:
