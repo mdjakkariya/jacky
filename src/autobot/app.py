@@ -308,6 +308,7 @@ def build(
     poll_click: Callable[[], str | None] | None = None,
     on_context: Callable[[dict[str, object]], None] | None = None,
     on_choices: ChoicesSink | None = None,
+    on_step: Callable[[int, str, str, str], None] | None = None,
 ) -> Orchestrator:
     """Compose a fully wired :class:`Orchestrator`.
 
@@ -338,6 +339,9 @@ def build(
         on_choices: Optional sink (title, items) so tools can surface clickable
             actions in the chat drawer; the daemon wires it to the bus's
             ``publish_choices``. Passed to the file tools for search results.
+        on_step: Optional sink (index, tool, label, status) fed once per tool step
+            (running, then done/failed), so the chat drawer can show a live step
+            trace; the daemon wires it to the bus's ``publish_step``.
 
     Returns:
         A ready-to-run orchestrator. Constructing it loads the STT model, opens
@@ -534,6 +538,7 @@ def build(
         on_state=on_state or _print_transition,
         memory=memory,
         on_context=on_context,
+        on_step=on_step,
         # Re-show the orb when a voice turn addresses Jack (it may be hidden).
         on_show=(lambda: on_visibility(True)) if on_visibility is not None else None,
         # Free the mic (and stop macOS ducking other audio) when switching to chat;

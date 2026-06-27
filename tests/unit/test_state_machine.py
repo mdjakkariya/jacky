@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import itertools
+
 import numpy as np
 import pytest
 
@@ -808,3 +810,71 @@ def test_ack_phrase_maps_risk_to_the_right_pool() -> None:
     assert _ack_phrase(Risk.WRITE) in _CONFIRMING_ACKS
     assert _ack_phrase(Risk.DESTRUCTIVE) in _CONFIRMING_ACKS
     assert _ack_phrase(None) in _THINKING_ACKS  # unknown tool -> thinking
+
+
+def test_chat_turn_emits_running_then_done_step() -> None:
+    from autobot.orchestrator.wake_gate import PassThroughGate
+    from autobot.tts.null_tts import NullTTS
+
+    steps: list[tuple[int, str, str, str]] = []
+    orch = Orchestrator(
+        settings=Settings(interaction_mode="chat"),
+        audio=_FakeAudio(),
+        stt=_FakeSTT("create a file"),
+        llm=_ToolingLLM(),
+        gate=_RecordingGate(),  # type: ignore[arg-type]
+        wake_gate=PassThroughGate(),
+        tts=NullTTS(),
+        on_step=lambda i, tool, label, status: steps.append((i, tool, label, status)),
+    )
+    orch.run_text_turn("create a file")
+    # A typed (chat) turn drives the chat-drawer trace: running step then done, same index.
+    assert (0, "create_file", "Create file", "running") in steps
+    assert (0, "create_file", "Create file", "done") in steps
+
+
+def test_voice_turn_does_not_emit_steps_to_chat_trace() -> None:
+    # The step trace is a chat-drawer surface; a voice turn surfaces via spoken cues,
+    # so it must NOT emit step events — otherwise a voice turn's trace lingers in the
+    # chat drawer (nothing calls clearSteps for a voice turn) and stale rows pile up.
+    from autobot.orchestrator.wake_gate import PassThroughGate
+    from autobot.tts.null_tts import NullTTS
+
+    steps: list[tuple[int, str, str, str]] = []
+    orch = Orchestrator(
+        settings=Settings(interaction_mode="voice"),
+        audio=_FakeAudio(),
+        stt=_FakeSTT("create a file"),
+        llm=_ToolingLLM(),
+        gate=_RecordingGate(),  # type: ignore[arg-type]
+        wake_gate=PassThroughGate(),
+        tts=NullTTS(),
+        on_step=lambda i, tool, label, status: steps.append((i, tool, label, status)),
+    )
+    orch.run_once()
+    assert steps == []  # voice turns surface via spoken cues, not the chat trace
+
+
+def test_voice_cue_dedupes_repeated_phrases_within_a_turn() -> None:
+    from autobot.orchestrator.wake_gate import PassThroughGate
+
+    class _TwoToolLLM:
+        def run_turn(self, user_text: str, execute) -> str:  # type: ignore[no-untyped-def]
+            execute(ToolCall(name="create_file", arguments={"path": "a"}))
+            execute(ToolCall(name="create_file", arguments={"path": "b"}))
+            return "done"
+
+    tts = _RecordingTTS()
+    orch = Orchestrator(
+        settings=Settings(interaction_mode="voice", speak_acknowledgements=True),
+        audio=_FakeAudio(),
+        stt=_FakeSTT("make two files"),
+        llm=_TwoToolLLM(),
+        gate=_RecordingGate(),  # type: ignore[arg-type]
+        wake_gate=PassThroughGate(),
+        tts=tts,
+    )
+    orch.run_once()
+    # Two identical-tool steps must not speak the same cue twice back-to-back.
+    cues = tts.spoken[:-1]  # drop the final reply ("done")
+    assert all(a != b for a, b in itertools.pairwise(cues))

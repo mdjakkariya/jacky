@@ -197,3 +197,29 @@ def test_multiple_subscribers_each_receive_events() -> None:
     bus.publish_state(OrbState.TALKING)
 
     assert a == b == [{"type": "state", "value": "talking"}]
+
+
+def test_publish_step_emits_running_then_done() -> None:
+    from autobot.core.events import EventBus
+
+    bus = EventBus()
+    seen: list[dict[str, object]] = []
+    bus.subscribe(seen.append)
+    bus.publish_step(0, "search_files", "Searching files", "running")
+    bus.publish_step(0, "search_files", "Searching files", "done")
+    assert seen == [
+        {
+            "type": "step",
+            "index": 0,
+            "tool": "search_files",
+            "label": "Searching files",
+            "status": "running",
+        },
+        {
+            "type": "step",
+            "index": 0,
+            "tool": "search_files",
+            "label": "Searching files",
+            "status": "done",
+        },
+    ]

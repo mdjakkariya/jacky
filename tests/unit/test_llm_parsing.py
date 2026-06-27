@@ -30,6 +30,15 @@ def test_system_prompt_is_mode_aware() -> None:
     assert "You are Jack" in voice and "You are Jack" in chat
 
 
+def test_system_prompt_teaches_multi_step_and_stopping() -> None:
+    from autobot.llm.ollama_llm import system_prompt
+
+    text = system_prompt("chat").lower()
+    assert "several steps" in text  # encourages chaining within a turn
+    assert "final answer" in text  # tells it to stop once it has enough
+    assert "failed" in text  # don't repeat a call that already failed
+
+
 def test_normalize_dict_shaped_message() -> None:
     msg = {
         "role": "assistant",
