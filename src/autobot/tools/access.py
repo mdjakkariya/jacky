@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import json
 import threading
+from collections.abc import Callable
 from dataclasses import dataclass
 from enum import IntEnum
 from pathlib import Path
@@ -85,12 +86,20 @@ def _is_denied(resolved: Path) -> bool:
 class AccessPolicy:
     """Deny-by-default allowlist of granted roots, shared by all file tools."""
 
-    def __init__(self, store_path: str | Path, workspace_root: str | Path) -> None:
+    def __init__(
+        self,
+        store_path: str | Path,
+        workspace_root: str | Path,
+        on_cwd_change: Callable[[Path], None] | None = None,
+    ) -> None:
         self._store = Path(store_path).expanduser()
-        # The workspace is always available read-write; not persisted.
+        # The workspace is always available read-write and is the default cwd.
         self._workspace = Path(workspace_root).expanduser().resolve()
+        self._workspace.mkdir(parents=True, exist_ok=True)  # was the Sandbox's job
+        self._on_cwd_change = on_cwd_change
         self._lock = threading.RLock()
         self._grants: dict[Path, Mode] = {}
+        self._cwd = self._workspace
         self._load()
 
     # --- persistence ------------------------------------------------------
@@ -106,16 +115,24 @@ class AccessPolicy:
             except (KeyError, ValueError):
                 continue
             self._grants[path] = mode
+        saved = data.get("cwd")
+        if isinstance(saved, str):
+            cand = Path(saved).expanduser().resolve()
+            # Only restore a cwd that still exists and is covered by a write grant
+            # (the workspace always is); otherwise keep the default workspace.
+            if cand.is_dir() and self._covered(cand, Mode.WRITE):
+                self._cwd = cand
 
     def _save(self) -> None:
         payload = {
-            "grants": [{"path": str(p), "mode": m.name.lower()} for p, m in self._grants.items()]
+            "cwd": str(self._cwd),
+            "grants": [{"path": str(p), "mode": m.name.lower()} for p, m in self._grants.items()],
         }
         try:
             self._store.parent.mkdir(parents=True, exist_ok=True)
             self._store.write_text(json.dumps(payload, indent=2), encoding="utf-8")
         except OSError as exc:  # never crash a turn over a save failure
-            _log.warning("could not persist access grants: %s", exc)
+            _log.warning("could not persist access state: %s", exc)
 
     # --- queries / mutations ---------------------------------------------
     def _roots(self) -> dict[Path, Mode]:
@@ -127,6 +144,51 @@ class AccessPolicy:
     @staticmethod
     def _within(path: Path, root: Path) -> bool:
         return path == root or root in path.parents
+
+    def _covered(self, resolved: Path, need: Mode) -> bool:
+        """Whether ``resolved`` is inside a granted root with at least ``need`` mode."""
+        best: Mode | None = None
+        for root, mode in self._roots().items():
+            if self._within(resolved, root):
+                best = mode if best is None else max(best, mode)
+        return best is not None and best >= need
+
+    @property
+    def cwd(self) -> Path:
+        """The active working directory; relative paths resolve against it."""
+        with self._lock:
+            return self._cwd
+
+    def resolve(self, path: str | Path) -> Path:
+        """*Where*, not *whether*: relative paths join onto the cwd; then normalize.
+
+        Expands ``~``, resolves symlinks, and collapses ``..``. Does NOT check grants
+        (callers run :meth:`check` for that, so they can prompt on ``NeedsAccessError``).
+        """
+        p = Path(path).expanduser()
+        if not p.is_absolute():
+            p = self.cwd / p
+        return p.resolve()
+
+    def set_cwd(self, path: str | Path) -> Path:
+        """Set the active folder. Refuses a denylisted path; needs a write grant.
+
+        Raises:
+            AccessDeniedError: the path is on the secret denylist.
+            NeedsAccessError: no write grant covers it (so the caller can prompt).
+        """
+        target = Path(path).expanduser().resolve()
+        if _is_denied(target):
+            raise AccessDeniedError(f"{target} is a protected location")
+        if not self._covered(target, Mode.WRITE):
+            raise NeedsAccessError(target, Mode.WRITE)
+        with self._lock:
+            self._cwd = target
+            self._save()
+        _log.info("active folder set to %s", target)
+        if self._on_cwd_change is not None:
+            self._on_cwd_change(target)
+        return target
 
     def check(self, path: str | Path, write: bool = False) -> Path:
         """Resolve ``path`` and confirm it's allowed for the requested op.
@@ -146,11 +208,7 @@ class AccessPolicy:
         resolved = Path(path).expanduser().resolve()
         if _is_denied(resolved):
             raise AccessDeniedError(f"{resolved} is a protected location")
-        best: Mode | None = None
-        for root, mode in self._roots().items():
-            if self._within(resolved, root):
-                best = mode if best is None else max(best, mode)
-        if best is not None and best >= need:
+        if self._covered(resolved, need):
             return resolved
         # Ask about the containing folder (a file's parent, or the dir itself).
         folder = resolved if resolved.is_dir() else resolved.parent
@@ -237,9 +295,10 @@ class AccessBroker:
         self._confirmer = confirmer
 
     def ensure(self, path: str | Path, write: bool = False) -> Path:
-        """Return the resolved path if allowed, prompting for a grant if needed."""
+        """Return the resolved (cwd-relative) path if allowed, prompting if needed."""
+        resolved = self._policy.resolve(path)  # join relative onto the active folder
         try:
-            return self._policy.check(path, write)
+            return self._policy.check(resolved, write)
         except NeedsAccessError as na:
             folder = _tilde(na.folder)  # shorter, friendlier than the absolute path
             # Reads naturally as Jack's own reply if the turn ends here (the loop's
@@ -260,4 +319,4 @@ class AccessBroker:
                 if choice not in ("read", "write"):
                     raise PermissionError(denied) from na
                 self._policy.grant(na.folder, write=(choice == "write"))
-            return self._policy.check(path, write)
+            return self._policy.check(resolved, write)
