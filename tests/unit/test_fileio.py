@@ -9,8 +9,10 @@ from autobot.tools.fileio import (
     copy_file_to_clipboard,
     edit_file,
     read_file_text,
+    register_file_io_tools,
     write_file,
 )
+from autobot.tools.registry import ToolRegistry
 
 
 class _FakeConfirmer:
@@ -108,3 +110,68 @@ def test_edit_file_missing_text_changes_nothing(tmp_path: Path) -> None:
     out = edit_file(str(f), "absent", "x", _broker(tmp_path))
     assert f.read_text() == "unchanged"
     assert "couldn't find that text" in out.lower()
+
+
+def _registry_with_fileio(tmp_path: Path) -> ToolRegistry:
+    """Build a ToolRegistry with the file-I/O tools registered."""
+    reg = ToolRegistry()
+    register_file_io_tools(reg, _broker(tmp_path))
+    return reg
+
+
+def test_write_file_handler_without_content_returns_message(tmp_path: Path) -> None:
+    """Calling the registered write_file handler with only path must NOT raise.
+
+    Before the lambda-default fix this raised TypeError; the handler must now
+    return a clear, actionable message so the model knows what to add.
+    """
+    reg = _registry_with_fileio(tmp_path)
+    spec = reg.get("write_file")
+    assert spec is not None
+    out = spec.handler(path="notes.txt")  # no content arg
+    assert isinstance(out, str)
+    assert "content" in out.lower() or "text to write" in out.lower()
+
+
+def test_write_file_handler_with_content_writes(tmp_path: Path) -> None:
+    """Calling the registered write_file handler with path + content writes the file."""
+    target = tmp_path / "notes.txt"
+    reg = _registry_with_fileio(tmp_path)
+    spec = reg.get("write_file")
+    assert spec is not None
+    out = spec.handler(path=str(target), content="hello world")
+    assert isinstance(out, str)
+    assert "wrote" in out.lower()
+    assert target.read_text() == "hello world"
+
+
+def test_read_file_text_handler_without_path_returns_message(tmp_path: Path) -> None:
+    """read_file_text with no path must not raise; it asks which file to read."""
+    spec = _registry_with_fileio(tmp_path).get("read_file_text")
+    assert spec is not None
+    out = spec.handler()  # no path arg
+    assert isinstance(out, str) and "path" in out.lower()
+
+
+def test_copy_file_to_clipboard_handler_without_path_returns_message(tmp_path: Path) -> None:
+    """copy_file_to_clipboard with no path must not raise; it asks which file to copy."""
+    spec = _registry_with_fileio(tmp_path).get("copy_file_to_clipboard")
+    assert spec is not None
+    out = spec.handler()  # no path arg
+    assert isinstance(out, str) and "path" in out.lower()
+
+
+def test_write_file_handler_without_path_returns_message(tmp_path: Path) -> None:
+    """write_file with no path must not raise; it asks where to save."""
+    spec = _registry_with_fileio(tmp_path).get("write_file")
+    assert spec is not None
+    out = spec.handler()  # no path, no content
+    assert isinstance(out, str) and "path" in out.lower()
+
+
+def test_edit_file_handler_without_path_returns_message(tmp_path: Path) -> None:
+    """edit_file with no path must not raise; it asks which file to edit."""
+    spec = _registry_with_fileio(tmp_path).get("edit_file")
+    assert spec is not None
+    out = spec.handler()  # no path/find/replace
+    assert isinstance(out, str) and "path" in out.lower()
