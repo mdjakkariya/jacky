@@ -1,0 +1,14 @@
+# Coverage gate — keep total coverage from sliding, and require new code to be tested.
+# Docs: https://docs.codecov.com/docs/codecov-yaml
+coverage:
+  status:
+    project:
+      default:
+        target: auto        # compare to the base commit; total coverage must not drop
+        threshold: 1%        # tolerate <=1% wobble
+    patch:
+      default:
+        target: 80%          # new/changed lines must be >=80% covered
+comment:
+  layout: "reach, diff, flags, files"
+  require_changes: false

@@ -22,7 +22,9 @@ jobs:
         run: uv python install 3.11
 
       - name: Sync dependencies
-        run: uv sync --extra dev
+        # `daemon` (fastapi) is needed so the daemon-server tests run in CI and their
+        # coverage counts; without it those tests skip and server.py shows 0% covered.
+        run: uv sync --extra dev --extra daemon
 
       - name: Lint (ruff)
         run: uv run ruff check .

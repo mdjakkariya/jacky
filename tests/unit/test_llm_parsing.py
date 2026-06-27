@@ -232,3 +232,29 @@ def test_system_prompt_mentions_active_folder() -> None:
     from autobot.llm.ollama_llm import system_prompt
 
     assert "active folder" in system_prompt("chat").lower()
+
+
+def test_active_folder_line_returns_path_when_policy_set(tmp_path: object) -> None:
+    from pathlib import Path
+
+    from autobot.llm.ollama_llm import active_folder_line
+    from autobot.tools.access import AccessPolicy, set_active_policy
+
+    tmp = Path(str(tmp_path))
+    ws = tmp / "workspace"
+    pol = AccessPolicy(tmp / "access.json", ws)
+    set_active_policy(pol)
+    try:
+        line = active_folder_line()
+        assert line.startswith("Active folder: ")
+        assert str(ws.resolve()) in line
+    finally:
+        set_active_policy(None)
+
+
+def test_active_folder_line_returns_empty_when_no_policy() -> None:
+    from autobot.llm.ollama_llm import active_folder_line
+    from autobot.tools.access import set_active_policy
+
+    set_active_policy(None)
+    assert active_folder_line() == ""

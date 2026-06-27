@@ -137,3 +137,118 @@ def test_create_file_defaults_to_workspace(tmp_path: Path) -> None:
     tools = FileTools(AccessBroker(pol, _Yes()))
     tools.create_file("a.txt", "x")
     assert (ws / "a.txt").read_text() == "x"  # default behavior unchanged
+
+
+# --- error / denied branches (new coverage) ----------------------------------
+
+
+class _No:
+    """Stub confirmer that always declines."""
+
+    def confirm(self, prompt: str, kind: str = "danger") -> bool:
+        return False
+
+    def choose(
+        self,
+        prompt: str,
+        options: list[dict[str, str]],
+        kind: str = "read",
+        default: str = "read",
+    ) -> str:
+        return ""
+
+
+def _denied_broker(tmp_path: Path) -> tuple[AccessBroker, AccessPolicy]:
+    """A broker whose confirmer always declines; cwd is an ungranted external folder.
+
+    The cwd is set to ``outside/`` (never granted) so any relative path resolves
+    outside the workspace and the broker must ask the user — who says no (_No).
+    """
+    ws = tmp_path / "ws"
+    pol = AccessPolicy(tmp_path / "access.json", ws)
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    # Grant temporarily so set_cwd succeeds, then revoke so broker must ask and _No declines.
+    pol.grant(outside, write=True)
+    pol.set_cwd(outside)
+    pol.revoke(outside)
+    broker = AccessBroker(pol, _No())
+    return broker, pol
+
+
+def test_create_file_denied_returns_message(tmp_path: Path) -> None:
+    broker, _pol = _denied_broker(tmp_path)
+    tools = FileTools(broker)
+    msg = tools.create_file("notes.txt", "hi")
+    assert msg  # broker returns a user-friendly string, not an exception
+    # The denial message from AccessBroker mentions access/grant.
+    assert "access" in msg.lower() or "couldn't" in msg.lower() or "don't" in msg.lower()
+
+
+def test_read_file_denied_returns_message(tmp_path: Path) -> None:
+    broker, _pol = _denied_broker(tmp_path)
+    tools = FileTools(broker)
+    msg = tools.read_file("notes.txt")
+    assert msg
+    assert "access" in msg.lower() or "couldn't" in msg.lower() or "don't" in msg.lower()
+
+
+def test_read_file_on_directory_returns_folder_message(tmp_path: Path) -> None:
+    tools = _tools(tmp_path)
+    # Create a sub-directory inside the workspace; reading it should say "folder".
+    subdir = tmp_path / "ws" / "subdir"
+    subdir.mkdir(parents=True)
+    msg = tools.read_file("subdir")
+    assert "folder" in msg
+
+
+def test_list_files_on_missing_subdir(tmp_path: Path) -> None:
+    tools = _tools(tmp_path)
+    msg = tools.list_files("nonexistent_subdir")
+    assert "not found" in msg
+
+
+def test_list_files_on_a_file_returns_file_info(tmp_path: Path) -> None:
+    tools = _tools(tmp_path)
+    tools.create_file("info.txt", "data")
+    # Pass the file name as the subdir argument — broker resolves it to a file path.
+    msg = tools.list_files("info.txt")
+    assert "info.txt" in msg and "exists" in msg
+
+
+def test_list_files_denied_returns_message(tmp_path: Path) -> None:
+    broker, _pol = _denied_broker(tmp_path)
+    tools = FileTools(broker)
+    msg = tools.list_files()
+    assert msg
+    assert "access" in msg.lower() or "couldn't" in msg.lower() or "don't" in msg.lower()
+
+
+def test_move_file_missing_source_returns_message(tmp_path: Path) -> None:
+    tools = _tools(tmp_path)
+    msg = tools.move_file("ghost.txt", "dest.txt")
+    assert "not found" in msg or "source" in msg
+
+
+def test_move_file_denied_returns_message(tmp_path: Path) -> None:
+    broker, _pol = _denied_broker(tmp_path)
+    tools = FileTools(broker)
+    msg = tools.move_file("a.txt", "b.txt")
+    assert msg
+    assert "access" in msg.lower() or "couldn't" in msg.lower() or "don't" in msg.lower()
+
+
+def test_delete_file_denied_returns_message(tmp_path: Path) -> None:
+    broker, _pol = _denied_broker(tmp_path)
+    tools = FileTools(broker)
+    msg = tools.delete_file("notes.txt")
+    assert msg
+    assert "access" in msg.lower() or "couldn't" in msg.lower() or "don't" in msg.lower()
+
+
+def test_delete_directory_is_refused(tmp_path: Path) -> None:
+    tools = _tools(tmp_path)
+    subdir = tmp_path / "ws" / "keep"
+    subdir.mkdir(parents=True)
+    msg = tools.delete_file("keep")
+    assert "refusing" in msg or "folder" in msg
