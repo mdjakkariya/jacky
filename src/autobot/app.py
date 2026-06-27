@@ -30,7 +30,6 @@ from autobot.tools.builtin import register_builtins
 from autobot.tools.filesystem import register_filesystem_tools
 from autobot.tools.permission import Confirmer, PermissionGate
 from autobot.tools.registry import ToolRegistry
-from autobot.tools.sandbox import Sandbox
 
 if TYPE_CHECKING:
     from autobot.io.listening import FrameSource
@@ -359,15 +358,16 @@ def build(
     )
     print(f"[log] writing debug log to {log_path}")
 
-    # Tool catalog: read-only built-ins plus the sandboxed acting tools.
+    # Tool catalog: read-only built-ins; filesystem tools wired after the broker is built.
     registry = ToolRegistry()
     register_builtins(registry)
-    sandbox = Sandbox(settings.sandbox_dir)
-    register_filesystem_tools(registry, sandbox)
-    # Central, grant-based access policy shared by the broad file tools (the workspace
-    # is always granted read-write). Tools register after the confirmer is built so a
-    # NeedsAccess prompt can reuse it.
-    access_policy = AccessPolicy(settings.access_store, sandbox.root)
+    # Central, grant-based access policy shared by all file tools (the workspace is
+    # always granted read-write). The policy provides the active folder (cwd) so
+    # relative paths from the filesystem tools land in the right place.
+    from pathlib import Path as _Path
+
+    workspace_root = _Path(settings.sandbox_dir).expanduser().resolve()
+    access_policy = AccessPolicy(settings.access_store, workspace_root, on_cwd_change=None)
     set_active_policy(access_policy)  # so the Settings access endpoints can manage grants
     if settings.allow_app_control:
         # macOS app lifecycle by voice; gated like everything else (uninstall
@@ -504,13 +504,16 @@ def build(
         on_permission_needed=permissions.open_pane,
     )
 
+    from autobot.tools.access import AccessBroker
+
+    broker = AccessBroker(access_policy, confirmer)
+    register_filesystem_tools(registry, broker)  # now active-folder aware
+
     if settings.allow_file_io:
         # Broad read/copy/write/edit, scoped by the access policy; first use of a new
         # folder asks for a grant via the same confirmer the gate uses.
-        from autobot.tools.access import AccessBroker
         from autobot.tools.fileio import register_file_io_tools
 
-        broker = AccessBroker(access_policy, confirmer)
         register_file_io_tools(registry, broker)
         log.info("file I/O ENABLED (read/copy/write/edit, access-gated)")
 
