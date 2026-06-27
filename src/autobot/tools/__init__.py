@@ -19,7 +19,6 @@ from autobot.tools.permission import (
     TerminalConfirmer,
 )
 from autobot.tools.registry import ToolRegistry, ToolSpec, default_registry
-from autobot.tools.sandbox import Sandbox, SandboxError
 
 __all__ = [
     "AlwaysAllow",
@@ -28,8 +27,6 @@ __all__ = [
     "Confirmer",
     "FileTools",
     "PermissionGate",
-    "Sandbox",
-    "SandboxError",
     "TerminalConfirmer",
     "ToolRegistry",
     "ToolSpec",

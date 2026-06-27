@@ -236,3 +236,68 @@ def test_on_change_fires_on_settings_save(tmp_path: object) -> None:
     client = TestClient(app)
     client.post("/settings", json={"llm_provider": "anthropic"})
     assert calls["n"] == 1  # engine notified to reload, no restart needed
+
+
+def test_get_workspace_reports_cwd(tmp_path: object) -> None:
+    from pathlib import Path
+
+    from autobot.tools.access import AccessPolicy, set_active_policy
+
+    base = Path(str(tmp_path))
+    ws = base / "workspace"
+    ws.mkdir()
+    set_active_policy(AccessPolicy(base / "access.json", ws))
+    try:
+        resp = TestClient(create_app(EventBus())).get("/workspace")
+        assert resp.status_code == 200
+        body = resp.json()
+        assert "path" in body and "name" in body and "grants" in body
+        assert body["name"] == "workspace"
+        assert body["path"] == str(ws.resolve())
+        assert isinstance(body["grants"], list)
+    finally:
+        set_active_policy(None)
+
+
+def test_get_workspace_returns_empty_when_no_policy() -> None:
+    resp = TestClient(create_app(EventBus())).get("/workspace")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body == {"path": "", "name": "", "grants": []}
+
+
+def test_post_workspace_routes_through_on_action() -> None:
+    calls: list[tuple[str, dict[str, object]]] = []
+
+    def on_action(tool: str, args: dict[str, object]) -> str:
+        calls.append((tool, args))
+        return "ok"
+
+    client = TestClient(create_app(EventBus(), on_action=on_action))
+    resp = client.post("/workspace", json={"path": "/some/dir"})
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body == {"ok": True, "result": "ok"}
+    assert calls == [("set_working_directory", {"path": "/some/dir"})]
+
+
+def test_post_workspace_fails_without_on_action() -> None:
+    resp = TestClient(create_app(EventBus())).post("/workspace", json={"path": "/some/dir"})
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["ok"] is False
+
+
+def test_ws_sends_last_workspace_on_connect() -> None:
+    bus = EventBus()
+    bus.publish_workspace("/home/user/project", "project")
+    client = TestClient(create_app(bus))
+    with client.websocket_connect("/ws") as ws:
+        state_frame = ws.receive_json()
+        assert state_frame == {"type": "state", "value": "idle"}
+        workspace_frame = ws.receive_json()
+        assert workspace_frame == {
+            "type": "workspace",
+            "path": "/home/user/project",
+            "name": "project",
+        }

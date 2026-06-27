@@ -214,6 +214,23 @@ fn reveal_in_finder(path: String) {
     }
 }
 
+/// Open a native macOS folder chooser (via AppleScript) and return the chosen POSIX
+/// path, or `None` if the user cancels. Same shell-out style as `reveal_in_finder`;
+/// no extra Tauri plugin required.
+#[tauri::command]
+fn pick_folder() -> Option<String> {
+    let out = std::process::Command::new("osascript")
+        .arg("-e")
+        .arg("POSIX path of (choose folder with prompt \"Choose a folder for Jack to work in\")")
+        .output()
+        .ok()?;
+    if !out.status.success() {
+        return None; // user cancelled (osascript exits non-zero)
+    }
+    let path = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    if path.is_empty() { None } else { Some(path) }
+}
+
 /// Dev only: wipe debug artifacts under ~/.autobot (logs, sessions, reports) for a
 /// fresh start. Leaves settings, secrets, voices, and memory untouched. The running
 /// engine keeps writing to its already-open log until it's restarted.
@@ -288,6 +305,7 @@ fn main() {
             app_version,
             open_external,
             reveal_in_finder,
+            pick_folder,
             copy_to_clipboard,
             open_chat,
             close_chat,

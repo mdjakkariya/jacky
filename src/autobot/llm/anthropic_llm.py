@@ -386,6 +386,11 @@ class AnthropicLanguageModel:
             ctx = self._memory.context()
             if ctx:
                 parts.append(ctx)
+        from autobot.llm.ollama_llm import active_folder_line
+
+        folder = active_folder_line()
+        if folder:
+            parts.append(folder)
         if self._summary:
             parts.append(f"Summary of earlier conversation: {self._summary}")
         return "\n\n".join(parts)

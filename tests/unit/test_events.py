@@ -223,3 +223,14 @@ def test_publish_step_emits_running_then_done() -> None:
             "status": "done",
         },
     ]
+
+
+def test_publish_workspace_emits_and_remembers_last() -> None:
+    from autobot.core.events import EventBus
+
+    bus = EventBus()
+    seen: list[dict[str, object]] = []
+    bus.subscribe(seen.append)
+    bus.publish_workspace("/Users/me/proj", "proj")
+    assert seen == [{"type": "workspace", "path": "/Users/me/proj", "name": "proj"}]
+    assert bus.last_workspace == {"type": "workspace", "path": "/Users/me/proj", "name": "proj"}

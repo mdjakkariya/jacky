@@ -53,6 +53,9 @@ SYSTEM_PROMPT = (
     "tool when you actually need to act or look something up; otherwise just answer. "
     "Don't repeat a call that already failed. Once you have what you need, give your "
     "final answer.\n"
+    "- You work in an ACTIVE folder (your current working directory). Create and "
+    "edit files there by default. If the user asks to save something clearly "
+    "unrelated to that folder, ask whether to save it there or pick another place.\n"
     "- Pick the tool whose description matches the user's intent. If you're unsure "
     "which the user means, ask one short question instead of guessing.\n"
     "- Acknowledgments and pleasantries ('thanks', 'okay', 'cool', 'never mind', "
@@ -98,6 +101,14 @@ def system_prompt(mode: str) -> str:
     """
     delivery = CHAT_DELIVERY if mode == "chat" else VOICE_DELIVERY
     return f"{SYSTEM_PROMPT}\n{delivery}"
+
+
+def active_folder_line() -> str:
+    """A one-line 'Active folder: <path>' for the system context, or '' if unknown."""
+    from autobot.tools.access import active_policy
+
+    pol = active_policy()
+    return f"Active folder: {pol.cwd}" if pol is not None else ""
 
 
 def _get(obj: Any, key: str) -> Any:
@@ -299,6 +310,9 @@ class OllamaLanguageModel:
             profile = self._memory.context()
             if profile:
                 messages.append({"role": "system", "content": profile})
+        folder = active_folder_line()
+        if folder:
+            messages.append({"role": "system", "content": folder})
         if self._summary:
             messages.append(
                 {"role": "system", "content": f"Summary of earlier conversation: {self._summary}"}

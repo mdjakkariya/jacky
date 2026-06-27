@@ -234,6 +234,18 @@ class StepEvent:
 
 
 @dataclass(frozen=True, slots=True)
+class WorkspaceEvent:
+    """The active folder (cwd) — for the chat drawer's folder chip."""
+
+    path: str
+    name: str
+
+    def message(self) -> dict[str, object]:
+        """Serialize to the wire shape clients consume."""
+        return {"type": "workspace", "path": self.path, "name": self.name}
+
+
+@dataclass(frozen=True, slots=True)
 class VoiceDownloadEvent:
     """Progress of the on-demand voice-model download (drives the Settings bar).
 
@@ -293,6 +305,7 @@ class EventBus:
         self._lock = threading.Lock()
         self._subscribers: list[Subscriber] = []
         self._last_state: OrbState = OrbState.IDLE
+        self._last_workspace: dict[str, object] | None = None
 
     @property
     def last_state(self) -> OrbState:
@@ -378,6 +391,19 @@ class EventBus:
     def publish_step(self, index: int, tool: str, label: str, status: str) -> None:
         """Broadcast a tool-step update (running/done/failed) for the chat trace."""
         self._emit(StepEvent(index, tool, label, status).message())
+
+    @property
+    def last_workspace(self) -> dict[str, object] | None:
+        """The most recently published workspace frame, or None."""
+        with self._lock:
+            return self._last_workspace
+
+    def publish_workspace(self, path: str, name: str) -> None:
+        """Record and broadcast the active folder (drives the chat folder chip)."""
+        msg = WorkspaceEvent(path, name).message()
+        with self._lock:
+            self._last_workspace = msg
+        self._emit(msg)
 
     def _emit(self, message: dict[str, object]) -> None:
         with self._lock:
