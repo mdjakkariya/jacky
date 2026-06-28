@@ -21,6 +21,7 @@ from collections.abc import Callable
 from typing import Protocol
 
 from autobot.logging_setup import get_logger
+from autobot.tools.system import parse_wifi_device
 
 _log = get_logger("toggles")
 
@@ -189,3 +190,33 @@ class SystemToggles:
             return f"I couldn't put the Mac to sleep: {out or 'unknown error'}"
         _log.info("sleeping")
         return "Going to sleep."
+
+    def _wifi_device(self) -> str:
+        """Resolve the Wi-Fi interface dynamically, falling back to en0."""
+        rc, out = self._run(["networksetup", "-listallhardwareports"])
+        if rc == 0:
+            dev = parse_wifi_device(out)
+            if dev:
+                return dev
+        return _WIFI_IF
+
+    def set_wifi(self, state: str) -> str:
+        """Turn Wi-Fi on, off, or toggle it. Never escalates to sudo."""
+        state = (state or "").lower()
+        dev = self._wifi_device()
+        if state == "toggle":
+            _rc, power = self._run(["networksetup", "-getairportpower", dev])
+            state = "off" if "on" in power.lower() else "on"
+        if state not in ("on", "off"):
+            return "Say 'on', 'off', or 'toggle'."
+        rc, out = self._run(["networksetup", "-setairportpower", dev, state])
+        if rc != 0:
+            low = out.lower()
+            if "admin" in low or "administrator" in low or "permission" in low or "denied" in low:
+                return (
+                    "macOS needs admin rights to toggle Wi-Fi on this Mac, so I can't do it "
+                    "automatically."
+                )
+            return f"I couldn't change Wi-Fi: {out or 'unknown error'}"
+        _log.info("wifi state=%s", state)
+        return f"Wi-Fi turned {state}."

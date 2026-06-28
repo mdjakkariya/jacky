@@ -212,3 +212,50 @@ def test_sleep_mac_calls_pmset() -> None:
 def test_sleep_mac_failure_is_friendly() -> None:
     msg = SystemToggles(FakeRunner(rc=1, out="denied")).sleep_mac()
     assert "couldn't put the Mac to sleep" in msg
+
+
+class WifiRunner:
+    """Resolves the device, optionally reports power, records set calls."""
+
+    def __init__(self, power: str = "On", set_result: tuple[int, str] = (0, "")) -> None:
+        self._power = power
+        self._set_result = set_result
+        self.calls: list[list[str]] = []
+
+    def __call__(self, args: list[str]) -> tuple[int, str]:
+        self.calls.append(args)
+        if "-listallhardwareports" in args:
+            return 0, "Hardware Port: Wi-Fi\nDevice: en0\n"
+        if "-getairportpower" in args:
+            return 0, f"Wi-Fi Power (en0): {self._power}"
+        if "-setairportpower" in args:
+            return self._set_result
+        return 0, ""
+
+
+def test_set_wifi_on() -> None:
+    runner = WifiRunner()
+    assert SystemToggles(runner).set_wifi("on") == "Wi-Fi turned on."
+    assert ["networksetup", "-setairportpower", "en0", "on"] in runner.calls
+
+
+def test_set_wifi_toggle_when_on_turns_off() -> None:
+    runner = WifiRunner(power="On")
+    assert SystemToggles(runner).set_wifi("toggle") == "Wi-Fi turned off."
+    assert ["networksetup", "-setairportpower", "en0", "off"] in runner.calls
+
+
+def test_set_wifi_never_uses_sudo() -> None:
+    runner = WifiRunner()
+    SystemToggles(runner).set_wifi("off")
+    assert all("sudo" not in arg for call in runner.calls for arg in call)
+
+
+def test_set_wifi_admin_required_is_friendly() -> None:
+    runner = WifiRunner(set_result=(1, "You must have administrator access"))
+    msg = SystemToggles(runner).set_wifi("off")
+    assert "admin" in msg.lower()
+
+
+def test_set_wifi_bad_state() -> None:
+    assert "on" in SystemToggles(WifiRunner()).set_wifi("sideways")
