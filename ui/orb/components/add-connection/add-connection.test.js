@@ -299,9 +299,10 @@ describe("Step 4 — Token path", () => {
 
     expect(daemon.addMcpServer).toHaveBeenCalledOnce();
     const descriptor = daemon.addMcpServer.mock.calls[0][0];
-    expect(descriptor.server).toBe("slack");
+    expect(descriptor.id).toBe("slack");
     expect(descriptor.transport).toBe("http");
-    expect(descriptor.auth_type).toBe("token");
+    expect(descriptor.auth).toEqual({ type: "token" });
+    expect(descriptor.egress).toBe("network");
 
     expect(daemon.mcpSetToken).toHaveBeenCalledWith("slack", "xoxb-test-token");
     expect(daemon.enableMcpServer).toHaveBeenCalledWith("slack");
@@ -384,5 +385,158 @@ describe("hideAddConnection", () => {
     expect(container.querySelector(".wizard-card")).not.toBeNull();
     hideAddConnection(container);
     expect(container.querySelector(".wizard-card")).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Descriptor contract
+// ---------------------------------------------------------------------------
+describe("Descriptor contract", () => {
+  async function buildDescriptorViaConnect(container, catalogIndex, extraSetup) {
+    showAddConnection(container, { onDone: vi.fn(), onCancel: vi.fn() });
+    const items = container.querySelectorAll(".cat-item");
+    items[catalogIndex].click();
+    container.querySelector(".btn-next").click(); // step 2
+    if (extraSetup) extraSetup(container);
+    container.querySelector(".btn-next").click(); // step 3
+    // Select token auth
+    const opts = container.querySelectorAll(".opt-item");
+    const tokenOpt = [...opts].find((o) => o.querySelector(".opt-title").textContent.toLowerCase().includes("token"));
+    tokenOpt.click();
+    container.querySelector(".btn-next").click(); // step 4
+    const tokenInput = container.querySelector("[data-field='token']");
+    tokenInput.value = "test-token";
+    container.querySelector(".btn-connect").click();
+    await new Promise((r) => setTimeout(r, 0));
+    return daemon.addMcpServer.mock.calls[0][0];
+  }
+
+  it("Slack (catalog, network) descriptor has id, nested auth.type, egress=network", async () => {
+    const container = makeContainer();
+    const descriptor = await buildDescriptorViaConnect(container, 0);
+    expect(descriptor.id).toBe("slack");
+    expect(descriptor.auth).toEqual({ type: "token" });
+    expect(descriptor.egress).toBe("network");
+    expect(descriptor.transport).toBe("http");
+  });
+
+  it("Local Files (catalog, local/stdio) descriptor has egress=local", async () => {
+    const container = makeContainer();
+    const descriptor = await buildDescriptorViaConnect(container, 2);
+    expect(descriptor.id).toBe("files");
+    expect(descriptor.egress).toBe("local");
+    expect(descriptor.transport).toBe("stdio");
+    expect(Array.isArray(descriptor.args)).toBe(true);
+    expect(typeof descriptor.env).toBe("object");
+    expect(Array.isArray(descriptor.env)).toBe(false);
+  });
+
+  it("catalog pick seeds authType from catalog entry auth field", () => {
+    const container = makeContainer();
+    showAddConnection(container, { onDone: vi.fn(), onCancel: vi.fn() });
+    // Click Slack (auth: "oauth")
+    const items = container.querySelectorAll(".cat-item");
+    items[0].click();
+    // Advance to step 3
+    container.querySelector(".btn-next").click(); // step 2
+    container.querySelector(".btn-next").click(); // step 3
+    const opts = container.querySelectorAll(".opt-item");
+    const oauthOpt = [...opts].find((o) => o.querySelector(".opt-title").textContent.toLowerCase().includes("oauth"));
+    // The OAuth option should be selected (state.authType was seeded to "oauth")
+    expect(oauthOpt.classList.contains("selected")).toBe(true);
+  });
+
+  it("Custom stdio descriptor has args as array and env as object", async () => {
+    const container = makeContainer();
+    showAddConnection(container, { onDone: vi.fn(), onCancel: vi.fn() });
+    const items = container.querySelectorAll(".cat-item");
+    items[4].click(); // Custom
+    container.querySelector(".btn-next").click(); // step 2
+    // Select stdio
+    const stdioRadio = container.querySelector("[data-transport='stdio']");
+    stdioRadio.click();
+    // Fill in command and args
+    const cmdField = container.querySelector("[data-field='command']");
+    cmdField.value = "npx my-server";
+    const argsField = container.querySelector("[data-field='args']");
+    argsField.value = "--foo bar";
+    const envField = container.querySelector("[data-field='env']");
+    envField.value = "FOO=bar\nBAZ=qux";
+    container.querySelector(".btn-next").click(); // step 3
+    // Select token auth
+    const opts = container.querySelectorAll(".opt-item");
+    const tokenOpt = [...opts].find((o) => o.querySelector(".opt-title").textContent.toLowerCase().includes("token"));
+    tokenOpt.click();
+    container.querySelector(".btn-next").click(); // step 4
+    const tokenInput = container.querySelector("[data-field='token']");
+    tokenInput.value = "test-token";
+    container.querySelector(".btn-connect").click();
+    await new Promise((r) => setTimeout(r, 0));
+    const descriptor = daemon.addMcpServer.mock.calls[0][0];
+    expect(Array.isArray(descriptor.args)).toBe(true);
+    expect(descriptor.args).toEqual(["--foo", "bar"]);
+    expect(typeof descriptor.env).toBe("object");
+    expect(Array.isArray(descriptor.env)).toBe(false);
+    expect(descriptor.env).toEqual({ FOO: "bar", BAZ: "qux" });
+    expect(descriptor.egress).toBe("local");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Step 2 gate — Custom required fields
+// ---------------------------------------------------------------------------
+describe("Step 2 gate — Custom required fields", () => {
+  function setupCustomStep2(container) {
+    showAddConnection(container, { onDone: vi.fn(), onCancel: vi.fn() });
+    const items = container.querySelectorAll(".cat-item");
+    items[4].click(); // Custom
+    container.querySelector(".btn-next").click(); // go to step 2
+  }
+
+  it("Custom HTTP with empty URL cannot advance from step 2", () => {
+    const container = makeContainer();
+    setupCustomStep2(container);
+    // HTTP is default; URL is empty — click next
+    const urlField = container.querySelector("[data-field='url']");
+    expect(urlField).not.toBeNull();
+    urlField.value = ""; // ensure empty
+    container.querySelector(".btn-next").click();
+    // Should still be on step 2
+    expect(container.querySelector("[data-step='2']")).not.toBeNull();
+    expect(container.querySelector("[data-step='3']")).toBeNull();
+  });
+
+  it("Custom HTTP with non-empty URL advances from step 2", () => {
+    const container = makeContainer();
+    setupCustomStep2(container);
+    const urlField = container.querySelector("[data-field='url']");
+    urlField.value = "https://example.com/mcp";
+    container.querySelector(".btn-next").click();
+    expect(container.querySelector("[data-step='3']")).not.toBeNull();
+  });
+
+  it("Custom stdio with empty command cannot advance from step 2", () => {
+    const container = makeContainer();
+    setupCustomStep2(container);
+    // Switch to stdio
+    const stdioRadio = container.querySelector("[data-transport='stdio']");
+    stdioRadio.click();
+    const cmdField = container.querySelector("[data-field='command']");
+    expect(cmdField).not.toBeNull();
+    cmdField.value = ""; // ensure empty
+    container.querySelector(".btn-next").click();
+    expect(container.querySelector("[data-step='2']")).not.toBeNull();
+    expect(container.querySelector("[data-step='3']")).toBeNull();
+  });
+
+  it("Custom stdio with non-empty command advances from step 2", () => {
+    const container = makeContainer();
+    setupCustomStep2(container);
+    const stdioRadio = container.querySelector("[data-transport='stdio']");
+    stdioRadio.click();
+    const cmdField = container.querySelector("[data-field='command']");
+    cmdField.value = "npx my-server";
+    container.querySelector(".btn-next").click();
+    expect(container.querySelector("[data-step='3']")).not.toBeNull();
   });
 });

@@ -136,6 +136,7 @@ function buildCatItem(entry, state) {
       state.transport = entry.transport;
       state.url = entry.url || "";
       state.command = entry.command || "";
+      state.authType = entry.auth;
     } else {
       // Reset transport for custom to allow user choice
       state.transport = "http";
@@ -210,6 +211,11 @@ function renderStep2(state, callbacks) {
     if (cmdField) state.command = cmdField.value;
     if (argsField) state.args = argsField.value;
     if (envField) state.env = envField.value;
+    // Gate: custom server must have required field filled in
+    if (isCustom) {
+      if (state.transport === "http" && !state.url.trim()) return;
+      if (state.transport === "stdio" && !state.command.trim()) return;
+    }
     callbacks.goTo(3);
   });
 
@@ -452,8 +458,8 @@ function renderTokenForm(wrap, state, callbacks) {
     try {
       const descriptor = buildDescriptor(state);
       await daemon.addMcpServer(descriptor);
-      await daemon.mcpSetToken(descriptor.server, token);
-      await daemon.enableMcpServer(descriptor.server);
+      await daemon.mcpSetToken(descriptor.id, token);
+      await daemon.enableMcpServer(descriptor.id);
       callbacks.onDone();
     } catch (e) {
       const errMsg = div("token-error");
@@ -479,20 +485,28 @@ function buildDescriptor(state) {
   const isCustom = entry && entry.custom;
   const id = isCustom ? "custom-" + Date.now() : entry.id;
   const label = isCustom ? "Custom" : entry.label;
+  const egress = isCustom ? "local" : (entry.egress ? "network" : "local");
 
   const descriptor = {
-    server: id,
+    id,
     label,
     transport: state.transport,
-    auth_type: state.authType,
+    auth: { type: state.authType },
+    egress,
   };
 
   if (state.transport === "http") {
     descriptor.url = state.url;
   } else {
     descriptor.command = state.command;
-    if (state.args) descriptor.args = state.args;
-    if (state.env) descriptor.env = state.env;
+    descriptor.args = state.args ? state.args.trim().split(/\s+/) : [];
+    const envLines = (state.env || "").split("\n");
+    descriptor.env = Object.fromEntries(
+      envLines
+        .map((l) => l.trim())
+        .filter((l) => l.includes("="))
+        .map((l) => { const i = l.indexOf("="); return [l.slice(0, i).trim(), l.slice(i + 1).trim()]; })
+    );
   }
 
   return descriptor;
