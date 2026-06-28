@@ -41,6 +41,11 @@ class ToolSpec:
     # "accessibility", "microphone". The gate refuses (and opens Settings) when it's
     # known to be missing, rather than letting the tool fail deep in AppleScript.
     requires: str | None = None
+    # True when this tool sends user data off the device (a network-egress MCP
+    # tool). Drives the UI's "↗ sends data off-device" badge and the audit egress
+    # note, and — for WRITE-or-higher tools — makes the gate confirm even below the
+    # destructive threshold (see PermissionGate, phase 2). False for all local tools.
+    network: bool = False
 
     def to_schema(self) -> dict[str, Any]:
         """Render the OpenAI/Ollama-style ``function`` schema for this tool."""

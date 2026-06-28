@@ -55,3 +55,13 @@ def test_register_rejects_duplicate_names() -> None:
 
 def test_builtin_tool_is_read_only() -> None:
     assert GET_TIME.risk is Risk.READ_ONLY
+
+
+def test_toolspec_network_defaults_false() -> None:
+    spec = ToolSpec(name="t", description="", parameters={}, handler=lambda: "")
+    assert spec.network is False
+
+
+def test_toolspec_network_can_be_set() -> None:
+    spec = ToolSpec(name="t", description="", parameters={}, handler=lambda: "", network=True)
+    assert spec.network is True
