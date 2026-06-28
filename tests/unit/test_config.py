@@ -82,3 +82,13 @@ def test_settings_is_immutable() -> None:
     settings = Settings()
     with pytest.raises(AttributeError):
         settings.llm_model = "other"  # type: ignore[misc]
+
+
+def test_allow_mcp_defaults_off() -> None:
+    assert Settings().allow_mcp is False
+
+
+def test_allow_mcp_overlays_from_file(tmp_path: Path) -> None:
+    path = tmp_path / "settings.json"
+    write_settings({"allow_mcp": True}, path)
+    assert Settings.load(path).allow_mcp is True

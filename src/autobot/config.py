@@ -174,6 +174,10 @@ class Settings:
     web_provider: str = "auto"
     web_api_url: str = "https://q.searchspace.io/v1/search"
     web_backend: str = "duckduckgo,bing,brave,google"
+    # --- MCP integration (opt-in, off-device; the third disclosed exception) ---
+    # Master gate for the whole MCP subsystem, mirroring allow_web. Off by default;
+    # individual servers are still each opt-in via ~/.autobot/mcp/servers.json.
+    allow_mcp: bool = False
     # --- daemon (Phase 3c) ---
     daemon_host: str = "127.0.0.1"
     daemon_port: int = 8765
