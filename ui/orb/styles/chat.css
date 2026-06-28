@@ -112,6 +112,12 @@
   .confirm .h { display: flex; align-items: center; gap: 6px; font-size: 12.5px; font-weight: 500; color: var(--danger); margin-bottom: 4px; }
   .confirm .b { font-size: 12.5px; color: var(--muted); line-height: 1.5; margin-bottom: 10px; overflow-wrap: anywhere; }
   .confirm .row { display: flex; gap: 8px; justify-content: flex-end; }
+  .confirm.network { border-color: rgba(251, 146, 60, .35); }
+  .confirm .kv { display: flex; justify-content: space-between; font-size: 12.5px; padding: 5px 0; border-bottom: .5px dashed var(--line); }
+  .confirm .kv:last-of-type { border-bottom: none; }
+  .confirm .kv .k { color: var(--muted); }
+  .srvbadge { display: inline-flex; align-items: center; gap: 4px; font-size: 10.5px; font-weight: 600; background: var(--seg-bg); border: .5px solid var(--line); padding: 1px 6px; border-radius: 6px; color: var(--muted); }
+  .egress { font-size: 10.5px; color: var(--net); }
   .btn { font-size: 12px; padding: 5px 12px; border-radius: 7px; border: .5px solid var(--field-line); background: transparent; color: var(--text); cursor: pointer; }
   .btn.danger { border-color: var(--danger); background: var(--danger-bg); color: var(--danger); }
   .btn.primary { border: none; background: var(--accent); color: #fff; }

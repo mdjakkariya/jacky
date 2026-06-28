@@ -38,3 +38,54 @@ it("clearConfirm removes an existing card", () => {
   clearConfirm(log);
   expect(log.querySelector("#confirm-card")).toBeNull();
 });
+
+it("network card has class 'network'", () => {
+  const log = makeLog();
+  showConfirm(log, "Send data?", "network");
+  const card = log.querySelector("#confirm-card");
+  expect(card.classList.contains("network")).toBe(true);
+});
+
+it("network card heading is 'Allow network action'", () => {
+  const log = makeLog();
+  showConfirm(log, "Send data?", "network");
+  const card = log.querySelector("#confirm-card");
+  expect(card.querySelector(".h").textContent).toBe("Allow network action");
+});
+
+it("network card with serverLabel renders connection badge", () => {
+  const log = makeLog();
+  showConfirm(log, "Send?", "network", undefined, { serverLabel: "Slack" });
+  const card = log.querySelector("#confirm-card");
+  const kvConn = Array.from(card.querySelectorAll(".kv")).find(kv => kv.querySelector(".k").textContent === "Connection");
+  expect(kvConn).toBeTruthy();
+  expect(kvConn.querySelector(".srvbadge").textContent).toBe("Slack");
+});
+
+it("network card with egress renders data path row", () => {
+  const log = makeLog();
+  showConfirm(log, "Send?", "network", undefined, { egress: "text sent to slack.com" });
+  const card = log.querySelector("#confirm-card");
+  const kvPath = Array.from(card.querySelectorAll(".kv")).find(kv => kv.querySelector(".k").textContent === "Data path");
+  expect(kvPath).toBeTruthy();
+  expect(kvPath.querySelector(".egress").textContent).toBe("↗ text sent to slack.com");
+});
+
+it("network card with both serverLabel and egress renders both rows", () => {
+  const log = makeLog();
+  showConfirm(log, "Send?", "network", undefined, { serverLabel: "Slack", egress: "text sent to slack.com" });
+  const card = log.querySelector("#confirm-card");
+  const kvs = card.querySelectorAll(".kv");
+  expect(kvs.length).toBe(2);
+  expect(Array.from(kvs).some(kv => kv.querySelector(".k").textContent === "Connection")).toBe(true);
+  expect(Array.from(kvs).some(kv => kv.querySelector(".k").textContent === "Data path")).toBe(true);
+});
+
+it("existing danger card still works (no regression)", () => {
+  const log = makeLog();
+  showConfirm(log, "Delete it?", "danger");
+  const card = log.querySelector("#confirm-card");
+  expect(card.classList.contains("danger")).toBe(true);
+  expect(card.querySelector(".h").textContent).toBe("⚠️ Just checking");
+  expect(card.querySelector(".kv")).toBeNull();
+});
