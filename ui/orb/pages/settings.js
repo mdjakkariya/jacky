@@ -113,12 +113,14 @@ function setEnabled(on) { ["save"].forEach((id) => { $(id).disabled = !on; }); }
 // --- load / save ------------------------------------------------------------
 async function load() {
   $("status").textContent = ""; $("banner").classList.remove("show");
+  $("loading").classList.remove("hidden"); // cover the empty form until the daemon answers
   let s = null;
   for (let i = 0; i < 12; i++) {
     try { s = await daemon.settings(); break; } catch (e) {}
     setEnabled(false);
     await new Promise((res) => { setTimeout(res, 800); });
   }
+  $("loading").classList.add("hidden"); // got an answer (or gave up) — reveal the form/banner
   if (s === null) { $("banner").classList.add("show"); setEnabled(false); return; }
   setEnabled(true);
   const provider = s.llm_provider || "ollama";

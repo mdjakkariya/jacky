@@ -84,6 +84,8 @@
   /* Permissions list */
   .perm-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 11px 14px; border-top: .5px solid var(--line); }
   .perm-row:first-child { border-top: none; }
+  /* Mute the permission description so it reads as a subtitle under the bold label. */
+  .perm-row .desc { color: var(--muted); }
   .badge { font-size: 11px; font-weight: 600; padding: 2px 9px; border-radius: 10px; white-space: nowrap; }
   .badge.granted { background: rgba(40, 180, 90, .16); color: #2ea043; }
   .badge.needed { background: rgba(255, 90, 90, .16); color: #ff5a5a; }
@@ -94,6 +96,11 @@
   .tip:after { content: ""; position: absolute; top: 100%; left: 50%; transform: translateX(-50%); border: 4px solid transparent; border-top-color: var(--text); }
   .tip.show { opacity: 1; }
   .hidden { display: none !important; }
+  /* First-load overlay: the daemon may take a moment to answer /settings, so cover the
+     (empty) form with a spinner until it does, instead of flashing a blank window. */
+  #loading { position: fixed; inset: 0; z-index: 100; background: var(--bg); display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 12px; color: var(--muted); font-size: 13px; }
+  #loading .spin { width: 22px; height: 22px; border-radius: 50%; border: 2.5px solid var(--line); border-top-color: var(--accent); animation: ldspin .8s linear infinite; }
+  @keyframes ldspin { to { transform: rotate(360deg); } }
   /* Indeterminate progress: when a download stage can't report byte progress
      (e.g. the large STT model), the bar slides instead of sitting frozen. */
   @keyframes voiceSlide { 0% { background-position: -35% 0; } 100% { background-position: 135% 0; } }
