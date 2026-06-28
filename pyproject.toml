@@ -172,6 +172,7 @@ module = [
     "fastapi.*",
     "uvicorn.*",
     "anthropic.*",
+    "mcp.*",
     "pywhispercpp.*",
     "objc.*",
     "AVFoundation.*",
