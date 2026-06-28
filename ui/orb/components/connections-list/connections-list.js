@@ -135,6 +135,9 @@ export class ConnectionsList extends HTMLElement {
       }
     });
     label.appendChild(checkbox);
+    const slider = document.createElement("span");
+    slider.className = "slider";  // the visible knob; CSS hides the input itself
+    label.appendChild(slider);
 
     card.appendChild(icon);
     card.appendChild(meta);

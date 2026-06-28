@@ -109,6 +109,7 @@ function buildToolRow(serverId, tool) {
     daemon.setMcpToolOverride(serverId, tool.name, { enabled: checkbox.checked });
   });
   label.appendChild(checkbox);
+  label.appendChild(el("span", "slider"));  // the visible knob; CSS hides the input itself
 
   row.appendChild(meta);
   row.appendChild(pillCluster);
