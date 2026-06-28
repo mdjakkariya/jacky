@@ -263,7 +263,8 @@ def test_local_write_tool_is_not_confirmed() -> None:
             network=False,
         )
     )
-    gate.execute(ToolCall(name="local_write", arguments={}))
+    result = gate.execute(ToolCall(name="local_write", arguments={}))
+    assert result.ok is True  # the tool actually ran (not blocked)
     assert rec.kinds == []  # local WRITE stays silent (unchanged behavior)
 
 
@@ -280,7 +281,8 @@ def test_destructive_tool_confirmed_with_danger_kind() -> None:
             network=False,
         )
     )
-    gate.execute(ToolCall(name="wipe", arguments={}))
+    result = gate.execute(ToolCall(name="wipe", arguments={}))
+    assert result.ok is True  # confirmed (recorder approves) and ran
     assert rec.kinds == ["danger"]
 
 

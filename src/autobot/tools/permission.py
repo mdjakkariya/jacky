@@ -31,8 +31,9 @@ _log = get_logger("gate")
 class Confirmer(Protocol):
     """Asks the user to approve an action and returns their answer.
 
-    ``kind`` ("read" / "write" / "danger") lets the UI tier the card's tone so a
-    benign read grant doesn't look like a destructive action.
+    ``kind`` ("read" / "write" / "danger" / "network") lets the UI tier the card's
+    tone so a benign read grant doesn't look like a destructive action; "network"
+    marks an off-device send (the orange "data path" card).
     """
 
     def confirm(self, prompt: str, kind: str = "danger") -> bool:
