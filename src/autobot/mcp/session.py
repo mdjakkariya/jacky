@@ -79,6 +79,10 @@ class McpServerWorker:
         self._registered: list[str] = []
         self._state = "disconnected"
         self._tool_count = 0
+        # Full snapshot of the server's tool list (built before allow/deny filtering).
+        # Lets the UI show disabled tools and their risk; the registry only gets the
+        # filtered subset. GIL-safe reads via the all_tools() copy method.
+        self._all_tools: list[dict[str, object]] = []
 
     @property
     def state(self) -> str:
@@ -90,31 +94,17 @@ class McpServerWorker:
         """Number of tools currently registered from this server."""
         return self._tool_count
 
-    def all_tools(self) -> list[dict[str, Any]]:
-        """Return a list of all tools registered by this server (for UI inspection).
+    def all_tools(self) -> list[dict[str, object]]:
+        """Return a copy of the full pre-filter tool snapshot.
 
-        Returns a snapshot of the tool specs currently in the registry under this
-        server's namespace. The UI uses this to display available tools and their
-        override states (enabled/disabled, custom risk).
+        Includes tools that are excluded by ``tool_deny`` / ``tool_allow`` (with
+        ``enabled=False``), so the UI can show and toggle them. The list is rebuilt
+        on every ``_sync_tools`` call (connect and ``tools/list_changed`` resync).
 
         Returns:
-            A list of dicts, each ``{"name", "description", "risk", "network", "enabled"}``,
-            or ``[]`` if not connected.
+            A copy of ``_all_tools``; each item is ``{name, description, risk, network, enabled}``.
         """
-        result = []
-        for name in self._registered:
-            spec = self._registry.get(name)
-            if spec is not None:
-                result.append(
-                    {
-                        "name": spec.name,
-                        "description": spec.description,
-                        "risk": spec.risk,
-                        "network": spec.network,
-                        "enabled": True,  # spec is registered iff enabled
-                    }
-                )
-        return result
+        return list(self._all_tools)
 
     # --- synchronous entry points (called from the engine thread) ---
 
@@ -245,6 +235,17 @@ class McpServerWorker:
             for name, value in self._cfg.tool_risk_overrides.items()
         }
         network = self._cfg.egress == "network"
+        # Build the full snapshot (all tools, pre-filter) for the UI.
+        self._all_tools = [
+            {
+                "name": t.name,
+                "description": t.description or "",
+                "risk": adapter.risk_for(t, floor=floor, overrides=overrides).name.lower(),
+                "network": network,
+                "enabled": tool_allowed(t.name, self._cfg.tool_allow, self._cfg.tool_deny),
+            }
+            for t in listed.tools
+        ]
         desired: dict[str, ToolSpec] = {}
         for tool in listed.tools:
             if not tool_allowed(tool.name, self._cfg.tool_allow, self._cfg.tool_deny):

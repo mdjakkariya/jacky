@@ -54,6 +54,14 @@ def test_stdio_echo_connect_call_shutdown() -> None:
         result = registry.dispatch("echo__echo", {"text": "hello"})
         assert result.ok is True
         assert "echo: hello" in result.content
+
+        # all_tools() returns the full pre-filter snapshot including the whoami tool
+        worker = manager._workers.get("echo")
+        if worker is not None:
+            snapshot = worker.all_tools()
+            names = [t["name"] for t in snapshot]
+            assert "echo" in names
+            assert all(isinstance(t["enabled"], bool) for t in snapshot)
     finally:
         manager.shutdown(timeout=10.0)
 
