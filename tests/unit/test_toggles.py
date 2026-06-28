@@ -2,11 +2,15 @@
 
 from __future__ import annotations
 
+from autobot.core.types import Risk
+from autobot.permissions import AUTOMATION
+from autobot.tools.registry import ToolRegistry
 from autobot.tools.toggles import (
     SystemToggles,
     clamp,
     first_int,
     is_accessibility_error,
+    register_system_toggles,
 )
 
 
@@ -330,3 +334,43 @@ def test_lock_screen_falls_back_to_keystroke() -> None:
 def test_lock_screen_keystroke_blocked_is_friendly() -> None:
     runner = SeqRunner([(127, "no path"), (1, "(-1719)")])
     assert "Accessibility" in SystemToggles(runner).lock_screen()
+
+
+_TOGGLE_NAMES = (
+    "set_volume",
+    "set_brightness",
+    "set_appearance",
+    "sleep_mac",
+    "set_wifi",
+    "keep_awake",
+    "lock_screen",
+)
+
+
+def test_all_toggles_registered_as_write() -> None:
+    registry = ToolRegistry()
+    register_system_toggles(registry, FakeRunner(), FakeProcs())
+    for name in _TOGGLE_NAMES:
+        spec = registry.get(name)
+        assert spec is not None, name
+        assert spec.risk is Risk.WRITE, name
+
+
+def test_only_appearance_requires_automation() -> None:
+    registry = ToolRegistry()
+    register_system_toggles(registry, FakeRunner(), FakeProcs())
+    appearance = registry.get("set_appearance")
+    assert appearance is not None
+    assert appearance.requires == AUTOMATION
+    for name in ("set_volume", "set_brightness", "set_wifi", "lock_screen", "sleep_mac"):
+        spec = registry.get(name)
+        assert spec is not None, name
+        assert spec.requires is None, name
+
+
+def test_dispatch_runs_through_registry() -> None:
+    registry = ToolRegistry()
+    register_system_toggles(registry, FakeRunner(), FakeProcs())
+    result = registry.dispatch("set_volume", {"level": 25})
+    assert result.ok
+    assert "25%" in result.content

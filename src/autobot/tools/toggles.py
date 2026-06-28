@@ -20,7 +20,10 @@ import re
 from collections.abc import Callable
 from typing import Protocol
 
+from autobot.core.types import Risk
 from autobot.logging_setup import get_logger
+from autobot.permissions import AUTOMATION
+from autobot.tools.registry import ToolRegistry, ToolSpec
 from autobot.tools.system import parse_wifi_device
 
 _log = get_logger("toggles")
@@ -102,6 +105,144 @@ class SystemToggles:
         self._run = runner or _subprocess_runner
         self._procs = procs or _SubprocessManager()
         self._awake_pid: int | None = None
+
+    def specs(self) -> list[ToolSpec]:
+        """Return the write-side control tool specs."""
+        no_params: dict[str, object] = {"type": "object", "properties": {}, "required": []}
+        return [
+            ToolSpec(
+                name="set_volume",
+                description=(
+                    "Change the Mac's output volume. Cues: 'set volume to 30', 'turn it "
+                    "up/down', 'louder/quieter', 'mute', 'unmute'. Pass `level` (0-100) for an "
+                    "exact level, or `action` = up | down | mute | unmute."
+                ),
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "level": {"type": "integer", "description": "Exact volume, 0-100."},
+                        "action": {
+                            "type": "string",
+                            "enum": ["mute", "unmute", "up", "down"],
+                            "description": "Relative change or mute toggle.",
+                        },
+                    },
+                    "required": [],
+                },
+                handler=self.set_volume,
+                risk=Risk.WRITE,
+                ack="Adjusting the volume.",
+            ),
+            ToolSpec(
+                name="set_brightness",
+                description=(
+                    "Change the screen brightness. Cues: 'set brightness to 40', 'brighter', "
+                    "'dimmer'. Pass `level` (0-100) for an exact level (needs the 'brightness' "
+                    "tool installed), or `action` = up | down to nudge it."
+                ),
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "level": {"type": "integer", "description": "Exact brightness, 0-100."},
+                        "action": {
+                            "type": "string",
+                            "enum": ["up", "down"],
+                            "description": "Nudge brighter or dimmer.",
+                        },
+                    },
+                    "required": [],
+                },
+                handler=self.set_brightness,
+                risk=Risk.WRITE,
+                ack="Adjusting the brightness.",
+            ),
+            ToolSpec(
+                name="set_appearance",
+                description=(
+                    "Switch the system look between dark and light. Cues: 'dark mode', 'go "
+                    "light', 'switch appearance'. Pass `mode` = dark | light | toggle."
+                ),
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "mode": {
+                            "type": "string",
+                            "enum": ["dark", "light", "toggle"],
+                            "description": "Target appearance.",
+                        }
+                    },
+                    "required": ["mode"],
+                },
+                handler=self.set_appearance,
+                risk=Risk.WRITE,
+                requires=AUTOMATION,
+                ack="Switching the appearance.",
+            ),
+            ToolSpec(
+                name="sleep_mac",
+                description=(
+                    "Put the Mac to sleep right now. Cues: 'go to sleep', 'sleep the Mac'."
+                ),
+                parameters=no_params,
+                handler=self.sleep_mac,
+                risk=Risk.WRITE,
+                ack="Going to sleep.",
+            ),
+            ToolSpec(
+                name="set_wifi",
+                description=(
+                    "Turn Wi-Fi on or off. Cues: 'turn off Wi-Fi', 'enable Wi-Fi', 'toggle "
+                    "Wi-Fi'. Pass `state` = on | off | toggle."
+                ),
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "state": {
+                            "type": "string",
+                            "enum": ["on", "off", "toggle"],
+                            "description": "Target Wi-Fi power state.",
+                        }
+                    },
+                    "required": ["state"],
+                },
+                handler=self.set_wifi,
+                risk=Risk.WRITE,
+                ack="Updating Wi-Fi.",
+            ),
+            ToolSpec(
+                name="keep_awake",
+                description=(
+                    "Stop the Mac from sleeping. Cues: 'keep my Mac awake', 'don't sleep for 30 "
+                    "minutes', 'stop keeping awake'. Pass `minutes` for a timed window (omit for "
+                    "indefinite), or `off` = true to let it sleep normally again."
+                ),
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "minutes": {
+                            "type": "integer",
+                            "description": "How long to stay awake; omit for indefinite.",
+                        },
+                        "off": {
+                            "type": "boolean",
+                            "description": "Set true to stop keeping the Mac awake.",
+                        },
+                    },
+                    "required": [],
+                },
+                handler=self.keep_awake,
+                risk=Risk.WRITE,
+                ack="Keeping your Mac awake.",
+            ),
+            ToolSpec(
+                name="lock_screen",
+                description="Lock the screen right now. Cues: 'lock my screen', 'lock the Mac'.",
+                parameters=no_params,
+                handler=self.lock_screen,
+                risk=Risk.WRITE,
+                ack="Locking the screen.",
+            ),
+        ]
 
     def set_volume(self, level: int | None = None, action: str | None = None) -> str:
         """Set the system volume (0-100) or mute/unmute/nudge it up/down."""
@@ -263,3 +404,25 @@ class SystemToggles:
                 "Settings → Privacy & Security → Accessibility."
             )
         return f"I couldn't lock the screen: {out2 or 'unknown error'}"
+
+
+def register_system_toggles(
+    registry: ToolRegistry,
+    runner: Runner | None = None,
+    procs: ProcessManager | None = None,
+) -> SystemToggles:
+    """Register the write-side system-control tools into ``registry``.
+
+    Args:
+        registry: The tool registry to populate.
+        runner: Optional command runner; defaults to subprocess.
+        procs: Optional process manager; defaults to subprocess.
+
+    Returns:
+        The constructed :class:`SystemToggles` instance.
+    """
+    tools = SystemToggles(runner, procs)
+    for spec in tools.specs():
+        registry.register(spec)
+    _log.info("system toggles registered (volume/brightness/appearance/sleep/wifi/keep-awake/lock)")
+    return tools
