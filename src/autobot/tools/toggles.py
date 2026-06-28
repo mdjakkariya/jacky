@@ -91,6 +91,18 @@ def is_accessibility_error(out: str) -> bool:
     return "-1719" in out or "not allowed" in low or "assistive" in low or "accessibility" in low
 
 
+def brightness_unsupported(out: str) -> bool:
+    """Whether ``brightness -l`` output shows it can't drive the display.
+
+    The Homebrew ``brightness`` tool exits 0 but is a no-op on Apple Silicon
+    built-in panels — it can't even *read* them (``failed to get brightness ...
+    error -536870201``). We probe with ``-l`` and refuse to claim a successful set
+    when that signal is present, instead of lying about an effect that never lands.
+    """
+    low = out.lower()
+    return "failed to get brightness" in low or "failed to set brightness" in low
+
+
 class ProcessManager(Protocol):
     """Spawns and stops a long-running background process (for ``caffeinate``)."""
 
@@ -336,13 +348,22 @@ class SystemToggles:
         if level is None:
             return "Tell me a level (0-100), or whether to make it brighter or dimmer."
         level = clamp(level)
-        rc, out = self._run(["brightness", str(level / 100)])
-        if rc == 127:  # the brightness binary isn't installed
+        # Probe first: the binary exits 0 even when it can't drive the panel, so a
+        # bare exit code can't be trusted. `-l` reveals whether it can read this display.
+        probe_rc, probe_out = self._run(["brightness", "-l"])
+        if probe_rc == 127:  # the brightness binary isn't installed
             return (
                 "Setting an exact level needs the 'brightness' tool, which isn't installed. "
                 "Want me to install it for you? I'll ask before downloading anything. "
                 "Otherwise I can make the screen brighter or dimmer step by step."
             )
+        if brightness_unsupported(probe_out):
+            return (
+                "The brightness tool can't control this Mac's built-in display (an Apple "
+                "Silicon limitation), so I can't set an exact level here. I can still make it "
+                "brighter or dimmer with the brightness keys — just say 'brighter' or 'dimmer'."
+            )
+        rc, out = self._run(["brightness", str(level / 100)])
         if rc != 0:
             return f"I couldn't set the brightness: {out or 'unknown error'}"
         _log.info("brightness set to=%d", level)
@@ -367,6 +388,15 @@ class SystemToggles:
         if rc != 0:
             return f"I couldn't install the brightness tool: {out or 'unknown error'}"
         _log.info("brightness tool installed")
+        # Verify it can actually drive this display before promising exact control —
+        # on Apple Silicon built-in panels it installs fine but is a no-op.
+        if brightness_unsupported(self._run(["brightness", "-l"])[1]):
+            _log.info("brightness tool installed but display unsupported")
+            return (
+                "Installed the brightness tool, but it can't control this Mac's built-in "
+                "display (an Apple Silicon limitation). I'll adjust brightness up or down with "
+                "the brightness keys instead — just say 'brighter' or 'dimmer'."
+            )
         return "Installed the brightness tool — now tell me the exact level you want."
 
     def set_appearance(self, mode: str) -> str:

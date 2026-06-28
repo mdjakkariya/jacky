@@ -8,11 +8,14 @@ from autobot.permissions import AUTOMATION
 from autobot.tools.registry import ToolRegistry
 from autobot.tools.toggles import (
     SystemToggles,
+    brightness_unsupported,
     clamp,
     first_int,
     is_accessibility_error,
     register_system_toggles,
 )
+
+_BRIGHTNESS_FAIL = "brightness: failed to get brightness of display 0x1 (error -536870201)"
 
 
 class FakeRunner:
@@ -175,6 +178,22 @@ def test_set_brightness_no_args_asks() -> None:
     assert "Tell me" in SystemToggles(FakeRunner()).set_brightness()
 
 
+def test_brightness_unsupported_detection() -> None:
+    assert brightness_unsupported(_BRIGHTNESS_FAIL)
+    assert brightness_unsupported("brightness: failed to set brightness")
+    assert not brightness_unsupported("display 0: main, brightness 0.800000")
+
+
+def test_set_brightness_unsupported_display_is_honest() -> None:
+    # The binary is present but can't drive the panel (Apple Silicon): the probe
+    # `brightness -l` reports the failure -> we must NOT claim success or attempt a set.
+    runner = FakeRunner(rc=0, out=_BRIGHTNESS_FAIL)
+    msg = SystemToggles(runner).set_brightness(level=80)
+    assert "built-in display" in msg
+    assert "Brightness set to" not in msg
+    assert ["brightness", "0.8"] not in runner.calls  # never attempted the (no-op) set
+
+
 # --- install_brightness (gated brew install) -----------------------------
 def test_install_brightness_already_installed() -> None:
     # `which brightness` succeeds -> nothing to do; never calls the installer.
@@ -208,6 +227,17 @@ def test_install_brightness_failure_is_friendly() -> None:
     installer = _RecordingInstaller((1, "network error"))
     msg = SystemToggles(runner, installer=installer).install_brightness()
     assert "couldn't install the brightness tool" in msg
+
+
+def test_install_brightness_success_but_display_unsupported() -> None:
+    # Installs fine, but the post-install probe shows it can't drive the display
+    # (Apple Silicon): be honest rather than promising exact control.
+    runner = SeqRunner([(1, ""), (0, "/opt/homebrew/bin/brew"), (0, _BRIGHTNESS_FAIL)])
+    installer = _RecordingInstaller((0, "installed"))
+    msg = SystemToggles(runner, installer=installer).install_brightness()
+    assert installer.calls == 1
+    assert "built-in display" in msg
+    assert "now tell me the exact level" not in msg
 
 
 _APPEARANCE_SET = 'tell application "System Events" to tell appearance preferences'
