@@ -41,6 +41,14 @@ class FakeResult:
     isError: bool = False  # noqa: N815
 
 
+@dataclass
+class FakeResource:
+    """Stands in for an embedded resource carried by a ``resource`` content block."""
+
+    text: str | None = None
+    uri: str = ""
+
+
 def test_namespacing_roundtrip() -> None:
     assert adapter.namespaced("slack", "send_message") == "slack__send_message"
     assert adapter.split_namespaced("slack__send_message") == ("slack", "send_message")
@@ -78,6 +86,21 @@ def test_result_renders_non_text_placeholders() -> None:
 
 def test_result_empty_is_placeholder() -> None:
     assert adapter.result_to_text(FakeResult(content=[])) == ("(no content)", False)
+
+
+def test_result_embedded_resource_with_text_is_inlined() -> None:
+    r = FakeResult(content=[FakeBlock("resource", resource=FakeResource(text="file body"))])
+    assert adapter.result_to_text(r) == ("file body", False)
+
+
+def test_result_embedded_resource_without_text_falls_back_to_uri() -> None:
+    r = FakeResult(content=[FakeBlock("resource", resource=FakeResource(uri="file:///x.txt"))])
+    assert adapter.result_to_text(r) == ("[resource file:///x.txt]", False)
+
+
+def test_result_resource_link_renders_placeholder() -> None:
+    r = FakeResult(content=[FakeBlock("resource_link", uri="https://host/doc")])
+    assert adapter.result_to_text(r) == ("[resource_link https://host/doc]", False)
 
 
 def test_risk_override_wins() -> None:
