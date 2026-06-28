@@ -13,9 +13,11 @@ from __future__ import annotations
 import asyncio
 import concurrent.futures
 import threading
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from autobot.logging_setup import get_logger
+from autobot.mcp.config import DEFAULT_MCP_CONFIG_PATH
 from autobot.mcp.session import McpServerWorker
 
 if TYPE_CHECKING:
@@ -36,10 +38,12 @@ class McpManager:
         registry: ToolRegistry,
         *,
         on_event: Callable[[dict[str, Any]], None] | None = None,
+        config_path: str | Path = DEFAULT_MCP_CONFIG_PATH,
     ) -> None:
         self._config = config
         self._registry = registry
         self._on_event = on_event
+        self._config_path = Path(config_path).expanduser()
         self._loop: asyncio.AbstractEventLoop | None = None
         self._thread: threading.Thread | None = None
         self._workers: dict[str, McpServerWorker] = {}
@@ -134,8 +138,172 @@ class McpManager:
                     "label": cfg.label,
                     "enabled": cfg.enabled,
                     "egress": cfg.egress,
+                    "auth_type": cfg.auth_type,
                     "state": worker.state if worker is not None else "disconnected",
                     "tool_count": worker.tool_count if worker is not None else 0,
                 }
             )
         return rows
+
+    def add_or_update_server(self, descriptor: dict[str, Any]) -> dict[str, Any]:
+        """Validate, persist, and (re)connect one server descriptor.
+
+        Uses :func:`~autobot.mcp.config._coerce_server` for validation so the same
+        rules that govern ``servers.json`` loading apply here. On success the live
+        config is updated, the file is saved, and — if the manager is running and the
+        server was previously connected — the worker is restarted so it picks up the
+        new frozen config.
+
+        Args:
+            descriptor: Raw JSON object (must include ``id`` and a valid ``transport``).
+
+        Returns:
+            ``{"ok": True, "server": status_row}`` or ``{"ok": False, "error": str}``.
+        """
+        from autobot.mcp.config import _coerce_server, save_mcp_config
+
+        server_id = str(descriptor.get("id", ""))
+        if not server_id:
+            return {"ok": False, "error": "descriptor must include 'id'"}
+        cfg = _coerce_server(server_id, descriptor)
+        if cfg is None:
+            error_msg = f"invalid transport or descriptor for server {server_id!r}"
+            return {"ok": False, "error": error_msg}
+        was_connected = server_id in self._workers
+        if was_connected:
+            self.disconnect(server_id)
+        self._config[server_id] = cfg
+        save_mcp_config(self._config, self._config_path)
+        if was_connected and cfg.enabled and self._loop is not None:
+            self.connect(server_id)
+        rows = [r for r in self.status() if r["server"] == server_id]
+        return {"ok": True, "server": rows[0] if rows else {"server": server_id}}
+
+    def remove_server(self, server_id: str) -> bool:
+        """Disconnect (if active), remove from config, and persist.
+
+        Args:
+            server_id: The server to remove.
+
+        Returns:
+            ``True`` if found and removed, ``False`` if unknown.
+        """
+        from autobot.mcp.config import save_mcp_config
+
+        if server_id not in self._config:
+            return False
+        if server_id in self._workers:
+            self.disconnect(server_id)
+        del self._config[server_id]
+        save_mcp_config(self._config, self._config_path)
+        return True
+
+    def set_enabled(self, server_id: str, enabled: bool) -> bool:
+        """Toggle ``enabled``, persist, and reconnect if the manager is running.
+
+        Args:
+            server_id: The server to toggle.
+            enabled: ``True`` to enable (connect), ``False`` to disable (disconnect).
+
+        Returns:
+            ``True`` if the server was found, ``False`` if unknown.
+        """
+        import dataclasses
+
+        from autobot.mcp.config import save_mcp_config
+
+        cfg = self._config.get(server_id)
+        if cfg is None:
+            return False
+        if server_id in self._workers:
+            self.disconnect(server_id)
+        self._config[server_id] = dataclasses.replace(cfg, enabled=enabled)
+        save_mcp_config(self._config, self._config_path)
+        if enabled and self._loop is not None:
+            self.connect(server_id)
+        return True
+
+    def tools_for(self, server_id: str) -> list[dict[str, Any]]:
+        """Return the cached all-tools list for ``server_id`` (empty if not connected).
+
+        Uses :meth:`~autobot.mcp.session.McpServerWorker.all_tools`, which returns a
+        copy of the full pre-filter snapshot so the UI can show disabled tools.
+
+        Args:
+            server_id: The server whose tools to return.
+
+        Returns:
+            A list of dicts, each ``{name, description, risk, network, enabled}``,
+            or ``[]`` if the server is not connected or not configured.
+        """
+        worker = self._workers.get(server_id)
+        if worker is None:
+            return []
+        return worker.all_tools()
+
+    def set_tool_override(
+        self,
+        server_id: str,
+        tool: str,
+        *,
+        risk: str | None = None,
+        enabled: bool | None = None,
+    ) -> bool:
+        """Adjust a tool's risk or enable/disable it, persist + reconnect.
+
+        Disable: adds ``tool`` to ``cfg.tool_deny`` (as a new frozen tuple).
+        Enable: removes ``tool`` from ``cfg.tool_deny``.
+        Risk: sets ``cfg.tool_risk_overrides[tool] = risk`` (or removes it if
+        ``risk`` is ``None`` and the key is present).
+
+        Args:
+            server_id: The server that owns the tool.
+            tool: The bare tool name (without namespace prefix).
+            risk: Optional risk string (``"read_only"``, ``"write"``, ``"destructive"``).
+            enabled: Optional enable/disable override.
+
+        Returns:
+            ``True`` if the server was found, ``False`` if unknown.
+        """
+        import dataclasses
+
+        from autobot.mcp.config import save_mcp_config
+
+        cfg = self._config.get(server_id)
+        if cfg is None:
+            return False
+        deny = list(cfg.tool_deny)
+        overrides = dict(cfg.tool_risk_overrides)
+        if enabled is False and tool not in deny:
+            deny.append(tool)
+        elif enabled is True and tool in deny:
+            deny.remove(tool)
+        if risk is not None:
+            overrides[tool] = risk
+        was_connected = server_id in self._workers
+        if was_connected:
+            self.disconnect(server_id)
+        self._config[server_id] = dataclasses.replace(
+            cfg, tool_deny=tuple(deny), tool_risk_overrides=overrides
+        )
+        save_mcp_config(self._config, self._config_path)
+        if was_connected and self._config[server_id].enabled and self._loop is not None:
+            self.connect(server_id)
+        return True
+
+    def secret_present(self, server_id: str) -> bool:
+        """Whether the Keychain secret referenced by this server's config is set.
+
+        Args:
+            server_id: The server to check.
+
+        Returns:
+            ``True`` if ``cfg.secret_ref`` is non-None and the secret exists in the
+            Keychain; ``False`` otherwise (unknown server, no secret_ref, or unset key).
+        """
+        from autobot.secrets import has_secret
+
+        cfg = self._config.get(server_id)
+        if cfg is None or cfg.secret_ref is None:
+            return False
+        return has_secret(cfg.secret_ref)

@@ -90,6 +90,32 @@ class McpServerWorker:
         """Number of tools currently registered from this server."""
         return self._tool_count
 
+    def all_tools(self) -> list[dict[str, Any]]:
+        """Return a list of all tools registered by this server (for UI inspection).
+
+        Returns a snapshot of the tool specs currently in the registry under this
+        server's namespace. The UI uses this to display available tools and their
+        override states (enabled/disabled, custom risk).
+
+        Returns:
+            A list of dicts, each ``{"name", "description", "risk", "network", "enabled"}``,
+            or ``[]`` if not connected.
+        """
+        result = []
+        for name in self._registered:
+            spec = self._registry.get(name)
+            if spec is not None:
+                result.append(
+                    {
+                        "name": spec.name,
+                        "description": spec.description,
+                        "risk": spec.risk,
+                        "network": spec.network,
+                        "enabled": True,  # spec is registered iff enabled
+                    }
+                )
+        return result
+
     # --- synchronous entry points (called from the engine thread) ---
 
     def submit_call(self, tool: str, args: dict[str, Any]) -> str:
