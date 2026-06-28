@@ -81,6 +81,47 @@ for the STT engine details (faster-whisper vs whisper.cpp).
 
 ---
 
+## UI architecture (the webview frontend)
+
+The UIs (orb, chat drawer, settings, about) are thin clients of the daemon. They
+live under `ui/orb/` and are loaded **buildless** by Tauri (`frontendDist` points at
+the raw folder; no bundler, no npm at runtime). The architecture, settled in the
+2026-06 refactor (spec + plan under `docs/superpowers/`), is:
+
+- **Each `*.html` is a thin shell** — body markup + one `<link>` to a per-page
+  stylesheet + one `<script type="module">` entry. No inline `<style>`/`<script>`.
+- **`ui/orb/lib/`** — shared, framework-free ES modules: `daemon.js` (the single
+  auto-reconnecting WebSocket + typed fetch client — the one place the daemon URL
+  and endpoints are named), `tauri.js` (bridge wrappers), `clipboard.js`,
+  `earcons.js` (WebAudio cues), `markdown.js` + `format.js` (pure), `dom.js`,
+  `orb-renderer.js` (WebGL orb).
+- **`ui/orb/components/<name>/`** — **light-DOM web components** (no Shadow DOM, so
+  shared CSS tokens reach in) that *enhance existing markup*, each with co-located
+  `<name>.css` and `<name>.test.js`. Pieces whose DOM is created dynamically
+  (chat confirm/choices cards) or spread across non-adjacent elements
+  (context-meter, folder-chip, report-sheet) are plain controller **modules**
+  instead of custom elements — that's the documented exception, not the rule.
+- **`ui/orb/pages/`** — one entry module per document; wires components + page glue.
+- **`ui/orb/styles/`** — one `tokens.css` (tiered primitive→semantic custom
+  properties + dark mode) `@import`ed by every page; `@layer reset, base,
+  components, utilities`. A surface that diverges (e.g. the chat drawer's
+  translucent bg) overrides only those tokens, **unlayered and after the import**
+  (tokens.css is imported unlayered, so it would otherwise win).
+- **Imports are relative ES-module paths**; no import map (only four shallow pages).
+- **Testing is dev-only** (`ui/package.json`, `make ui-test`): Vitest + happy-dom,
+  tests co-located as `*.test.js`. Nothing about what ships changes. The real macOS
+  WKWebView has no automation driver, so final visual/behavioral parity is verified
+  manually via `make run`.
+
+Why this shape: it kills the duplication of the old monolithic-IIFE-per-page files
+(design tokens, earcons, WS loops, `copyText`, the Tauri accessor, fetch boilerplate
+all existed 2–3×), keeps files small and single-purpose (good for humans and for an
+LLM working on one component without loading the whole codebase), runs under the
+strict CSP (no `eval`, no CDN — which rules out Alpine/petite-vue/htmx-eval), and
+adds no runtime dependency, matching the project's on-device, minimal-dependency
+ethos. See `docs/superpowers/specs/2026-06-28-ui-architecture-design.md` for the
+research basis (GitHub Catalyst, GOV.UK Frontend, the "HTML web components" canon).
+
 ## Reference projects to study
 
 - **Home Assistant voice pipeline + Wyoming protocol** — an existing open standard
@@ -88,3 +129,6 @@ for the STT engine details (faster-whisper vs whisper.cpp).
   boundaries are a proven reference for ours.
 - **Model Context Protocol (MCP)** — the tool/action interface standard for the
   permission-gated action layer.
+- **GitHub Catalyst + `@github/*` elements, GOV.UK Frontend** — references for the
+  buildless light-DOM web-component frontend pattern (one folder per component,
+  attribute-driven enhancement, co-located tests).
