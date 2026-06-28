@@ -75,6 +75,9 @@ export class ConnectionsList extends HTMLElement {
     const card = document.createElement("div");
     card.className = "srv-card";
     card.dataset.serverId = srv.server;
+    // Stash auth_type on the card so status updates (which don't carry it, and which
+    // overwrite the description with "reconnecting…") can restore it without scraping text.
+    card.dataset.authType = srv.auth_type || "";
 
     // Icon
     const icon = document.createElement("div");
@@ -152,10 +155,7 @@ export class ConnectionsList extends HTMLElement {
     if (!card) return;
     const dot = card.querySelector(".status-dot");
     const descLabel = card.querySelectorAll(".srv-desc span")[1];
-    // Derive auth_type from existing description text (not stored in state)
-    const existingDesc = descLabel ? descLabel.textContent : "";
-    const authMatch = existingDesc.match(/· ([^·]+)$/);
-    const auth_type = authMatch ? authMatch[1].trim() : "";
+    const auth_type = card.dataset.authType || "";  // stable; never scraped from text
     if (dot) {
       dot.className = "status-dot " + state;
     }

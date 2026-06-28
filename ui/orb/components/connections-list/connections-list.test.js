@@ -249,6 +249,9 @@ describe("ConnectionsList — reconnect-churn debounce", () => {
     expect(dot.classList.contains("connected")).toBe(true);
     expect(dot.classList.contains("reconnecting")).toBe(false);
     expect(list.querySelector(".srv-desc").textContent).not.toContain("reconnecting");
+    // auth_type must survive the reconnect cycle (it's stashed on the card, not scraped
+    // from the description text which was overwritten with "reconnecting…").
+    expect(list.querySelector(".srv-desc").textContent).toContain("OAuth");
   });
 
   it("disconnect NOT followed by reconnect within window settles to off/error dot", async () => {
