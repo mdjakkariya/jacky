@@ -22,7 +22,7 @@ from typing import Protocol, runtime_checkable
 from autobot.core.types import Decision, Risk, ToolCall, ToolResult
 from autobot.logging_setup import get_logger
 from autobot.tools.audit import AuditLog
-from autobot.tools.registry import ToolRegistry
+from autobot.tools.registry import ToolRegistry, ToolSpec
 
 _log = get_logger("gate")
 
@@ -166,11 +166,11 @@ class PermissionGate:
                     name=call.name, content=permissions.needed_message(spec.requires), ok=False
                 )
 
-        if spec.risk >= self._threshold:
+        if spec.risk >= self._threshold or (spec.network and spec.risk >= Risk.WRITE):
             prompt = spec.confirm_prompt or self._format_prompt(
                 spec.name, spec.risk, call.arguments
             )
-            if not self._confirmer.confirm(prompt):
+            if not self._confirmer.confirm(prompt, self._confirm_kind(spec)):
                 # Timeout (no answer) reads differently from a deliberate "no": say we
                 # cancelled for lack of confirmation, not that the user declined.
                 timed_out = bool(getattr(self._confirmer, "timed_out", False))
@@ -227,6 +227,20 @@ class PermissionGate:
             detail=result.content,
         )
         return result
+
+    @staticmethod
+    def _confirm_kind(spec: ToolSpec) -> str:
+        """Card tone for a confirmation: egress > destructive > write.
+
+        ``"network"`` tints the card for an off-device send (the orange "data path"
+        card); otherwise ``"danger"`` for a destructive action and ``"write"`` for a
+        reversible change. Lets the UI make the off-device moment unmistakable.
+        """
+        if spec.network:
+            return "network"
+        if spec.risk >= Risk.DESTRUCTIVE:
+            return "danger"
+        return "write"
 
     @staticmethod
     def _format_prompt(name: str, risk: Risk, arguments: dict[str, object]) -> str:

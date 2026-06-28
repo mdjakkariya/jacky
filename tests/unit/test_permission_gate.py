@@ -190,3 +190,112 @@ def test_unknown_tool_is_denied_and_audited() -> None:
     assert result.ok is False
     assert "unknown tool" in result.content
     assert audit.recent()[0].decision is Decision.DENIED
+
+
+class _RecordingKindConfirmer:
+    """Confirmer that approves and records the kind it was asked with."""
+
+    def __init__(self) -> None:
+        self.kinds: list[str] = []
+
+    def confirm(self, prompt: str, kind: str = "danger") -> bool:
+        self.kinds.append(kind)
+        return True
+
+    def choose(
+        self, prompt: str, options: list[dict[str, str]], kind: str = "read", default: str = "read"
+    ) -> str:
+        return default
+
+
+def _gate(confirmer: object) -> tuple[ToolRegistry, PermissionGate]:
+    reg = ToolRegistry()
+    gate = PermissionGate(reg, AuditLog(":memory:"), confirmer)  # type: ignore[arg-type]
+    return reg, gate
+
+
+def test_network_write_tool_is_confirmed_with_network_kind() -> None:
+    rec = _RecordingKindConfirmer()
+    reg, gate = _gate(rec)
+    reg.register(
+        ToolSpec(
+            name="slack__send",
+            description="",
+            parameters={},
+            handler=lambda: "sent",
+            risk=Risk.WRITE,
+            network=True,
+        )
+    )
+    result = gate.execute(ToolCall(name="slack__send", arguments={}))
+    assert result.ok is True
+    assert rec.kinds == ["network"]
+
+
+def test_network_readonly_tool_is_not_confirmed() -> None:
+    rec = _RecordingKindConfirmer()
+    reg, gate = _gate(rec)
+    reg.register(
+        ToolSpec(
+            name="slack__search",
+            description="",
+            parameters={},
+            handler=lambda: "hits",
+            risk=Risk.READ_ONLY,
+            network=True,
+        )
+    )
+    result = gate.execute(ToolCall(name="slack__search", arguments={}))
+    assert result.ok is True
+    assert rec.kinds == []  # network READ_ONLY: badge only, no card
+
+
+def test_local_write_tool_is_not_confirmed() -> None:
+    rec = _RecordingKindConfirmer()
+    reg, gate = _gate(rec)
+    reg.register(
+        ToolSpec(
+            name="local_write",
+            description="",
+            parameters={},
+            handler=lambda: "ok",
+            risk=Risk.WRITE,
+            network=False,
+        )
+    )
+    gate.execute(ToolCall(name="local_write", arguments={}))
+    assert rec.kinds == []  # local WRITE stays silent (unchanged behavior)
+
+
+def test_destructive_tool_confirmed_with_danger_kind() -> None:
+    rec = _RecordingKindConfirmer()
+    reg, gate = _gate(rec)
+    reg.register(
+        ToolSpec(
+            name="wipe",
+            description="",
+            parameters={},
+            handler=lambda: "gone",
+            risk=Risk.DESTRUCTIVE,
+            network=False,
+        )
+    )
+    gate.execute(ToolCall(name="wipe", arguments={}))
+    assert rec.kinds == ["danger"]
+
+
+def test_network_destructive_kind_is_network() -> None:
+    rec = _RecordingKindConfirmer()
+    reg, gate = _gate(rec)
+    reg.register(
+        ToolSpec(
+            name="slack__delete",
+            description="",
+            parameters={},
+            handler=lambda: "x",
+            risk=Risk.DESTRUCTIVE,
+            network=True,
+        )
+    )
+    gate.execute(ToolCall(name="slack__delete", arguments={}))
+    assert rec.kinds == ["network"]  # egress tint takes precedence
