@@ -9,6 +9,8 @@ import "../components/permissions-list/permissions-list.js";
 import "../components/access-list/access-list.js";
 import "../components/voice-download/voice-download.js";
 import { setupReportSheet } from "../components/report-sheet/report-sheet.js";
+import "../components/connections-list/connections-list.js";
+import { privacyExits, renderPrivacySummary } from "./privacy-summary.js";
 
 const CHECKS = ["tts_enabled", "barge_in", "aec", "allow_app_control", "allow_system_info", "allow_memory", "allow_file_search", "allow_clipboard", "allow_reminders", "allow_file_io", "allow_web"];
 
@@ -27,11 +29,53 @@ const tabs = document.querySelector("settings-tabs");
 tabs.addEventListener("tab-change", (e) => {
   if (e.detail === "perms") $("permsList").load();
   if (e.detail === "listen") $("voiceSetupCard").loadStatus();
+  if (e.detail === "connections") {
+    const connList = $("connList");
+    if (connList) connList.load();
+  }
+  if (e.detail === "privacy") renderPrivacy($("privacyPanel"));
 });
 
 // --- access-list status events -> page status line --------------------------
 const access = document.querySelector("access-list");
 if (access) access.addEventListener("status", (e) => setStatus(e.detail.msg, e.detail.isError));
+
+// --- connections-list event wiring ------------------------------------------
+// Wired lazily: the element is present in the DOM but the component only fully
+// activates when the Connections tab is first opened (via connList.load()).
+// openAddConnection / openConnectionDetail are stubs filled in by Tasks 5 & 6.
+const connList = $("connList");
+if (connList) {
+  connList.addEventListener("add-connection", () => openAddConnection());
+  connList.addEventListener("server-select", (e) => openConnectionDetail(e.detail));
+}
+
+/** Open the add-connection wizard (implemented in Task 5). */
+// TODO(task-5): replace this stub with the real wizard mount.
+function openAddConnection() {
+  // Task 5 will replace this with a wizard modal.
+  setStatus("Add connection wizard coming soon.", false);
+}
+
+/** Open the connection-detail panel for the given server id (implemented in Task 6). */
+// TODO(task-6): replace this stub with the real detail panel mount.
+function openConnectionDetail(_id) {
+  // Task 6 will replace this with a detail panel.
+  setStatus("Connection detail coming soon.", false);
+}
+
+// --- privacy summary ---------------------------------------------------------
+async function renderPrivacy(el) {
+  if (!el) return;
+  el.textContent = "Loading…";
+  try {
+    const [settings, serversRes] = await Promise.all([daemon.settings(), daemon.mcpServers()]);
+    const exits = privacyExits(settings, serversRes.servers || []);
+    renderPrivacySummary(el, exits, () => daemon.reportFile());
+  } catch (_) {
+    el.textContent = "Couldn't load privacy summary — is Jack running?";
+  }
+}
 
 // --- model pickers (provider + Claude/Ollama/STT, with a Custom… escape hatch) ---
 const CLAUDE_SUGGESTIONS = ["claude-haiku-4-5", "claude-sonnet-4-6", "claude-opus-4-8"];

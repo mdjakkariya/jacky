@@ -17,6 +17,8 @@
     <button data-tab="caps">Capabilities</button>
     <button data-tab="listen">Listening</button>
     <button data-tab="perms">Permissions</button>
+    <button data-tab="connections">Connections</button>
+    <button data-tab="privacy">Privacy</button>
   </settings-tabs>
 
   <main>
@@ -145,6 +147,20 @@
     <section class="panel" id="tab-perms">
       <permissions-list class="card" id="permsList"></permissions-list>
       <div class="hint">Jack only needs these to do what you ask. Grant them once in System Settings; "Open Settings" takes you straight to the right pane.</div>
+    </section>
+
+    <!-- CONNECTIONS -->
+    <section class="panel" id="tab-connections">
+      <div class="banner net" style="margin-bottom:14px">
+        <span class="banner-icon">↗</span>
+        <div><strong>MCP is off by default.</strong> Connections let Jack use outside services. Servers that reach the network send data off your Mac — each is opt-in and listed below.</div>
+      </div>
+      <connections-list id="connList"></connections-list>
+    </section>
+
+    <!-- PRIVACY -->
+    <section class="panel" id="tab-privacy">
+      <div id="privacyPanel"></div>
     </section>
   </main>
 
