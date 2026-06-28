@@ -299,10 +299,13 @@ def test_keep_awake_replaces_previous_without_leaking() -> None:
     tools = SystemToggles(FakeRunner(), procs)
     tools.keep_awake()
     first = tools._awake_pid
+    # Second keep-awake will return a new pid via procs.start()
+    second_pid = procs._next  # Save expected pid before the second call
     tools.keep_awake(minutes=10)
     # Starting a second keep-awake stops the first.
     assert procs.stopped == [first]
     assert len(procs.started) == 2
+    assert tools._awake_pid == second_pid  # new pid tracked, not the stopped one
 
 
 def test_keep_awake_one_minute_singular() -> None:
