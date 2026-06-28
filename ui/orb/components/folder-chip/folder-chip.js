@@ -4,6 +4,7 @@
 import { $, pointCaretAt } from "../../lib/dom.js";
 import { daemon } from "../../lib/daemon.js";
 import { revealInFinder, pickFolder } from "../../lib/tauri.js";
+import { registerPopover, closeOtherPopovers } from "../../lib/popover.js";
 
 export function setupFolderChip() {
   let workspacePath = "";
@@ -46,6 +47,7 @@ export function setupFolderChip() {
   function openDetail() {
     const d = $("folderDetail"); if (!d) return;
     if (!d.classList.contains("hidden")) return; // already open
+    closeOtherPopovers(closeDetail); // only one popover open at a time
     refresh(); // populate/refresh path + grants before showing
     d.classList.remove("hidden");
     const chip = $("folder");
@@ -93,6 +95,8 @@ export function setupFolderChip() {
       if (d && !d.classList.contains("hidden")) { e.stopPropagation(); closeDetail(); }
     }
   }, true);
+
+  registerPopover(closeDetail); // let other popovers close this one when they open
 
   return { refresh, renderFromEvent };
 }

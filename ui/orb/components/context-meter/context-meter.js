@@ -4,6 +4,7 @@
  *  chat.html. */
 import { $, pointCaretAt } from "../../lib/dom.js";
 import { fmtK, fmtModel, fmtUSD } from "../../lib/format.js";
+import { registerPopover, closeOtherPopovers } from "../../lib/popover.js";
 
 const CTX_CIRC = 94.2;
 const CTX_ICON = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 14l4-4"/><path d="M5.6 18.5a9 9 0 1 1 12.8 0"/></svg>';
@@ -55,11 +56,21 @@ export function setupContextMeter() {
     $("ctxDetail").classList.add("hidden");
   }
 
+  function closeDetail() { const d = $("ctxDetail"); if (d) d.classList.add("hidden"); }
+  registerPopover(closeDetail); // let other popovers close this one when they open
+
   const ctx = $("ctx");
   if (ctx) ctx.addEventListener("click", () => {
     if (!lastCtx) return;
-    const d = $("ctxDetail"), hidden = d.classList.toggle("hidden");
-    if (!hidden) { renderDetail(); pointCaretAt(d, ctx); } // aim the caret at the ring
+    const d = $("ctxDetail");
+    if (d.classList.contains("hidden")) {
+      closeOtherPopovers(closeDetail); // only one popover open at a time
+      d.classList.remove("hidden");
+      renderDetail();
+      pointCaretAt(d, ctx); // aim the caret at the ring
+    } else {
+      d.classList.add("hidden");
+    }
   });
 
   return { update, reset };
