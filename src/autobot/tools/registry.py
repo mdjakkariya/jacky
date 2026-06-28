@@ -8,6 +8,7 @@ now all tools are read-only, so :meth:`ToolRegistry.dispatch` runs them directly
 
 from __future__ import annotations
 
+import threading
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
@@ -64,6 +65,7 @@ class ToolRegistry:
 
     def __init__(self) -> None:
         self._tools: dict[str, ToolSpec] = {}
+        self._lock = threading.Lock()
 
     def register(self, spec: ToolSpec, *, replace: bool = False) -> None:
         """Add a tool. Raises if the name already exists, unless ``replace`` is set.
@@ -78,9 +80,10 @@ class ToolRegistry:
             ValueError: If ``spec.name`` is already registered and ``replace`` is
                 ``False``.
         """
-        if spec.name in self._tools and not replace:
-            raise ValueError(f"tool already registered: {spec.name!r}")
-        self._tools[spec.name] = spec
+        with self._lock:
+            if spec.name in self._tools and not replace:
+                raise ValueError(f"tool already registered: {spec.name!r}")
+            self._tools[spec.name] = spec
 
     def unregister(self, name: str) -> bool:
         """Remove a registered tool.
@@ -92,18 +95,28 @@ class ToolRegistry:
             ``True`` if a tool was removed, ``False`` if ``name`` was not registered.
             Used when an MCP server is disabled or a tool disappears on re-sync.
         """
-        return self._tools.pop(name, None) is not None
+        with self._lock:
+            return self._tools.pop(name, None) is not None
 
     def get(self, name: str) -> ToolSpec | None:
         """Return the spec for ``name``, or ``None`` if it is not registered."""
-        return self._tools.get(name)
+        with self._lock:
+            return self._tools.get(name)
 
     def schemas(self) -> list[dict[str, Any]]:
         """Return every tool's schema, for advertising to the model."""
-        return [spec.to_schema() for spec in self._tools.values()]
+        with self._lock:
+            specs = list(self._tools.values())
+        return [spec.to_schema() for spec in specs]
 
     def dispatch(self, name: str, arguments: dict[str, Any] | None = None) -> ToolResult:
         """Execute a registered tool by name.
+
+        The dict lookup is guarded by the registry lock; the handler is invoked
+        **after** the lock is released. This is intentional and critical: MCP tool
+        handlers block on a ``concurrent.futures.Future`` while the MCP worker
+        thread (which also calls ``register``/``unregister``) resolves it. Holding
+        the lock during handler execution would deadlock those two threads.
 
         Tool errors are captured and returned as a failed :class:`ToolResult`
         rather than raised, so a misbehaving tool surfaces to the model as a
@@ -116,7 +129,8 @@ class ToolRegistry:
         Returns:
             A :class:`~autobot.core.types.ToolResult`.
         """
-        spec = self._tools.get(name)
+        with self._lock:
+            spec = self._tools.get(name)
         if spec is None:
             return ToolResult(name=name, content=f"unknown tool: {name!r}", ok=False)
         # Phase 1: insert the permission gate here, keyed on ``spec.risk``.

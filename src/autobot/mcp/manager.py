@@ -93,9 +93,13 @@ class McpManager:
                     timeout,
                     server_id,
                 )
+                # best-effort: cancel() interrupts a waiting Future but cannot stop a
+                # running coroutine; the real shutdown path is the loop.stop() in shutdown().
                 future.cancel()
             except Exception:  # an unexpected worker error must not break shutdown
                 _log.exception("mcp worker raised on disconnect server=%s", server_id)
+                # best-effort: cancel() interrupts a waiting Future but cannot stop a
+                # running coroutine; the real shutdown path is the loop.stop() in shutdown().
                 future.cancel()
 
     def shutdown(self, timeout: float = 5.0) -> None:
