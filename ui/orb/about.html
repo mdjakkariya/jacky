@@ -4,48 +4,7 @@
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>About Jack</title>
-<style>
-  /* macOS-style About panel: adapts to light/dark, vanilla CSS so it works
-     under the strict CSP (no external fonts or scripts). */
-  :root{
-    --bg:#ececec; --text:#1d1d1f; --muted:#86868b;
-    --accent:#0a84ff; --btn-bg:#ffffff; --btn-line:rgba(0,0,0,.18);
-    --ok:#2c9c4a; --warn:#b8860b;
-  }
-  @media (prefers-color-scheme: dark){
-    :root{
-      --bg:#1e1e1e; --text:#f5f5f7; --muted:#98989d;
-      --accent:#0a84ff; --btn-bg:#3a3a3c; --btn-line:rgba(255,255,255,.15);
-      --ok:#5bd778; --warn:#e6b54a;
-    }
-  }
-  *{box-sizing:border-box}
-  html,body{margin:0;height:100%}
-  body{background:var(--bg);color:var(--text);
-    font:13px/1.45 -apple-system,BlinkMacSystemFont,"SF Pro Text","Segoe UI",system-ui,sans-serif;
-    -webkit-font-smoothing:antialiased;
-    display:flex;flex-direction:column;align-items:center;justify-content:center;
-    text-align:center;padding:26px 24px 22px;min-height:100vh;}
-  .icon{width:84px;height:84px;margin-bottom:12px;
-    border-radius:19px;image-rendering:-webkit-optimize-contrast;}
-  h1{font-size:20px;font-weight:600;margin:0 0 1px;}
-  .version{color:var(--muted);font-size:12.5px;margin:0 0 6px;}
-  .tagline{color:var(--muted);font-size:11.5px;margin:0 0 18px;max-width:260px;}
-  button{font:inherit;font-weight:500;cursor:pointer;border-radius:8px;
-    border:.5px solid var(--btn-line);background:var(--btn-bg);color:var(--text);
-    padding:7px 16px;transition:opacity .12s;}
-  button:hover{opacity:.85}
-  button:disabled{opacity:.5;cursor:default}
-  button.primary{background:var(--accent);border-color:transparent;color:#fff;}
-  #status{margin-top:12px;min-height:18px;font-size:12.5px;}
-  #status.ok{color:var(--ok)} #status.warn{color:var(--warn)} #status.err{color:var(--muted)}
-  #update-link{display:none;margin-top:10px;}
-  .spinner{display:inline-block;width:13px;height:13px;border:2px solid var(--muted);
-    border-top-color:transparent;border-radius:50%;animation:spin .7s linear infinite;
-    vertical-align:-2px;margin-right:6px;}
-  @keyframes spin{to{transform:rotate(360deg)}}
-  .note{margin:14px 0 0;color:var(--muted);font-size:10.5px;max-width:260px;}
-</style>
+<link rel="stylesheet" href="./styles/about.css" />
 </head>
 <body>
   <img class="icon" src="jack-icon.png" alt="Jack" />
@@ -59,77 +18,6 @@
 
   <p class="note">The update check is the only time this window goes online — it asks GitHub for the latest release and sends nothing about you.</p>
 
-<script>
-  // Release source (matches the git remote: github.com/mdjakkariya/jacky).
-  const REPO = "mdjakkariya/jacky";
-  const RELEASES_API = "https://api.github.com/repos/" + REPO + "/releases/latest";
-  const RELEASES_PAGE = "https://github.com/" + REPO + "/releases/latest";
-
-  const invoke = window.__TAURI__ && window.__TAURI__.core && window.__TAURI__.core.invoke;
-  const $ = (id) => document.getElementById(id);
-
-  let current = "0.0.0";
-
-  // Parse "v1.2.3" / "1.2.3-beta" → [1,2,3] (numeric core only; pre-release ignored).
-  function parts(v){
-    return String(v).replace(/^v/i, "").split("-")[0].split(".")
-      .map((n) => parseInt(n, 10) || 0);
-  }
-  // Returns 1 if a>b, -1 if a<b, 0 if equal (semver core compare).
-  function cmp(a, b){
-    const pa = parts(a), pb = parts(b);
-    for (let i = 0; i < Math.max(pa.length, pb.length); i++){
-      const x = pa[i] || 0, y = pb[i] || 0;
-      if (x > y) return 1;
-      if (x < y) return -1;
-    }
-    return 0;
-  }
-
-  function setStatus(text, cls){
-    const s = $("status");
-    s.className = cls || "";
-    s.textContent = text || "";
-  }
-
-  async function loadVersion(){
-    try {
-      if (invoke) current = await invoke("app_version");
-    } catch (_) { /* fall back to default */ }
-    $("version").textContent = current;
-  }
-
-  async function checkUpdates(){
-    const btn = $("check");
-    btn.disabled = true;
-    $("update-link").style.display = "none";
-    $("status").innerHTML = '<span class="spinner"></span>Checking…';
-    $("status").className = "";
-    try {
-      const resp = await fetch(RELEASES_API, { headers: { "Accept": "application/vnd.github+json" } });
-      if (!resp.ok) throw new Error("HTTP " + resp.status);
-      const data = await resp.json();
-      const latest = (data.tag_name || data.name || "").trim();
-      if (!latest){ setStatus("No releases published yet.", "err"); return; }
-
-      const diff = cmp(latest, current);
-      if (diff > 0){
-        setStatus("Update available: " + latest.replace(/^v/i, ""), "warn");
-        const link = $("update-link");
-        link.style.display = "inline-block";
-        link.onclick = () => invoke && invoke("open_external", { url: RELEASES_PAGE });
-      } else {
-        setStatus("You're up to date.", "ok");
-      }
-    } catch (e){
-      setStatus("Couldn't check for updates. Check your connection.", "err");
-    } finally {
-      btn.disabled = false;
-    }
-  }
-
-  $("check").addEventListener("click", checkUpdates);
-  loadVersion();
-</script>
+<script type="module" src="./pages/about.js"></script>
 </body>
 </html>

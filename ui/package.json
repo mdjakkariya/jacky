@@ -1,0 +1,14 @@
+{
+  "name": "jack-ui",
+  "private": true,
+  "type": "module",
+  "description": "Dev-only toolchain for the Jack webview UI. Not shipped; not required to run the app.",
+  "scripts": {
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "devDependencies": {
+    "vitest": "^4.1.9",
+    "happy-dom": "^20.10.6"
+  }
+}

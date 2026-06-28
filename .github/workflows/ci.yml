@@ -46,3 +46,25 @@ jobs:
           files: ./coverage.xml
           token: ${{ secrets.CODECOV_TOKEN }}
           fail_ci_if_error: false
+
+  # UI unit tests (Vitest + happy-dom). Dev-only toolchain under ui/; nothing here
+  # ships — the Tauri webview still loads the raw files. Runs independently of `check`.
+  ui:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: ui/package-lock.json
+
+      - name: Install UI deps
+        run: npm ci
+        working-directory: ui
+
+      - name: UI tests (Vitest)
+        run: npm test
+        working-directory: ui
