@@ -2,8 +2,9 @@
  *  card). Controller module (not a custom element): the ring #ctx and the detail card
  *  #ctxDetail are separate, positioned elements. Returns { update, reset }. Moved from
  *  chat.html. */
-import { $ } from "../../lib/dom.js";
+import { $, pointCaretAt } from "../../lib/dom.js";
 import { fmtK, fmtModel, fmtUSD } from "../../lib/format.js";
+import { registerPopover, closeOtherPopovers } from "../../lib/popover.js";
 
 const CTX_CIRC = 94.2;
 const CTX_ICON = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 14l4-4"/><path d="M5.6 18.5a9 9 0 1 1 12.8 0"/></svg>';
@@ -55,12 +56,39 @@ export function setupContextMeter() {
     $("ctxDetail").classList.add("hidden");
   }
 
+  function closeDetail() { const d = $("ctxDetail"); if (d) d.classList.add("hidden"); }
+  registerPopover(closeDetail); // let other popovers close this one when they open
+
   const ctx = $("ctx");
-  if (ctx) ctx.addEventListener("click", () => {
+  if (ctx) ctx.addEventListener("click", (e) => {
+    e.stopPropagation(); // don't let the outside-click handler immediately close it
     if (!lastCtx) return;
-    const d = $("ctxDetail"), hidden = d.classList.toggle("hidden");
-    if (!hidden) renderDetail();
+    const d = $("ctxDetail");
+    if (d.classList.contains("hidden")) {
+      closeOtherPopovers(closeDetail); // only one popover open at a time
+      d.classList.remove("hidden");
+      renderDetail();
+      pointCaretAt(d, ctx); // aim the caret at the ring
+    } else {
+      d.classList.add("hidden");
+    }
   });
+
+  // Outside-click closes the detail card (same affordance as the folder popover).
+  document.addEventListener("click", (e) => {
+    const d = $("ctxDetail"), ring = $("ctx");
+    if (!d || d.classList.contains("hidden")) return;
+    if ((d && d.contains(e.target)) || (ring && ring.contains(e.target))) return;
+    closeDetail();
+  });
+  // Escape closes only this card (capture phase + stopPropagation so it runs before the
+  // drawer's Escape handler, which would otherwise hide the whole window).
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape") {
+      const d = $("ctxDetail");
+      if (d && !d.classList.contains("hidden")) { e.stopPropagation(); closeDetail(); }
+    }
+  }, true);
 
   return { update, reset };
 }

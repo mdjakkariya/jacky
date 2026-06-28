@@ -147,10 +147,12 @@ window.__enableVoice = enableVoice; // driven by the ⌘⌃V global shortcut / t
 $("m-chat").addEventListener("click", () => { earcons.playMode("chat"); setMode("chat"); });
 $("close").addEventListener("click", closeDrawer);
 
-// Esc or ⌘W closes the drawer.
+// Esc or ⌘W closes the drawer; ⌘⌃N starts a new chat. (A popover's own capture-phase
+// Esc handler closes it first and stops propagation, so Esc only hides when none is open.)
 document.addEventListener("keydown", (e) => {
   if (e.key === "Escape") { e.preventDefault(); closeDrawer(); }
   else if ((e.metaKey || e.ctrlKey) && (e.key === "w" || e.key === "W")) { e.preventDefault(); closeDrawer(); }
+  else if (e.metaKey && e.ctrlKey && (e.key === "n" || e.key === "N")) { e.preventDefault(); newChat(); }
 });
 
 // Drag the window by its header (CSS app-region is unreliable on frameless macOS).

@@ -1,9 +1,10 @@
 /** Active-folder chip + detail modal in the chat header. Controller module (the chip
  *  #folder and the modal #folderDetail are separate elements). Driven by the "workspace"
  *  WS frame and GET /workspace. Returns { refresh, renderFromEvent }. Moved from chat.html. */
-import { $ } from "../../lib/dom.js";
+import { $, pointCaretAt } from "../../lib/dom.js";
 import { daemon } from "../../lib/daemon.js";
 import { revealInFinder, pickFolder } from "../../lib/tauri.js";
+import { registerPopover, closeOtherPopovers } from "../../lib/popover.js";
 
 export function setupFolderChip() {
   let workspacePath = "";
@@ -16,8 +17,21 @@ export function setupFolderChip() {
       const chip = $("folder"); if (chip) { chip.style.display = workspacePath ? "inline-flex" : "none"; chip.classList.toggle("hidden", !workspacePath); }
       const nm = $("folderName"); if (nm) nm.textContent = w.name || "";
       const fp = $("folderPath"); if (fp) fp.textContent = w.path || "(none)";
-      const grants = (w.grants || []).map((g) => g.path + " (" + g.mode + ")");
-      const fg = $("folderGrants"); if (fg) fg.textContent = grants.length ? ("Granted: " + grants.join(", ")) : "";
+      // "Granted folders" label + one "path · mode" line per grant. Built via DOM
+      // (not innerHTML) so a folder path can never inject markup.
+      const fg = $("folderGrants");
+      if (fg) {
+        fg.textContent = "";
+        const grants = w.grants || [];
+        if (grants.length) {
+          const label = document.createElement("b"); label.textContent = "Granted folders";
+          fg.appendChild(label);
+          grants.forEach((g) => {
+            fg.appendChild(document.createElement("br"));
+            fg.appendChild(document.createTextNode(g.path + " · " + g.mode));
+          });
+        }
+      }
     } catch (e) {}
   }
 
@@ -33,9 +47,14 @@ export function setupFolderChip() {
   function openDetail() {
     const d = $("folderDetail"); if (!d) return;
     if (!d.classList.contains("hidden")) return; // already open
+    closeOtherPopovers(closeDetail); // only one popover open at a time
     refresh(); // populate/refresh path + grants before showing
     d.classList.remove("hidden");
-    const chip = $("folder"); if (chip) chip.setAttribute("aria-expanded", "true");
+    const chip = $("folder");
+    if (chip) {
+      chip.setAttribute("aria-expanded", "true"); // lights the chip (see chat.css)
+      pointCaretAt(d, chip); // aim the popover's caret at the chip (now visible)
+    }
   }
   function closeDetail() {
     const d = $("folderDetail"); if (!d) return;
@@ -76,6 +95,8 @@ export function setupFolderChip() {
       if (d && !d.classList.contains("hidden")) { e.stopPropagation(); closeDetail(); }
     }
   }, true);
+
+  registerPopover(closeDetail); // let other popovers close this one when they open
 
   return { refresh, renderFromEvent };
 }

@@ -11,7 +11,7 @@
     <div class="hgroup">
       <button class="x" id="newchat" aria-label="New chat">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
-        <span class="htip">New chat</span>
+        <span class="htip">New chat <span class="sc">⌘⌃N</span></span>
       </button>
       <span id="ctx" class="ctx" aria-label="Context used">
         <svg width="16" height="16" viewBox="0 0 36 36" aria-hidden="true"><circle cx="18" cy="18" r="15" fill="none" stroke="var(--field-line)" stroke-width="5"/><circle id="ctxArc" cx="18" cy="18" r="15" fill="none" stroke="#7fb87a" stroke-width="5" stroke-linecap="round" stroke-dasharray="94.2" stroke-dashoffset="94.2" transform="rotate(-90 18 18)"/></svg>
@@ -32,7 +32,7 @@
         <button id="m-voice">Voice</button>
         <button id="m-chat" class="on">Chat</button>
       </div>
-      <button class="x" id="close" aria-label="Hide">✕</button>
+      <button class="x" id="close" aria-label="Hide">✕<span class="htip htip-end">Hide <span class="sc">Esc</span></span></button>
     </div>
   </header>
   <update-banner id="updateBanner" class="upd hidden">
@@ -41,11 +41,21 @@
   </update-banner>
   <div id="ctxDetail" class="ctx-detail hidden"></div>
   <div id="folderDetail" class="folder-detail hidden">
-    <div id="folderPath" class="path"></div>
-    <div id="folderGrants" class="grants"></div>
-    <div class="acts">
-      <button id="folderReveal">Reveal in Finder</button>
-      <button id="folderChange">Change folder…</button>
+    <div class="fd-h">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z"/></svg>
+      Working in
+    </div>
+    <div id="folderPath" class="fd-path"></div>
+    <div id="folderGrants" class="fd-grants"></div>
+    <div class="fd-acts">
+      <button id="folderReveal" class="primary">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z"/></svg>
+        Reveal
+      </button>
+      <button id="folderChange">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
+        Change…
+      </button>
     </div>
   </div>
   <chat-log id="log">
