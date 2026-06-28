@@ -201,3 +201,14 @@ def test_set_appearance_dark_readback_fails_still_correct() -> None:
 def test_set_appearance_toggle_readback_fails_is_neutral() -> None:
     runner = SeqRunner([(0, ""), (1, "")])
     assert "switched the appearance" in SystemToggles(runner).set_appearance("toggle")
+
+
+def test_sleep_mac_calls_pmset() -> None:
+    runner = FakeRunner()
+    assert SystemToggles(runner).sleep_mac() == "Going to sleep."
+    assert runner.calls[-1] == ["pmset", "sleepnow"]
+
+
+def test_sleep_mac_failure_is_friendly() -> None:
+    msg = SystemToggles(FakeRunner(rc=1, out="denied")).sleep_mac()
+    assert "couldn't put the Mac to sleep" in msg

@@ -181,3 +181,11 @@ class SystemToggles:
         is_dark = now.strip().lower() == "true"
         _log.info("appearance dark=%s", is_dark)
         return "Now in dark mode." if is_dark else "Now in light mode."
+
+    def sleep_mac(self) -> str:
+        """Put the Mac to sleep immediately (reversible — just wake it)."""
+        rc, out = self._run(["pmset", "sleepnow"])
+        if rc != 0:
+            return f"I couldn't put the Mac to sleep: {out or 'unknown error'}"
+        _log.info("sleeping")
+        return "Going to sleep."
