@@ -117,3 +117,42 @@ def test_set_volume_no_args_asks() -> None:
 def test_set_volume_failure_is_friendly() -> None:
     msg = SystemToggles(FakeRunner(rc=1, out="boom")).set_volume(level=20)
     assert "couldn't set the volume" in msg
+
+
+def test_set_brightness_absolute_uses_binary() -> None:
+    runner = FakeRunner()
+    msg = SystemToggles(runner).set_brightness(level=40)
+    assert msg == "Brightness set to 40%."
+    assert runner.calls[-1] == ["brightness", "0.4"]
+
+
+def test_set_brightness_binary_missing_gives_setup_message() -> None:
+    # rc 127 == command not found.
+    msg = SystemToggles(FakeRunner(rc=127, out="command not found")).set_brightness(level=40)
+    assert "brew install brightness" in msg
+
+
+def test_set_brightness_up_uses_key_code() -> None:
+    runner = FakeRunner()
+    msg = SystemToggles(runner).set_brightness(action="up")
+    assert msg == "Brightness turned up."
+    assert runner.calls[-1] == [
+        "osascript",
+        "-e",
+        'tell application "System Events" to key code 144',
+    ]
+
+
+def test_set_brightness_down_uses_key_code_145() -> None:
+    runner = FakeRunner()
+    SystemToggles(runner).set_brightness(action="down")
+    assert runner.calls[-1][-1] == 'tell application "System Events" to key code 145'
+
+
+def test_set_brightness_accessibility_blocked() -> None:
+    msg = SystemToggles(FakeRunner(rc=1, out="(-1719)")).set_brightness(action="up")
+    assert "Accessibility" in msg
+
+
+def test_set_brightness_no_args_asks() -> None:
+    assert "Tell me" in SystemToggles(FakeRunner()).set_brightness()

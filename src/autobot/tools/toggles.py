@@ -125,3 +125,33 @@ class SystemToggles:
             return f"I couldn't set the volume: {out or 'unknown error'}"
         _log.info("volume set to=%d", level)
         return f"Volume set to {level}%."
+
+    def set_brightness(self, level: int | None = None, action: str | None = None) -> str:
+        """Set screen brightness; degrade gracefully when no native path is available."""
+        if action in ("up", "down"):
+            key = 144 if action == "up" else 145
+            rc, out = self._run(
+                ["osascript", "-e", f'tell application "System Events" to key code {key}']
+            )
+            if rc != 0:
+                if is_accessibility_error(out):
+                    return (
+                        "I need Accessibility access to adjust brightness this way. Enable "
+                        "Jack under System Settings → Privacy & Security → Accessibility."
+                    )
+                return f"I couldn't change the brightness: {out or 'unknown error'}"
+            _log.info("brightness action=%s", action)
+            return f"Brightness turned {action}."
+        if level is None:
+            return "Tell me a level (0-100), or whether to make it brighter or dimmer."
+        level = clamp(level)
+        rc, out = self._run(["brightness", str(level / 100)])
+        if rc == 127:  # the brightness binary isn't installed
+            return (
+                "I can make the screen brighter or dimmer step by step. For an exact level, "
+                "install the brightness tool: run `brew install brightness`."
+            )
+        if rc != 0:
+            return f"I couldn't set the brightness: {out or 'unknown error'}"
+        _log.info("brightness set to=%d", level)
+        return f"Brightness set to {level}%."
