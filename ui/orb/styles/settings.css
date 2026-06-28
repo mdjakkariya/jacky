@@ -15,6 +15,9 @@
   .panel { display: none; }
   .panel.active { display: block; }
   .card { background: var(--panel); border-radius: 10px; overflow: hidden; border: .5px solid var(--line); }
+  /* Space stacked card groups (e.g. Capabilities + Folders & access) so their rounded
+     corners don't pinch together. Only matches where two cards are adjacent siblings. */
+  .card + .card { margin-top: 16px; }
   .row { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 11px 14px; border-top: .5px solid var(--line); }
   .row:first-child { border-top: none; }
   .row .label { font-weight: 500; }
