@@ -1,0 +1,103 @@
+/* Settings window — entry sheet. Layer order + shared imports, then the settings
+   component CSS moved verbatim from settings.html (tokens/reset/body-font now shared).
+   Settings' values are the tokens.css base, so no token overrides are needed here. */
+@layer reset, base, components, utilities;
+@import url("./tokens.css");
+@import url("./reset.css") layer(reset);
+@import url("./base.css") layer(base);
+
+@layer components {
+  body { background: var(--bg); display: flex; flex-direction: column; min-height: 100vh; }
+  .tabs { display: flex; gap: 2px; background: var(--seg-bg); border-radius: 8px; padding: 2px; margin: 16px 20px 0; }
+  .tabs button { flex: 1; border: none; background: transparent; color: var(--text); font-size: 13px; padding: 5px 8px; border-radius: 6px; cursor: pointer; font-weight: 500; }
+  .tabs button.active { background: var(--seg-active); box-shadow: 0 1px 2px rgba(0, 0, 0, .12); }
+  main { flex: 1; overflow: auto; padding: 16px 20px; }
+  .panel { display: none; }
+  .panel.active { display: block; }
+  .card { background: var(--panel); border-radius: 10px; overflow: hidden; border: .5px solid var(--line); }
+  .row { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 11px 14px; border-top: .5px solid var(--line); }
+  .row:first-child { border-top: none; }
+  .row .label { font-weight: 500; }
+  .row .desc { color: var(--muted); font-size: 11.5px; margin-top: 1px; }
+  .grow { flex: 1; min-width: 0; }
+  input[type=text], input[type=password], input[type=number] {
+    background: var(--field); border: .5px solid var(--field-line); color: var(--text);
+    border-radius: 7px; padding: 6px 9px; font-size: 13px; max-width: 220px; width: 220px;
+  }
+  /* clean, flat dropdown (no native bevel) with a custom chevron */
+  select {
+    -webkit-appearance: none; appearance: none; background-color: var(--field); color: var(--text);
+    border: .5px solid var(--field-line); border-radius: 7px; padding: 6px 30px 6px 10px; font-size: 13px;
+    width: 220px; max-width: 220px; cursor: pointer;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'%3E%3Cpath d='M1 1l4 4 4-4' stroke='%23888' stroke-width='1.5' fill='none' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+    background-repeat: no-repeat; background-position: right 10px center; background-size: 10px;
+  }
+  select:focus, input:focus { outline: none; border-color: var(--accent); }
+  input[type=number] { width: 90px; }
+  .stack { display: block; padding: 11px 14px; border-top: .5px solid var(--line); }
+  .stack:first-child { border-top: none; }
+  .stack label { display: block; font-weight: 500; margin-bottom: 6px; }
+  .stack select, .stack input { max-width: 100%; width: 100%; }
+  .hint { color: var(--muted); font-size: 11.5px; margin: 6px 2px 0; }
+  .note { background: var(--note-bg); color: var(--note-text); border-radius: 8px; padding: 9px 11px; font-size: 12px; margin: 12px 0 0; }
+  .section-title { color: var(--muted); font-size: 11px; font-weight: 600; letter-spacing: .04em; text-transform: uppercase; margin: 0 4px 7px; }
+  /* macOS switch */
+  .switch { position: relative; display: inline-block; width: 38px; height: 22px; flex: none; }
+  .switch input { opacity: 0; width: 0; height: 0; }
+  .slider { position: absolute; inset: 0; background: var(--switch-off); border-radius: 22px; transition: .18s; }
+  .slider:before { content: ""; position: absolute; height: 18px; width: 18px; left: 2px; top: 2px; background: #fff; border-radius: 50%; transition: .18s; box-shadow: 0 1px 2px rgba(0, 0, 0, .35); }
+  .switch input:checked + .slider { background: var(--accent); }
+  .switch input:checked + .slider:before { transform: translateX(16px); }
+  .radio-row { display: flex; align-items: flex-start; gap: 10px; padding: 11px 14px; border-top: .5px solid var(--line); cursor: pointer; }
+  .radio-row:first-child { border-top: none; }
+  .radio-row input { margin-top: 2px; }
+  footer { padding: 12px 20px; border-top: .5px solid var(--line); display: flex; align-items: center; gap: 12px; background: var(--panel); }
+  #status { flex: 1; font-size: 12px; color: var(--muted); }
+  button.btn { background: var(--accent); color: #fff; border: none; border-radius: 7px; padding: 7px 16px; font-size: 13px; font-weight: 500; cursor: pointer; }
+  button.btn.ghost { background: transparent; color: var(--accent); }
+  #banner { display: none; margin: 0 20px 0; padding: 10px 12px; border-radius: 8px; background: var(--note-bg); color: var(--note-text); font-size: 12px; align-items: center; justify-content: space-between; gap: 10px; }
+  #banner.show { display: flex; }
+  /* Debug report — a bottom sheet that slides open over a dimmed backdrop. */
+  .report-backdrop { position: fixed; inset: 0; background: rgba(0, 0, 0, .45); opacity: 0; pointer-events: none; transition: opacity .2s ease; z-index: 40; }
+  .report-backdrop.open { opacity: 1; pointer-events: auto; }
+  .report-pane { position: relative; z-index: 50; margin: 0 20px; max-height: 0; opacity: 0; overflow: hidden; border-radius: 10px; transition: max-height .26s ease, opacity .18s ease, margin .26s ease, padding .26s ease; }
+  .report-pane.open { max-height: 64vh; opacity: 1; margin: 0 20px 12px; padding: 14px; background: var(--panel); border: .5px solid var(--line); }
+  .report-title { font-weight: 600; }
+  .report-sub { color: var(--muted); font-size: 11.5px; margin: 3px 0 10px; padding-right: 28px; }
+  .report-close { position: absolute; top: 10px; right: 12px; width: 24px; height: 24px; padding: 0; border: none; background: transparent; color: var(--muted); font-size: 15px; line-height: 1; cursor: pointer; border-radius: 6px; display: flex; align-items: center; justify-content: center; }
+  .report-close:hover { background: var(--seg-bg); color: var(--text); }
+  .report-text { display: block; width: 100%; height: 230px; resize: vertical; background: var(--field); border: .5px solid var(--field-line); border-radius: 8px; color: var(--text); padding: 10px 12px; font: 11.5px/1.55 ui-monospace, SFMono-Regular, Menlo, monospace; white-space: pre; overflow: auto; }
+  .report-text:focus { outline: none; border-color: var(--accent); }
+  .report-foot { display: flex; align-items: center; justify-content: space-between; margin-top: 8px; }
+  .report-foot .hint { margin: 0; }
+  .report-link { color: var(--accent); font-size: 11.5px; text-decoration: none; flex: none; white-space: nowrap; cursor: pointer; }
+  .report-link:hover { text-decoration: underline; }
+  /* Footer sits above the backdrop so its report buttons stay usable. */
+  footer { position: relative; z-index: 50; }
+  .report-actions { display: inline-flex; align-items: center; gap: 6px; }
+  .report-actions .btn { padding: 6px 12px; }
+  .report-actions .btn.ghost { padding: 6px 8px; }
+  .chev { font-size: 10px; opacity: .8; margin-left: 5px; }
+  /* Permissions list */
+  .perm-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 11px 14px; border-top: .5px solid var(--line); }
+  .perm-row:first-child { border-top: none; }
+  .badge { font-size: 11px; font-weight: 600; padding: 2px 9px; border-radius: 10px; white-space: nowrap; }
+  .badge.granted { background: rgba(40, 180, 90, .16); color: #2ea043; }
+  .badge.needed { background: rgba(255, 90, 90, .16); color: #ff5a5a; }
+  .badge.unknown { background: var(--seg-bg); color: var(--muted); }
+  /* "Copied" tooltip that pops above the Copy button. */
+  #copyReport { position: relative; }
+  .tip { position: absolute; bottom: calc(100% + 7px); left: 50%; transform: translateX(-50%); background: var(--text); color: var(--panel); font-size: 11px; font-weight: 500; padding: 3px 8px; border-radius: 6px; white-space: nowrap; opacity: 0; pointer-events: none; transition: opacity .15s ease; box-shadow: 0 2px 8px rgba(0, 0, 0, .25); }
+  .tip:after { content: ""; position: absolute; top: 100%; left: 50%; transform: translateX(-50%); border: 4px solid transparent; border-top-color: var(--text); }
+  .tip.show { opacity: 1; }
+  .hidden { display: none !important; }
+  /* Indeterminate progress: when a download stage can't report byte progress
+     (e.g. the large STT model), the bar slides instead of sitting frozen. */
+  @keyframes voiceSlide { 0% { background-position: -35% 0; } 100% { background-position: 135% 0; } }
+  #voiceProgressBar.slide {
+    width: 100% !important;
+    background: linear-gradient(90deg, transparent 0%, transparent 20%, var(--accent) 50%, transparent 80%, transparent 100%);
+    background-size: 45% 100%; background-repeat: no-repeat;
+    animation: voiceSlide 1.1s ease-in-out infinite;
+  }
+}
