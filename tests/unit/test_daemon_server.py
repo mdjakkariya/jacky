@@ -301,3 +301,38 @@ def test_ws_sends_last_workspace_on_connect() -> None:
             "path": "/home/user/project",
             "name": "project",
         }
+
+
+def test_post_secret_accepts_mcp_namespace(tmp_path: object) -> None:
+    from unittest.mock import patch
+
+    client = _settings_client(tmp_path)
+    # Patch set_secret so we don't actually touch the Keychain
+    with patch("autobot.secrets.set_secret", return_value=True):
+        resp = client.post("/secret", json={"name": "mcp.slack.token", "value": "xoxb-fake"}).json()
+    assert resp["ok"] is True
+
+
+def test_post_secret_accepts_any_mcp_subkey(tmp_path: object) -> None:
+    from unittest.mock import patch
+
+    client = _settings_client(tmp_path)
+    with patch("autobot.secrets.set_secret", return_value=True):
+        resp = client.post("/secret", json={"name": "mcp.github.oauth", "value": "gho-fake"}).json()
+    assert resp["ok"] is True
+
+
+def test_post_secret_still_rejects_arbitrary_names(tmp_path: object) -> None:
+    resp = (
+        _settings_client(tmp_path)
+        .post("/secret", json={"name": "totally_evil", "value": "x"})
+        .json()
+    )
+    assert resp["ok"] is False
+    assert "mcp." in resp["error"]  # error message mentions the mcp namespace
+
+
+def test_post_secret_rejects_bare_mcp_prefix(tmp_path: object) -> None:
+    # "mcp." alone (no sub-key) is not a valid secret name
+    resp = _settings_client(tmp_path).post("/secret", json={"name": "mcp.", "value": "x"}).json()
+    assert resp["ok"] is False

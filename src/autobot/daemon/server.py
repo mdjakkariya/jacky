@@ -41,6 +41,20 @@ _log = get_logger("daemon")
 # rejected so the endpoint can't write arbitrary Keychain items.
 _SECRET_NAMES = ("anthropic_api_key", "web_api_key")
 
+
+def _is_allowed_secret(name: str) -> bool:
+    """Whether ``name`` is a permitted Keychain account the Settings view may write.
+
+    Accepts the hard-coded core secrets (API keys for existing providers) AND any
+    account under the ``mcp.`` namespace (e.g. ``mcp.slack.token``, ``mcp.gh.oauth``).
+    Rejects bare ``"mcp."`` (no sub-key) and arbitrary names.
+    """
+    if name in _SECRET_NAMES:
+        return True
+    # e.g. "mcp.slack.token" → prefix "mcp." + at least one char after the dot
+    return name.startswith("mcp.") and len(name) > len("mcp.")
+
+
 # Guards the on-demand voice-model download so two clicks can't run it twice.
 _voice_download_lock = threading.Lock()
 
@@ -244,10 +258,16 @@ def create_app(
 
         payload = await request.json()
         name = payload.get("name") if isinstance(payload, dict) else None
-        if name not in _SECRET_NAMES:
-            return {"ok": False, "error": f"unknown secret; allowed: {list(_SECRET_NAMES)}"}
+        name_str = str(name) if name is not None else ""
+        if not _is_allowed_secret(name_str):
+            return {
+                "ok": False,
+                "error": (
+                    f"unknown secret; allowed: {list(_SECRET_NAMES)} or any 'mcp.<id>.*' name"
+                ),
+            }
         value = str(payload.get("value", ""))
-        ok = set_secret(name, value) if value else delete_secret(name)
+        ok = set_secret(name_str, value) if value else delete_secret(name_str)
         if ok and on_change:
             on_change()  # a new key takes effect on the next turn, no restart
         return {"ok": ok}
