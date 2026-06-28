@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import os
+
 from mcp.server.fastmcp import FastMCP
 
 mcp = FastMCP("echo-test")
@@ -14,6 +16,12 @@ mcp = FastMCP("echo-test")
 def echo(text: str) -> str:
     """Return the input prefixed with 'echo: '."""
     return f"echo: {text}"
+
+
+@mcp.tool()  # type: ignore[misc, unused-ignore]
+def whoami() -> str:
+    """Return the value of ECHO_TOKEN from the environment (empty string if absent)."""
+    return os.environ.get("ECHO_TOKEN", "")
 
 
 if __name__ == "__main__":

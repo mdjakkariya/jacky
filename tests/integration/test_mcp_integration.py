@@ -59,3 +59,30 @@ def test_stdio_echo_connect_call_shutdown() -> None:
 
     # Tools are unregistered when the server disconnects.
     assert registry.get("echo__echo") is None
+
+
+def test_stdio_env_var_reaches_subprocess() -> None:
+    """Prove that env vars (and by extension token injection) reach the subprocess."""
+    cfg = McpServerConfig(
+        id="echo",
+        label="Echo",
+        transport="stdio",
+        command=sys.executable,
+        args=(_SERVER,),
+        enabled=True,
+        egress="local",
+        env={"ECHO_TOKEN": "sekret"},
+        # auth_type="none" so the Keychain is NOT touched — just plain env passthrough
+    )
+    registry = ToolRegistry()
+    manager = McpManager({"echo": cfg}, registry)
+    manager.start()
+    try:
+        manager.connect("echo")
+        assert _wait(lambda: registry.get("echo__whoami") is not None), "whoami never registered"
+
+        result = registry.dispatch("echo__whoami", {})
+        assert result.ok is True
+        assert result.content == "sekret"
+    finally:
+        manager.shutdown(timeout=10.0)

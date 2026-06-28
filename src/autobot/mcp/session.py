@@ -21,6 +21,8 @@ from typing import TYPE_CHECKING, Any
 
 from autobot.logging_setup import get_logger
 from autobot.mcp import adapter
+from autobot.mcp.auth import stdio_env_for
+from autobot.secrets import get_secret as _get_secret
 from autobot.tools.registry import ToolSpec
 
 if TYPE_CHECKING:
@@ -135,7 +137,7 @@ class McpServerWorker:
             params = StdioServerParameters(
                 command=self._cfg.command or "",
                 args=list(self._cfg.args),
-                env=dict(self._cfg.env) or None,
+                env=stdio_env_for(self._cfg, _get_secret),
             )
             async with (
                 stdio_client(params) as (read, write),
