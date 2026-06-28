@@ -48,11 +48,20 @@
   .folder { display: inline-flex; align-items: center; gap: 5px; -webkit-app-region: no-drag; cursor: pointer; color: var(--muted); font-size: 12px; }
   .folder svg { width: 14px; height: 14px; display: block; }
   .folder .fname { max-width: 140px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .folder-detail { position: absolute; top: 46px; left: 12px; z-index: 6; background: var(--panel); border: .5px solid var(--field-line); border-radius: 10px; padding: 10px 12px; min-width: 240px; box-shadow: 0 6px 20px rgba(0, 0, 0, .35); }
-  .folder-detail .path { font-size: 12px; color: var(--text); word-break: break-all; margin-bottom: 8px; }
-  .folder-detail .grants { font-size: 11px; color: var(--muted); margin-bottom: 8px; }
-  .folder-detail .acts { display: flex; gap: 8px; }
-  .folder-detail button { border: .5px solid var(--field-line); background: var(--field); color: var(--text); font-size: 12px; border-radius: 7px; padding: 5px 9px; cursor: pointer; }
+  /* Active-folder popover ("Working in"). Matches the design mockup, with a small
+     caret pointing up toward the folder chip so it reads as anchored to it. */
+  .folder-detail { position: absolute; top: 46px; left: 12px; z-index: 6; width: 262px; background: var(--panel); border: .5px solid var(--field-line); border-radius: 11px; padding: 12px 13px; box-shadow: 0 14px 40px rgba(0, 0, 0, .5); }
+  /* Caret: a rotated square whose top+left edges poke above the card as a "^" tail. */
+  .folder-detail::before { content: ""; position: absolute; top: -5px; left: 22px; width: 9px; height: 9px; background: var(--panel); border-left: .5px solid var(--field-line); border-top: .5px solid var(--field-line); transform: rotate(45deg); }
+  .fd-h { display: flex; align-items: center; gap: 7px; font-size: 12px; font-weight: 600; color: var(--text); margin-bottom: 9px; }
+  .fd-h svg { width: 14px; height: 14px; opacity: .9; }
+  .fd-path { font-family: "SF Mono", ui-monospace, Menlo, monospace; font-size: 12px; color: var(--text); word-break: break-all; background: var(--field); border-radius: 7px; padding: 7px 9px; margin-bottom: 9px; }
+  .fd-grants { font-size: 11px; color: var(--muted); line-height: 1.5; margin-bottom: 11px; }
+  .fd-grants b { font-weight: 600; }
+  .fd-acts { display: flex; gap: 8px; }
+  .fd-acts button { flex: 1; border: .5px solid var(--field-line); background: var(--field); color: var(--text); font-size: 12px; border-radius: 8px; padding: 7px 8px; cursor: pointer; display: inline-flex; align-items: center; justify-content: center; gap: 6px; }
+  .fd-acts button.primary { border-color: rgba(10, 132, 255, .5); background: var(--accent-bg); color: var(--accent); }
+  .fd-acts svg { width: 13px; height: 13px; }
   header .x { border: none; background: transparent; color: var(--muted); font-size: 16px; cursor: pointer; -webkit-app-region: no-drag; display: inline-flex; align-items: center; position: relative; }
   header .x:hover { color: var(--text); }
   header .x svg { width: 16px; height: 16px; display: block; }

@@ -16,8 +16,21 @@ export function setupFolderChip() {
       const chip = $("folder"); if (chip) { chip.style.display = workspacePath ? "inline-flex" : "none"; chip.classList.toggle("hidden", !workspacePath); }
       const nm = $("folderName"); if (nm) nm.textContent = w.name || "";
       const fp = $("folderPath"); if (fp) fp.textContent = w.path || "(none)";
-      const grants = (w.grants || []).map((g) => g.path + " (" + g.mode + ")");
-      const fg = $("folderGrants"); if (fg) fg.textContent = grants.length ? ("Granted: " + grants.join(", ")) : "";
+      // "Granted folders" label + one "path · mode" line per grant. Built via DOM
+      // (not innerHTML) so a folder path can never inject markup.
+      const fg = $("folderGrants");
+      if (fg) {
+        fg.textContent = "";
+        const grants = w.grants || [];
+        if (grants.length) {
+          const label = document.createElement("b"); label.textContent = "Granted folders";
+          fg.appendChild(label);
+          grants.forEach((g) => {
+            fg.appendChild(document.createElement("br"));
+            fg.appendChild(document.createTextNode(g.path + " · " + g.mode));
+          });
+        }
+      }
     } catch (e) {}
   }
 
