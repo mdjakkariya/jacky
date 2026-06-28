@@ -101,3 +101,27 @@ class SystemToggles:
         self._run = runner or _subprocess_runner
         self._procs = procs or _SubprocessManager()
         self._awake_pid: int | None = None
+
+    def set_volume(self, level: int | None = None, action: str | None = None) -> str:
+        """Set the system volume (0-100) or mute/unmute/nudge it up/down."""
+        if action in ("mute", "unmute"):
+            muted = "true" if action == "mute" else "false"
+            rc, out = self._run(["osascript", "-e", f"set volume output muted {muted}"])
+            if rc != 0:
+                return f"I couldn't change the volume: {out or 'unknown error'}"
+            _log.info("volume muted=%s", muted)
+            return "Muted." if action == "mute" else "Unmuted."
+        if action in ("up", "down"):
+            rc, out = self._run(["osascript", "-e", "output volume of (get volume settings)"])
+            current = first_int(out)
+            if rc != 0 or current is None:
+                return "I couldn't read the current volume."
+            level = clamp(current + (_VOLUME_STEP if action == "up" else -_VOLUME_STEP))
+        if level is None:
+            return "Tell me a level (0-100), or whether to turn it up, down, or mute."
+        level = clamp(level)
+        rc, out = self._run(["osascript", "-e", f"set volume output volume {level}"])
+        if rc != 0:
+            return f"I couldn't set the volume: {out or 'unknown error'}"
+        _log.info("volume set to=%d", level)
+        return f"Volume set to {level}%."

@@ -74,3 +74,46 @@ def test_is_accessibility_error() -> None:
 def test_constructs_with_fakes() -> None:
     tools = SystemToggles(FakeRunner(), FakeProcs())
     assert tools._awake_pid is None
+
+
+def test_set_volume_absolute() -> None:
+    runner = FakeRunner()
+    msg = SystemToggles(runner).set_volume(level=30)
+    assert msg == "Volume set to 30%."
+    assert runner.calls[-1] == ["osascript", "-e", "set volume output volume 30"]
+
+
+def test_set_volume_clamps() -> None:
+    runner = FakeRunner()
+    assert SystemToggles(runner).set_volume(level=130) == "Volume set to 100%."
+
+
+def test_set_volume_up_reads_then_sets() -> None:
+    # First call reads current (45), second sets 55.
+    runner = SeqRunner([(0, "45"), (0, "")])
+    msg = SystemToggles(runner).set_volume(action="up")
+    assert msg == "Volume set to 55%."
+    assert runner.calls[0] == ["osascript", "-e", "output volume of (get volume settings)"]
+    assert runner.calls[1] == ["osascript", "-e", "set volume output volume 55"]
+
+
+def test_set_volume_down_clamps_at_zero() -> None:
+    runner = SeqRunner([(0, "5"), (0, "")])
+    assert SystemToggles(runner).set_volume(action="down") == "Volume set to 0%."
+
+
+def test_set_volume_mute_unmute() -> None:
+    runner = FakeRunner()
+    assert SystemToggles(runner).set_volume(action="mute") == "Muted."
+    assert runner.calls[-1] == ["osascript", "-e", "set volume output muted true"]
+    assert SystemToggles(runner).set_volume(action="unmute") == "Unmuted."
+    assert runner.calls[-1] == ["osascript", "-e", "set volume output muted false"]
+
+
+def test_set_volume_no_args_asks() -> None:
+    assert "Tell me" in SystemToggles(FakeRunner()).set_volume()
+
+
+def test_set_volume_failure_is_friendly() -> None:
+    msg = SystemToggles(FakeRunner(rc=1, out="boom")).set_volume(level=20)
+    assert "couldn't set the volume" in msg
