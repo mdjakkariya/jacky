@@ -76,6 +76,15 @@
   .dbg.copied .dbgtip { opacity: 1; }
   .htip { position: absolute; top: 128%; left: 0; white-space: nowrap; background: var(--panel); border: .5px solid var(--field-line); color: var(--text); font-size: 11px; font-weight: 500; padding: 4px 8px; border-radius: 7px; opacity: 0; pointer-events: none; transform: translateY(-3px); transition: opacity .14s, transform .14s; box-shadow: 0 6px 18px rgba(0, 0, 0, .34); z-index: 9; }
   .x:hover .htip, .x:focus-visible .htip { opacity: 1; transform: translateY(0); }
+  /* The shortcut hint inside a tooltip — dimmer + tabular so it reads as a keycap. */
+  .htip .sc { margin-left: 6px; opacity: .55; font-variant-numeric: tabular-nums; }
+  /* Right-anchored variant for buttons near the window's right edge (e.g. Hide), so
+     the tooltip grows leftward instead of clipping past the drawer. */
+  .htip-end { left: auto; right: 0; }
+  /* Up-pointing caret on the tooltip, matching the popover carets — sits under the
+     button (left for left-anchored tips, right for the right-anchored Hide tip). */
+  .htip::before { content: ""; position: absolute; top: -4px; left: 12px; width: 8px; height: 8px; background: var(--panel); border-left: .5px solid var(--field-line); border-top: .5px solid var(--field-line); transform: rotate(45deg); }
+  .htip-end::before { left: auto; right: 12px; }
   #log { flex: 1; overflow-y: auto; padding: 14px 12px; display: flex; flex-direction: column; gap: 10px; }
   #log > * { flex-shrink: 0; }
   .msg { max-width: 82%; font-size: 15px; line-height: 1.55; padding: 10px 13px; border-radius: 16px; white-space: pre-wrap; word-wrap: break-word; }

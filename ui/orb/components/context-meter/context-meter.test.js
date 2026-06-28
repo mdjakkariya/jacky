@@ -31,6 +31,23 @@ it("clicking the ring opens the detail card and renders cost when present", () =
   expect(d.innerHTML).toContain("$0.5000");
 });
 
+it("Escape closes the open detail card", () => {
+  const m = setupContextMeter();
+  m.update({ pct: 50 });
+  document.getElementById("ctx").click(); // open
+  expect(document.getElementById("ctxDetail").classList.contains("hidden")).toBe(false);
+  document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" }));
+  expect(document.getElementById("ctxDetail").classList.contains("hidden")).toBe(true);
+});
+
+it("a click outside closes the open detail card", () => {
+  const m = setupContextMeter();
+  m.update({ pct: 50 });
+  document.getElementById("ctx").click(); // open
+  document.body.click(); // click outside the ring + card
+  expect(document.getElementById("ctxDetail").classList.contains("hidden")).toBe(true);
+});
+
 it("reset hides the ring and zeroes the percent", () => {
   const m = setupContextMeter();
   m.update({ pct: 50 });

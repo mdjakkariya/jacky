@@ -60,7 +60,8 @@ export function setupContextMeter() {
   registerPopover(closeDetail); // let other popovers close this one when they open
 
   const ctx = $("ctx");
-  if (ctx) ctx.addEventListener("click", () => {
+  if (ctx) ctx.addEventListener("click", (e) => {
+    e.stopPropagation(); // don't let the outside-click handler immediately close it
     if (!lastCtx) return;
     const d = $("ctxDetail");
     if (d.classList.contains("hidden")) {
@@ -72,6 +73,22 @@ export function setupContextMeter() {
       d.classList.add("hidden");
     }
   });
+
+  // Outside-click closes the detail card (same affordance as the folder popover).
+  document.addEventListener("click", (e) => {
+    const d = $("ctxDetail"), ring = $("ctx");
+    if (!d || d.classList.contains("hidden")) return;
+    if ((d && d.contains(e.target)) || (ring && ring.contains(e.target))) return;
+    closeDetail();
+  });
+  // Escape closes only this card (capture phase + stopPropagation so it runs before the
+  // drawer's Escape handler, which would otherwise hide the whole window).
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape") {
+      const d = $("ctxDetail");
+      if (d && !d.classList.contains("hidden")) { e.stopPropagation(); closeDetail(); }
+    }
+  }, true);
 
   return { update, reset };
 }

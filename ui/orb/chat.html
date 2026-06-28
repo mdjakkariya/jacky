@@ -11,7 +11,7 @@
     <div class="hgroup">
       <button class="x" id="newchat" aria-label="New chat">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
-        <span class="htip">New chat</span>
+        <span class="htip">New chat <span class="sc">⌘⌃N</span></span>
       </button>
       <span id="ctx" class="ctx" aria-label="Context used">
         <svg width="16" height="16" viewBox="0 0 36 36" aria-hidden="true"><circle cx="18" cy="18" r="15" fill="none" stroke="var(--field-line)" stroke-width="5"/><circle id="ctxArc" cx="18" cy="18" r="15" fill="none" stroke="#7fb87a" stroke-width="5" stroke-linecap="round" stroke-dasharray="94.2" stroke-dashoffset="94.2" transform="rotate(-90 18 18)"/></svg>
@@ -32,7 +32,7 @@
         <button id="m-voice">Voice</button>
         <button id="m-chat" class="on">Chat</button>
       </div>
-      <button class="x" id="close" aria-label="Hide">✕</button>
+      <button class="x" id="close" aria-label="Hide">✕<span class="htip htip-end">Hide <span class="sc">Esc</span></span></button>
     </div>
   </header>
   <update-banner id="updateBanner" class="upd hidden">
