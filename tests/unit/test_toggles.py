@@ -250,6 +250,12 @@ def test_set_wifi_toggle_when_on_turns_off() -> None:
     assert ["networksetup", "-setairportpower", "en0", "off"] in runner.calls
 
 
+def test_set_wifi_toggle_when_off_turns_on() -> None:
+    runner = WifiRunner(power="Off")
+    assert SystemToggles(runner).set_wifi("toggle") == "Wi-Fi turned on."
+    assert ["networksetup", "-setairportpower", "en0", "on"] in runner.calls
+
+
 def test_set_wifi_never_uses_sudo() -> None:
     runner = WifiRunner()
     SystemToggles(runner).set_wifi("off")
@@ -263,7 +269,7 @@ def test_set_wifi_admin_required_is_friendly() -> None:
 
 
 def test_set_wifi_bad_state() -> None:
-    assert "on" in SystemToggles(WifiRunner()).set_wifi("sideways")
+    assert SystemToggles(WifiRunner()).set_wifi("sideways") == "Say 'on', 'off', or 'toggle'."
 
 
 def test_keep_awake_timed() -> None:
@@ -363,7 +369,14 @@ def test_only_appearance_requires_automation() -> None:
     appearance = registry.get("set_appearance")
     assert appearance is not None
     assert appearance.requires == AUTOMATION
-    for name in ("set_volume", "set_brightness", "set_wifi", "lock_screen", "sleep_mac"):
+    for name in (
+        "set_volume",
+        "set_brightness",
+        "set_wifi",
+        "lock_screen",
+        "sleep_mac",
+        "keep_awake",
+    ):
         spec = registry.get(name)
         assert spec is not None, name
         assert spec.requires is None, name
