@@ -58,6 +58,18 @@ class FakeProcs:
         self.stopped.append(pid)
 
 
+class _RecordingInstaller:
+    """Fake Installer: returns a fixed (rc, out) and counts invocations."""
+
+    def __init__(self, result: tuple[int, str]) -> None:
+        self._result = result
+        self.calls = 0
+
+    def __call__(self) -> tuple[int, str]:
+        self.calls += 1
+        return self._result
+
+
 def test_clamp_bounds() -> None:
     assert clamp(130) == 100
     assert clamp(-5) == 0
@@ -131,10 +143,10 @@ def test_set_brightness_absolute_uses_binary() -> None:
     assert runner.calls[-1] == ["brightness", "0.4"]
 
 
-def test_set_brightness_binary_missing_gives_setup_message() -> None:
-    # rc 127 == command not found.
+def test_set_brightness_binary_missing_offers_install() -> None:
+    # rc 127 == command not found -> offer to install (instead of a manual hint).
     msg = SystemToggles(FakeRunner(rc=127, out="command not found")).set_brightness(level=40)
-    assert "brew install brightness" in msg
+    assert "install it for you" in msg.lower()
 
 
 def test_set_brightness_up_uses_key_code() -> None:
@@ -161,6 +173,41 @@ def test_set_brightness_accessibility_blocked() -> None:
 
 def test_set_brightness_no_args_asks() -> None:
     assert "Tell me" in SystemToggles(FakeRunner()).set_brightness()
+
+
+# --- install_brightness (gated brew install) -----------------------------
+def test_install_brightness_already_installed() -> None:
+    # `which brightness` succeeds -> nothing to do; never calls the installer.
+    runner = SeqRunner([(0, "/opt/homebrew/bin/brightness")])
+    installer = _RecordingInstaller((0, ""))
+    msg = SystemToggles(runner, installer=installer).install_brightness()
+    assert "already installed" in msg
+    assert installer.calls == 0
+
+
+def test_install_brightness_no_brew_points_to_download() -> None:
+    # brightness missing (which rc 1), brew missing (which rc 1) -> link, no install.
+    runner = SeqRunner([(1, ""), (1, "")])
+    installer = _RecordingInstaller((0, ""))
+    msg = SystemToggles(runner, installer=installer).install_brightness()
+    assert "brew.sh" in msg
+    assert installer.calls == 0
+
+
+def test_install_brightness_success() -> None:
+    # brightness missing, brew present -> run installer -> success.
+    runner = SeqRunner([(1, ""), (0, "/opt/homebrew/bin/brew")])
+    installer = _RecordingInstaller((0, "installed"))
+    msg = SystemToggles(runner, installer=installer).install_brightness()
+    assert "Installed the brightness tool" in msg
+    assert installer.calls == 1
+
+
+def test_install_brightness_failure_is_friendly() -> None:
+    runner = SeqRunner([(1, ""), (0, "/opt/homebrew/bin/brew")])
+    installer = _RecordingInstaller((1, "network error"))
+    msg = SystemToggles(runner, installer=installer).install_brightness()
+    assert "couldn't install the brightness tool" in msg
 
 
 _APPEARANCE_SET = 'tell application "System Events" to tell appearance preferences'
@@ -330,17 +377,25 @@ def test_lock_screen_uses_cgsession_when_present() -> None:
     assert runner.calls[-1][-1] == "-suspend"
 
 
-def test_lock_screen_falls_back_to_keystroke() -> None:
-    # CGSession missing (rc 127), keystroke succeeds (rc 0).
+def test_lock_screen_falls_back_to_display_sleep() -> None:
+    # CGSession missing (rc 127) -> sleep the display (NOT a keystroke that could
+    # quit the frontmost app).
     runner = SeqRunner([(127, "command not found"), (0, "")])
     assert SystemToggles(runner).lock_screen() == "Locking the screen."
-    assert runner.calls[1][0] == "osascript"
-    assert "control down" in runner.calls[1][-1]
+    assert runner.calls[1] == ["pmset", "displaysleepnow"]
 
 
-def test_lock_screen_keystroke_blocked_is_friendly() -> None:
-    runner = SeqRunner([(127, "no path"), (1, "(-1719)")])
-    assert "Accessibility" in SystemToggles(runner).lock_screen()
+def test_lock_screen_never_synthesizes_a_keystroke() -> None:
+    # Regression: a Ctrl-Cmd-Q keystroke landed on the front app as Cmd-Q and quit it.
+    runner = SeqRunner([(127, "command not found"), (0, "")])
+    SystemToggles(runner).lock_screen()
+    assert all("keystroke" not in arg for call in runner.calls for arg in call)
+
+
+def test_lock_screen_failure_is_friendly() -> None:
+    # Both CGSession and display-sleep fail.
+    runner = SeqRunner([(127, "no path"), (1, "boom")])
+    assert "couldn't lock the screen" in SystemToggles(runner).lock_screen()
 
 
 _TOGGLE_NAMES = (
@@ -388,6 +443,17 @@ def test_dispatch_runs_through_registry() -> None:
     result = registry.dispatch("set_volume", {"level": 25})
     assert result.ok
     assert "25%" in result.content
+
+
+def test_install_brightness_tool_is_gated() -> None:
+    # The brew-install tool must be DESTRUCTIVE so the permission gate confirms
+    # before downloading anything, and carry a disclosing confirm prompt.
+    registry = ToolRegistry()
+    register_system_toggles(registry, FakeRunner(), FakeProcs())
+    spec = registry.get("install_brightness_tool")
+    assert spec is not None
+    assert spec.risk is Risk.DESTRUCTIVE
+    assert spec.confirm_prompt and "Homebrew" in spec.confirm_prompt
 
 
 def test_system_toggles_enabled_by_default() -> None:

@@ -30,10 +30,15 @@ _log = get_logger("toggles")
 
 RunResult = tuple[int, str]
 Runner = Callable[[list[str]], RunResult]
+# A long-running installer (Homebrew); separate from Runner because `brew install`
+# far exceeds the one-shot 10s command timeout.
+Installer = Callable[[], RunResult]
+
+_BREW_URL = "https://brew.sh"
 
 _VOLUME_STEP = 10  # how much "louder"/"quieter" nudges the level
 _WIFI_IF = "en0"  # Wi-Fi interface fallback when it can't be resolved
-# The classic CLI lock path; absent on newer macOS, where we fall back to a keystroke.
+# The classic CLI lock path; absent on newer macOS, where we fall back to display sleep.
 _CGSESSION = "/System/Library/CoreServices/Menu Extras/User.menu/Contents/Resources/CGSession"
 
 
@@ -45,6 +50,25 @@ def _subprocess_runner(args: list[str]) -> RunResult:
         proc = subprocess.run(args, capture_output=True, text=True, timeout=10, check=False)
     except FileNotFoundError:
         return 127, f"command not found: {args[0]}"
+    except subprocess.TimeoutExpired:
+        return 124, "timed out"
+    return proc.returncode, ((proc.stdout or "") + (proc.stderr or "")).strip()
+
+
+def _brew_install_brightness() -> RunResult:
+    """Install the 'brightness' tool via Homebrew (a longer timeout than one-shots)."""
+    import subprocess
+
+    try:
+        proc = subprocess.run(
+            ["brew", "install", "brightness"],
+            capture_output=True,
+            text=True,
+            timeout=300,
+            check=False,
+        )
+    except FileNotFoundError:
+        return 127, "command not found: brew"
     except subprocess.TimeoutExpired:
         return 124, "timed out"
     return proc.returncode, ((proc.stdout or "") + (proc.stderr or "")).strip()
@@ -100,10 +124,16 @@ class _SubprocessManager:
 class SystemToggles:
     """Write-side macOS controls exposed as tools."""
 
-    def __init__(self, runner: Runner | None = None, procs: ProcessManager | None = None) -> None:
-        """Store the injected command runner and process manager."""
+    def __init__(
+        self,
+        runner: Runner | None = None,
+        procs: ProcessManager | None = None,
+        installer: Installer | None = None,
+    ) -> None:
+        """Store the injected command runner, process manager, and brew installer."""
         self._run = runner or _subprocess_runner
         self._procs = procs or _SubprocessManager()
+        self._install = installer or _brew_install_brightness
         self._awake_pid: int | None = None
 
     def specs(self) -> list[ToolSpec]:
@@ -155,6 +185,25 @@ class SystemToggles:
                 handler=self.set_brightness,
                 risk=Risk.WRITE,
                 ack="Adjusting the brightness.",
+            ),
+            ToolSpec(
+                name="install_brightness_tool",
+                description=(
+                    "Install the Homebrew 'brightness' command-line tool, which lets you set an "
+                    "EXACT brightness level (e.g. 'set brightness to 40'). Use this ONLY after "
+                    "set_brightness reports the tool is missing and the user agrees to install "
+                    "it. It downloads from the internet via Homebrew (the user is asked to "
+                    "confirm first). After it succeeds, call set_brightness again with the level "
+                    "the user originally wanted."
+                ),
+                parameters=no_params,
+                handler=self.install_brightness,
+                risk=Risk.DESTRUCTIVE,
+                confirm_prompt=(
+                    "Install the 'brightness' tool via Homebrew? This downloads it from the "
+                    "internet so I can set exact brightness levels."
+                ),
+                ack="Installing the brightness tool.",
             ),
             ToolSpec(
                 name="set_appearance",
@@ -290,13 +339,35 @@ class SystemToggles:
         rc, out = self._run(["brightness", str(level / 100)])
         if rc == 127:  # the brightness binary isn't installed
             return (
-                "I can make the screen brighter or dimmer step by step. For an exact level, "
-                "install the brightness tool: run `brew install brightness`."
+                "Setting an exact level needs the 'brightness' tool, which isn't installed. "
+                "Want me to install it for you? I'll ask before downloading anything. "
+                "Otherwise I can make the screen brighter or dimmer step by step."
             )
         if rc != 0:
             return f"I couldn't set the brightness: {out or 'unknown error'}"
         _log.info("brightness set to=%d", level)
         return f"Brightness set to {level}%."
+
+    def install_brightness(self) -> str:
+        """Install the Homebrew 'brightness' tool so exact levels work (gated).
+
+        Idempotent and honest about its limits: reports if it's already installed,
+        and if Homebrew is missing it points at the install page rather than
+        attempting a large unattended bootstrap.
+        """
+        if self._run(["which", "brightness"])[0] == 0:
+            return "The brightness tool is already installed — ask me to set an exact level."
+        if self._run(["which", "brew"])[0] != 0:
+            return (
+                "I can't install it automatically because Homebrew isn't available. Install "
+                f"Homebrew from {_BREW_URL}, then ask me again — or just say 'brighter' / "
+                "'dimmer' to adjust without it."
+            )
+        rc, out = self._install()
+        if rc != 0:
+            return f"I couldn't install the brightness tool: {out or 'unknown error'}"
+        _log.info("brightness tool installed")
+        return "Installed the brightness tool — now tell me the exact level you want."
 
     def set_appearance(self, mode: str) -> str:
         """Switch the system appearance to dark, light, or the opposite of now."""
@@ -386,23 +457,22 @@ class SystemToggles:
         return "I'll keep your Mac awake until you tell me to stop."
 
     def lock_screen(self) -> str:
-        """Lock the screen; fall back to a keystroke where CGSession is gone."""
+        """Lock the screen; sleep the display where CGSession is unavailable.
+
+        Deliberately avoids synthesizing a Ctrl-Cmd-Q keystroke: that is delivered
+        to the *frontmost app* and, if the Control modifier is dropped, arrives as
+        Cmd-Q and quits it (it closed Jack's own window in testing). Display sleep
+        is global, needs no permission, and locks when a password is required after
+        sleep (the macOS default).
+        """
         rc, _out = self._run([_CGSESSION, "-suspend"])
         if rc == 0:
             _log.info("lock via=cgsession")
             return "Locking the screen."
-        keystroke = (
-            'tell application "System Events" to keystroke "q" using {control down, command down}'
-        )
-        rc2, out2 = self._run(["osascript", "-e", keystroke])
+        rc2, out2 = self._run(["pmset", "displaysleepnow"])
         if rc2 == 0:
-            _log.info("lock via=keystroke")
+            _log.info("lock via=displaysleep")
             return "Locking the screen."
-        if is_accessibility_error(out2):
-            return (
-                "I need Accessibility access to lock the screen. Enable Jack under System "
-                "Settings → Privacy & Security → Accessibility."
-            )
         return f"I couldn't lock the screen: {out2 or 'unknown error'}"
 
 
@@ -410,6 +480,7 @@ def register_system_toggles(
     registry: ToolRegistry,
     runner: Runner | None = None,
     procs: ProcessManager | None = None,
+    installer: Installer | None = None,
 ) -> SystemToggles:
     """Register the write-side system-control tools into ``registry``.
 
@@ -417,11 +488,12 @@ def register_system_toggles(
         registry: The tool registry to populate.
         runner: Optional command runner; defaults to subprocess.
         procs: Optional process manager; defaults to subprocess.
+        installer: Optional Homebrew installer for the brightness tool.
 
     Returns:
         The constructed :class:`SystemToggles` instance.
     """
-    tools = SystemToggles(runner, procs)
+    tools = SystemToggles(runner, procs, installer)
     for spec in tools.specs():
         registry.register(spec)
     _log.info("system toggles registered (volume/brightness/appearance/sleep/wifi/keep-awake/lock)")
