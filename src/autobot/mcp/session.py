@@ -152,9 +152,13 @@ class McpServerWorker:
             _log.exception("mcp worker failed server=%s", self._cfg.id)
             self._emit_status(error=str(exc))
         finally:
-            self._unregister_all()
-            if self._state != "error":
+            # Flip off "connected" first so new submit_call()s are rejected fast,
+            # then fail any calls still queued/in-flight so their callers don't have
+            # to wait out the full CALL_TIMEOUT_S on a shutdown or crash.
+            if self._state == "connected":
                 self._state = "disconnected"
+            self._fail_pending()
+            self._unregister_all()
             self._tool_count = 0
             self._emit_status()
             _log.info("mcp disconnected server=%s", self._cfg.id)
@@ -171,6 +175,25 @@ class McpServerWorker:
                 continue
             if isinstance(cmd, _Call):
                 await self._do_call(session, cmd)
+
+    def _fail_pending(self) -> None:
+        """Resolve every still-queued call with an error (called on worker exit).
+
+        Without this, a call enqueued behind the shutdown sentinel (or in flight when
+        the worker crashes) would never have its future set, forcing the blocked
+        ``submit_call`` caller to wait the full ``CALL_TIMEOUT_S`` instead of failing
+        fast. Drains the queue and fails each pending :class:`_Call`.
+        """
+        if self._queue is None:
+            return
+        exc = RuntimeError(f"MCP server {self._cfg.id!r} disconnected")
+        while True:
+            try:
+                item = self._queue.get_nowait()
+            except asyncio.QueueEmpty:
+                break
+            if isinstance(item, _Call) and not item.future.done():
+                item.future.set_exception(exc)
 
     async def _do_call(self, session: Any, call: _Call) -> None:
         """Invoke one tool and resolve its future (text on ok, exception on error)."""
