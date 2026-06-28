@@ -91,7 +91,7 @@ cleanly separated.
 | `sleep_mac` | none | `pmset sleepnow` | `WRITE` | none | "Going to sleep." |
 | `set_wifi` | `state`: on \| off \| toggle | `networksetup -setairportpower <dev>` (device resolved like system.py) | `WRITE` | none (see §3.4) | "Updating Wi-Fi." |
 | `keep_awake` | `minutes` int (optional); `off` bool | `caffeinate -dimsu [-t N]` spawned + tracked; `off` kills it | `WRITE` | none | "Keeping your Mac awake." |
-| `lock_screen` | none | `CGSession -suspend` → AppleScript Ctrl-Cmd-Q keystroke → message | `WRITE` | none (see §3.4) | "Locking the screen." |
+| `lock_screen` | none | `CGSession -suspend` → `pmset displaysleepnow` (see §9) | `WRITE` | none | "Locking the screen." |
 
 **Tool shape decision:** `set_volume`/`set_brightness` each take an optional
 `level` *and* an optional `action` (absolute + relative/mute in one tool, the
@@ -188,8 +188,9 @@ path):
   machine's policy requires admin, the command fails → friendly message (*"macOS
   needs admin rights to toggle Wi-Fi on this Mac"*), never a silent `sudo`.
 - **`lock_screen`**: try the `CGSession -suspend` binary; if the path is absent
-  (`rc 127`, removed on newer macOS) fall back to the AppleScript Ctrl-Cmd-Q
-  keystroke (needs Accessibility); if that's blocked → friendly message.
+  (`rc 127`, removed on newer macOS) fall back to `pmset displaysleepnow` (no
+  permission). **Superseded — see §9:** the original Ctrl-Cmd-Q keystroke fallback
+  was removed because it could quit the frontmost app.
 
 `set_appearance` keeps `requires=automation` — it has a single path that always
 targets System Events. Everything else needs no permission.
@@ -342,3 +343,27 @@ Refs: [Turn on Focus mode from the Terminal](https://heyfocus.com/blog/how-to-tu
 - **More controls if wanted** — Bluetooth (needs `blueutil`/private API), Night
   Shift / True Tone (CoreBrightness private API), keyboard backlight. Each needs
   its own feasibility pass; excluded here for lack of a clean on-device path.
+
+## 9. Post-testing refinements (shipped — supersede §3.2/§3.4 where noted)
+
+Real-device testing on macOS 15.7.4 surfaced two changes to the original design:
+
+- **`lock_screen` no longer synthesizes a Ctrl-Cmd-Q keystroke.** That keystroke is
+  delivered to the *frontmost app* and, when the Control modifier is dropped,
+  arrives as **Cmd-Q and quits it** — in testing it closed Jack's own window
+  instead of locking. The fallback (when `CGSession -suspend` is absent) is now
+  **`pmset displaysleepnow`**: global, needs no permission, and locks when
+  "require password after sleep" is set (the macOS default). `lock_screen` thus
+  needs **no** Accessibility, and its `requires` stays unset. Caveat: with
+  require-password off, it only blanks the display (a user security setting).
+- **Exact brightness can self-heal via a gated install.** When `set_brightness`
+  finds the `brightness` binary missing, it now *offers* to install it. A new
+  tool **`install_brightness_tool`** (`Risk.DESTRUCTIVE` → the permission gate
+  confirms before any download) runs `brew install brightness` via an injected
+  `Installer` (300s timeout, separate from the 10s one-shot `Runner`), after which
+  the model retries the exact level. If Homebrew itself is absent, it returns a
+  message pointing at `https://brew.sh` — it never bootstraps Homebrew unattended,
+  never `sudo`s, and **never opens the URL automatically** (display-only link; see
+  the cross-cutting "confirm before opening external URLs" note tracked separately).
+  This is the one sanctioned network action in the module, and it is opt-in +
+  confirmed + disclosed, consistent with the project's off-device exception rules.
