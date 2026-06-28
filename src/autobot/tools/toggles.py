@@ -220,3 +220,26 @@ class SystemToggles:
             return f"I couldn't change Wi-Fi: {out or 'unknown error'}"
         _log.info("wifi state=%s", state)
         return f"Wi-Fi turned {state}."
+
+    def keep_awake(self, minutes: int | None = None, off: bool = False) -> str:
+        """Keep the Mac awake (optionally for N minutes), or stop doing so."""
+        if off:
+            if self._awake_pid is None:
+                return "Your Mac wasn't being kept awake."
+            self._procs.stop(self._awake_pid)
+            self._awake_pid = None
+            _log.info("keep_awake stopped")
+            return "Okay, your Mac can sleep normally again."
+        # Replace any existing keep-awake so we never leak caffeinate processes.
+        if self._awake_pid is not None:
+            self._procs.stop(self._awake_pid)
+            self._awake_pid = None
+        argv = ["caffeinate", "-dimsu"]
+        if minutes is not None and minutes > 0:
+            argv += ["-t", str(minutes * 60)]
+        self._awake_pid = self._procs.start(argv)
+        _log.info("keep_awake minutes=%s pid=%s", minutes, self._awake_pid)
+        if minutes is not None and minutes > 0:
+            unit = "minute" if minutes == 1 else "minutes"
+            return f"I'll keep your Mac awake for {minutes} {unit}."
+        return "I'll keep your Mac awake until you tell me to stop."

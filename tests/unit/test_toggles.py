@@ -259,3 +259,52 @@ def test_set_wifi_admin_required_is_friendly() -> None:
 
 def test_set_wifi_bad_state() -> None:
     assert "on" in SystemToggles(WifiRunner()).set_wifi("sideways")
+
+
+def test_keep_awake_timed() -> None:
+    procs = FakeProcs()
+    tools = SystemToggles(FakeRunner(), procs)
+    msg = tools.keep_awake(minutes=30)
+    assert "30 minutes" in msg
+    assert procs.started[-1] == ["caffeinate", "-dimsu", "-t", "1800"]
+    assert tools._awake_pid is not None
+
+
+def test_keep_awake_indefinite() -> None:
+    procs = FakeProcs()
+    tools = SystemToggles(FakeRunner(), procs)
+    msg = tools.keep_awake()
+    assert "until you tell me to stop" in msg
+    assert procs.started[-1] == ["caffeinate", "-dimsu"]
+
+
+def test_keep_awake_off_stops_tracked_pid() -> None:
+    procs = FakeProcs()
+    tools = SystemToggles(FakeRunner(), procs)
+    tools.keep_awake()
+    pid = tools._awake_pid
+    msg = tools.keep_awake(off=True)
+    assert "sleep normally" in msg
+    assert procs.stopped == [pid]
+    assert tools._awake_pid is None
+
+
+def test_keep_awake_off_when_nothing_active() -> None:
+    tools = SystemToggles(FakeRunner(), FakeProcs())
+    assert "wasn't being kept awake" in tools.keep_awake(off=True)
+
+
+def test_keep_awake_replaces_previous_without_leaking() -> None:
+    procs = FakeProcs()
+    tools = SystemToggles(FakeRunner(), procs)
+    tools.keep_awake()
+    first = tools._awake_pid
+    tools.keep_awake(minutes=10)
+    # Starting a second keep-awake stops the first.
+    assert procs.stopped == [first]
+    assert len(procs.started) == 2
+
+
+def test_keep_awake_one_minute_singular() -> None:
+    tools = SystemToggles(FakeRunner(), FakeProcs())
+    assert "1 minute." in tools.keep_awake(minutes=1)
