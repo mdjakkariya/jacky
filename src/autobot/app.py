@@ -33,6 +33,7 @@ from autobot.tools.registry import ToolRegistry
 
 if TYPE_CHECKING:
     from autobot.io.listening import FrameSource
+    from autobot.mcp.manager import McpManager
     from autobot.memory.store import MemoryStore
 
 
@@ -454,7 +455,7 @@ def build(
         log.info("web search ENABLED provider=%s (queries leave the device)", provider)
         print(f"[web] web search ENABLED via {provider} — queries leave the device.")
 
-    mcp_manager: object | None = None
+    mcp_manager: McpManager | None = None
 
     if settings.allow_mcp:
         # MCP integration (opt-in, the third disclosed exception). Adds each enabled
@@ -596,7 +597,7 @@ def build(
         release_voice_io=_voice_io.release,
     )
     if mcp_manager is not None:
-        orch.mcp = mcp_manager  # type: ignore[assignment]
+        orch.mcp = mcp_manager
     return orch
 
 
