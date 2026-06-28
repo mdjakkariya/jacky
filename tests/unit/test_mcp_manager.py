@@ -180,3 +180,25 @@ def test_secret_present_returns_false_when_no_secret_ref(tmp_path: Path) -> None
     cfg = load_mcp_config(p)
     mgr = McpManager(cfg, ToolRegistry(), config_path=p)
     assert mgr.secret_present("echo") is False
+
+
+def test_set_tool_override_deny_is_idempotent(tmp_path: Path) -> None:
+    # Disabling the same tool twice must not duplicate it in tool_deny.
+    servers = {"echo": {"transport": "stdio", "command": "python", "enabled": False}}
+    p = _write_servers_json(tmp_path, servers)
+    from autobot.mcp.config import load_mcp_config
+
+    cfg = load_mcp_config(p)
+    mgr = McpManager(cfg, ToolRegistry(), config_path=p)
+    mgr.set_tool_override("echo", "echo__danger", enabled=False)
+    mgr.set_tool_override("echo", "echo__danger", enabled=False)
+    saved = json.loads(p.read_text())
+    assert saved["servers"]["echo"]["tool_deny"].count("echo__danger") == 1
+
+
+def test_add_or_update_server_rejects_missing_id(tmp_path: Path) -> None:
+    p = _write_servers_json(tmp_path, {})
+    mgr = McpManager({}, ToolRegistry(), config_path=p)
+    result = mgr.add_or_update_server({"transport": "stdio", "command": "python"})
+    assert result["ok"] is False
+    assert "id" in result["error"]
