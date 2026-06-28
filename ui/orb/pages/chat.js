@@ -98,6 +98,10 @@ daemon.on("context", (m) => ctxMeter.update(m));
 daemon.on("choices", (m) => { if (m.mode !== "voice") showChoices(log, m); });
 daemon.on("step", (m) => log.renderStep(m));
 daemon.on("workspace", (m) => folderChip.renderFromEvent(m));
+daemon.on("mcp_status", () => {
+  // Trigger server map refresh when MCP status changes (e.g., on reconnect)
+  log._refreshServerMap?.();
+});
 daemon.connect();
 folderChip.refresh(); // populate chip (and modal if open) on load
 

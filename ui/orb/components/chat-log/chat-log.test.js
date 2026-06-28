@@ -1,7 +1,13 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
 vi.mock("../../lib/tauri.js", () => ({ openExternal: vi.fn() }));
+vi.mock("../../lib/daemon.js", () => ({
+  daemon: {
+    mcpServers: vi.fn().mockResolvedValue({ servers: [] }),
+  },
+}));
 import "./chat-log.js";
+import { mcpInfoForTool } from "./chat-log.js";
 
 function mount() {
   document.body.innerHTML = '<chat-log id="log"><div id="empty">welcome</div></chat-log><button id="jump" class="hidden"></button>';
@@ -56,4 +62,78 @@ it("chips emit chip-send with their data-send text", () => {
   log.addEventListener("chip-send", (e) => spy(e.detail));
   log.querySelector(".chip").click();
   expect(spy).toHaveBeenCalledWith("open github");
+});
+
+// --- MCP info and step badges --------------------------------------------------
+describe("mcpInfoForTool", () => {
+  it("returns null for undefined/null tool", () => {
+    const serverMap = { slack: { label: "Slack", icon: "💬", egress: "network" } };
+    expect(mcpInfoForTool(undefined, serverMap)).toBeNull();
+    expect(mcpInfoForTool(null, serverMap)).toBeNull();
+  });
+
+  it("returns null for tools without __ separator (built-in)", () => {
+    const serverMap = { slack: { label: "Slack", icon: "💬", egress: "network" } };
+    expect(mcpInfoForTool("get_time", serverMap)).toBeNull();
+  });
+
+  it("returns null for unknown server prefix", () => {
+    const serverMap = { slack: { label: "Slack", icon: "💬", egress: "network" } };
+    expect(mcpInfoForTool("unknown__x", serverMap)).toBeNull();
+  });
+
+  it("returns MCP info for network tool", () => {
+    const serverMap = { slack: { label: "Slack", icon: "💬", egress: "network" } };
+    const info = mcpInfoForTool("slack__search_messages", serverMap);
+    expect(info).toEqual({
+      id: "slack",
+      label: "Slack",
+      icon: "💬",
+      egress: true,
+      shortName: "search_messages",
+    });
+  });
+
+  it("returns MCP info with egress:false for local server", () => {
+    const serverMap = { files: { label: "Files", icon: "📁", egress: "local" } };
+    const info = mcpInfoForTool("files__read", serverMap);
+    expect(info).toEqual({
+      id: "files",
+      label: "Files",
+      icon: "📁",
+      egress: false,
+      shortName: "read",
+    });
+  });
+
+  it("defaults icon to 🔌 when missing", () => {
+    const serverMap = { custom: { label: "Custom", egress: "network" } };
+    const info = mcpInfoForTool("custom__action", serverMap);
+    expect(info.icon).toBe("🔌");
+  });
+
+  it("returns null for empty prefix", () => {
+    const serverMap = { slack: { label: "Slack", icon: "💬", egress: "network" } };
+    expect(mcpInfoForTool("__search", serverMap)).toBeNull();
+  });
+});
+
+describe("renderStep integration (no server map)", () => {
+  it("renders step without badge when server map is empty (no MCP)", () => {
+    const log = mount();
+    log.renderStep({ index: 0, tool: "get_time", label: "Get time", status: "running" });
+    const row = log.querySelector('.steptrace [data-i="0"]');
+    expect(row).not.toBeNull();
+    expect(row.querySelector(".label").textContent).toContain("Get time…");
+    expect(row.querySelector(".srvbadge")).toBeNull();
+  });
+
+  it("can update a step from running to done without badge", () => {
+    const log = mount();
+    log.renderStep({ index: 0, tool: "get_time", label: "Get time", status: "running" });
+    log.renderStep({ index: 0, tool: "get_time", label: "Get time", status: "done" });
+    const row = log.querySelector('.steptrace [data-i="0"]');
+    expect(row.className).toBe("row done");
+    expect(row.querySelector(".label").textContent).toContain("✓");
+  });
 });
