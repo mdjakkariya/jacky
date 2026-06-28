@@ -42,6 +42,9 @@ _log = get_logger("daemon")
 # rejected so the endpoint can't write arbitrary Keychain items.
 _SECRET_NAMES = ("anthropic_api_key", "web_api_key")
 
+# Valid values for the ``risk`` field on the /mcp/servers/{id}/tools/{tool} endpoint.
+_VALID_MCP_RISKS = frozenset({"read_only", "write", "destructive"})
+
 
 def _is_allowed_secret(name: str) -> bool:
     """Whether ``name`` is a permitted Keychain account the Settings view may write.
@@ -503,6 +506,8 @@ def create_app(
         body = await request.json()
         risk: str | None = body.get("risk") if isinstance(body, dict) else None
         enabled: bool | None = body.get("enabled") if isinstance(body, dict) else None
+        if risk is not None and risk not in _VALID_MCP_RISKS:
+            return {"ok": False, "error": "invalid risk; must be read_only|write|destructive"}
         ok = await asyncio.to_thread(
             mcp.set_tool_override, server_id, tool, risk=risk, enabled=enabled
         )

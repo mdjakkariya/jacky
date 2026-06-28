@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import threading
 import time
 from pathlib import Path
 from typing import Any
@@ -202,3 +203,53 @@ def test_add_or_update_server_rejects_missing_id(tmp_path: Path) -> None:
     result = mgr.add_or_update_server({"transport": "stdio", "command": "python"})
     assert result["ok"] is False
     assert "id" in result["error"]
+
+
+def test_concurrent_status_and_crud_does_not_raise(tmp_path: Path) -> None:
+    """RLock stress test: concurrent status() reads and add/remove CRUD must not raise."""
+    p = _write_servers_json(tmp_path, {})
+    mgr = McpManager({}, ToolRegistry(), config_path=p)
+
+    errors: list[Exception] = []
+    stop = threading.Event()
+
+    def reader() -> None:
+        while not stop.is_set():
+            try:
+                mgr.status()
+            except Exception as exc:
+                errors.append(exc)
+                stop.set()
+
+    def writer() -> None:
+        counter = 0
+        while not stop.is_set():
+            sid = f"srv{counter % 3}"
+            try:
+                mgr.add_or_update_server(
+                    {
+                        "id": sid,
+                        "label": sid,
+                        "transport": "stdio",
+                        "command": "python",
+                        "args": [],
+                        "enabled": False,
+                    }
+                )
+                mgr.remove_server(sid)
+            except Exception as exc:
+                errors.append(exc)
+                stop.set()
+            counter += 1
+
+    t_reader = threading.Thread(target=reader, daemon=True)
+    t_writer = threading.Thread(target=writer, daemon=True)
+    t_reader.start()
+    t_writer.start()
+
+    time.sleep(0.3)
+    stop.set()
+    t_reader.join(timeout=2.0)
+    t_writer.join(timeout=2.0)
+
+    assert not errors, f"concurrent access raised: {errors}"

@@ -549,6 +549,38 @@ def test_mcp_auth_start_returns_phase6_stub() -> None:
     assert "phase 6" in resp["error"]
 
 
+def test_mcp_tool_override_accepts_valid_risk() -> None:
+    """Valid risk values (read_only, write, destructive) are forwarded to the manager."""
+    for valid_risk in ("read_only", "write", "destructive"):
+        client = _mcp_client(_FakeMcp())
+        resp = client.post(
+            "/mcp/servers/echo/tools/echo",
+            json={"risk": valid_risk},
+        ).json()
+        assert resp["ok"] is True, f"expected ok=True for risk={valid_risk!r}, got {resp}"
+
+
+def test_mcp_tool_override_rejects_invalid_risk() -> None:
+    """An unrecognised risk string must be rejected before reaching the manager."""
+    client = _mcp_client(_FakeMcp())
+    resp = client.post(
+        "/mcp/servers/echo/tools/echo",
+        json={"risk": "superuser"},
+    ).json()
+    assert resp["ok"] is False
+    assert "invalid risk" in resp["error"]
+
+
+def test_mcp_tool_override_no_risk_is_accepted() -> None:
+    """Omitting risk (None) must still succeed — only enable/disable is adjusted."""
+    client = _mcp_client(_FakeMcp())
+    resp = client.post(
+        "/mcp/servers/echo/tools/echo",
+        json={"enabled": False},
+    ).json()
+    assert resp["ok"] is True
+
+
 def test_mcp_disabled_all_endpoints_return_error() -> None:
     bus = EventBus()
     client = TestClient(create_app(bus))  # no mcp

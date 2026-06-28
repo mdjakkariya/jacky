@@ -48,6 +48,9 @@ class McpManager:
         self._thread: threading.Thread | None = None
         self._workers: dict[str, McpServerWorker] = {}
         self._futures: dict[str, concurrent.futures.Future[None]] = {}
+        # RLock (not Lock) because CRUD methods call connect()/disconnect() internally,
+        # so the same thread re-acquires the lock — a plain Lock would self-deadlock.
+        self._lock = threading.RLock()
 
     def start(self) -> None:
         """Start the background event loop thread (idempotent)."""
@@ -65,27 +68,30 @@ class McpManager:
 
     def connect_enabled(self) -> None:
         """Connect every server whose config has ``enabled=True``."""
-        for server_id, cfg in self._config.items():
-            if cfg.enabled:
-                self.connect(server_id)
+        with self._lock:
+            for server_id, cfg in self._config.items():
+                if cfg.enabled:
+                    self.connect(server_id)
 
     def connect(self, server_id: str) -> None:
         """Spawn a worker for ``server_id`` (no-op if unknown or already connected)."""
-        if self._loop is None:
-            self.start()
-        assert self._loop is not None
-        cfg = self._config.get(server_id)
-        if cfg is None or server_id in self._workers:
-            return
-        worker = McpServerWorker(cfg, self._registry, loop=self._loop, on_event=self._on_event)
-        self._workers[server_id] = worker
-        self._futures[server_id] = asyncio.run_coroutine_threadsafe(worker.run(), self._loop)
-        _log.info("mcp connecting server=%s", server_id)
+        with self._lock:
+            if self._loop is None:
+                self.start()
+            assert self._loop is not None
+            cfg = self._config.get(server_id)
+            if cfg is None or server_id in self._workers:
+                return
+            worker = McpServerWorker(cfg, self._registry, loop=self._loop, on_event=self._on_event)
+            self._workers[server_id] = worker
+            self._futures[server_id] = asyncio.run_coroutine_threadsafe(worker.run(), self._loop)
+            _log.info("mcp connecting server=%s", server_id)
 
     def disconnect(self, server_id: str, timeout: float = 5.0) -> None:
         """Ask a server's worker to exit and wait briefly for it to unwind."""
-        worker = self._workers.pop(server_id, None)
-        future = self._futures.pop(server_id, None)
+        with self._lock:
+            worker = self._workers.pop(server_id, None)
+            future = self._futures.pop(server_id, None)
         if worker is not None:
             worker.request_shutdown()
         if future is not None:
@@ -113,37 +119,42 @@ class McpManager:
         file descriptors / executor are released, and a later ``start()`` builds a
         fresh one (so a reloadable manager can stop and restart cleanly).
         """
-        for server_id in list(self._workers):
+        with self._lock:
+            server_ids = list(self._workers)
+        for server_id in server_ids:
             self.disconnect(server_id, timeout=timeout)
-        loop = self._loop
-        thread = self._thread
-        if loop is not None:
-            loop.call_soon_threadsafe(loop.stop)
+        with self._lock:
+            loop = self._loop
+            thread = self._thread
+            if loop is not None:
+                loop.call_soon_threadsafe(loop.stop)
         if thread is not None:
             thread.join(timeout=timeout)
-        if loop is not None and not loop.is_closed():
-            loop.close()
-        self._thread = None
-        self._loop = None
+        with self._lock:
+            if loop is not None and not loop.is_closed():
+                loop.close()
+            self._thread = None
+            self._loop = None
         _log.info("mcp loop stopped")
 
     def status(self) -> list[dict[str, Any]]:
         """A status row per configured server (for the daemon / Settings view)."""
-        rows: list[dict[str, Any]] = []
-        for server_id, cfg in self._config.items():
-            worker = self._workers.get(server_id)
-            rows.append(
-                {
-                    "server": server_id,
-                    "label": cfg.label,
-                    "enabled": cfg.enabled,
-                    "egress": cfg.egress,
-                    "auth_type": cfg.auth_type,
-                    "state": worker.state if worker is not None else "disconnected",
-                    "tool_count": worker.tool_count if worker is not None else 0,
-                }
-            )
-        return rows
+        with self._lock:
+            rows: list[dict[str, Any]] = []
+            for server_id, cfg in self._config.items():
+                worker = self._workers.get(server_id)
+                rows.append(
+                    {
+                        "server": server_id,
+                        "label": cfg.label,
+                        "enabled": cfg.enabled,
+                        "egress": cfg.egress,
+                        "auth_type": cfg.auth_type,
+                        "state": worker.state if worker is not None else "disconnected",
+                        "tool_count": worker.tool_count if worker is not None else 0,
+                    }
+                )
+            return rows
 
     def add_or_update_server(self, descriptor: dict[str, Any]) -> dict[str, Any]:
         """Validate, persist, and (re)connect one server descriptor.
@@ -162,22 +173,23 @@ class McpManager:
         """
         from autobot.mcp.config import _coerce_server, save_mcp_config
 
-        server_id = str(descriptor.get("id", ""))
-        if not server_id:
-            return {"ok": False, "error": "descriptor must include 'id'"}
-        cfg = _coerce_server(server_id, descriptor)
-        if cfg is None:
-            error_msg = f"invalid transport or descriptor for server {server_id!r}"
-            return {"ok": False, "error": error_msg}
-        was_connected = server_id in self._workers
-        if was_connected:
-            self.disconnect(server_id)
-        self._config[server_id] = cfg
-        save_mcp_config(self._config, self._config_path)
-        if was_connected and cfg.enabled and self._loop is not None:
-            self.connect(server_id)
-        rows = [r for r in self.status() if r["server"] == server_id]
-        return {"ok": True, "server": rows[0] if rows else {"server": server_id}}
+        with self._lock:
+            server_id = str(descriptor.get("id", ""))
+            if not server_id:
+                return {"ok": False, "error": "descriptor must include 'id'"}
+            cfg = _coerce_server(server_id, descriptor)
+            if cfg is None:
+                error_msg = f"invalid transport or descriptor for server {server_id!r}"
+                return {"ok": False, "error": error_msg}
+            was_connected = server_id in self._workers
+            if was_connected:
+                self.disconnect(server_id)
+            self._config[server_id] = cfg
+            save_mcp_config(self._config, self._config_path)
+            if was_connected and cfg.enabled and self._loop is not None:
+                self.connect(server_id)
+            rows = [r for r in self.status() if r["server"] == server_id]
+            return {"ok": True, "server": rows[0] if rows else {"server": server_id}}
 
     def remove_server(self, server_id: str) -> bool:
         """Disconnect (if active), remove from config, and persist.
@@ -190,13 +202,14 @@ class McpManager:
         """
         from autobot.mcp.config import save_mcp_config
 
-        if server_id not in self._config:
-            return False
-        if server_id in self._workers:
-            self.disconnect(server_id)
-        del self._config[server_id]
-        save_mcp_config(self._config, self._config_path)
-        return True
+        with self._lock:
+            if server_id not in self._config:
+                return False
+            if server_id in self._workers:
+                self.disconnect(server_id)
+            del self._config[server_id]
+            save_mcp_config(self._config, self._config_path)
+            return True
 
     def set_enabled(self, server_id: str, enabled: bool) -> bool:
         """Toggle ``enabled``, persist, and reconnect if the manager is running.
@@ -212,16 +225,17 @@ class McpManager:
 
         from autobot.mcp.config import save_mcp_config
 
-        cfg = self._config.get(server_id)
-        if cfg is None:
-            return False
-        if server_id in self._workers:
-            self.disconnect(server_id)
-        self._config[server_id] = dataclasses.replace(cfg, enabled=enabled)
-        save_mcp_config(self._config, self._config_path)
-        if enabled and self._loop is not None:
-            self.connect(server_id)
-        return True
+        with self._lock:
+            cfg = self._config.get(server_id)
+            if cfg is None:
+                return False
+            if server_id in self._workers:
+                self.disconnect(server_id)
+            self._config[server_id] = dataclasses.replace(cfg, enabled=enabled)
+            save_mcp_config(self._config, self._config_path)
+            if enabled and self._loop is not None:
+                self.connect(server_id)
+            return True
 
     def tools_for(self, server_id: str) -> list[dict[str, Any]]:
         """Return the cached all-tools list for ``server_id`` (empty if not connected).
@@ -236,10 +250,11 @@ class McpManager:
             A list of dicts, each ``{name, description, risk, network, enabled}``,
             or ``[]`` if the server is not connected or not configured.
         """
-        worker = self._workers.get(server_id)
-        if worker is None:
-            return []
-        return worker.all_tools()
+        with self._lock:
+            worker = self._workers.get(server_id)
+            if worker is None:
+                return []
+            return worker.all_tools()
 
     def set_tool_override(
         self,
@@ -253,13 +268,13 @@ class McpManager:
 
         Disable: adds ``tool`` to ``cfg.tool_deny`` (as a new frozen tuple).
         Enable: removes ``tool`` from ``cfg.tool_deny``.
-        Risk: sets ``cfg.tool_risk_overrides[tool] = risk`` (or removes it if
-        ``risk`` is ``None`` and the key is present).
+        Risk: sets ``cfg.tool_risk_overrides[tool] = risk`` when ``risk`` is non-None.
 
         Args:
             server_id: The server that owns the tool.
             tool: The bare tool name (without namespace prefix).
             risk: Optional risk string (``"read_only"``, ``"write"``, ``"destructive"``).
+                Only applied when non-None.
             enabled: Optional enable/disable override.
 
         Returns:
@@ -269,27 +284,28 @@ class McpManager:
 
         from autobot.mcp.config import save_mcp_config
 
-        cfg = self._config.get(server_id)
-        if cfg is None:
-            return False
-        deny = list(cfg.tool_deny)
-        overrides = dict(cfg.tool_risk_overrides)
-        if enabled is False and tool not in deny:
-            deny.append(tool)
-        elif enabled is True and tool in deny:
-            deny.remove(tool)
-        if risk is not None:
-            overrides[tool] = risk
-        was_connected = server_id in self._workers
-        if was_connected:
-            self.disconnect(server_id)
-        self._config[server_id] = dataclasses.replace(
-            cfg, tool_deny=tuple(deny), tool_risk_overrides=overrides
-        )
-        save_mcp_config(self._config, self._config_path)
-        if was_connected and self._config[server_id].enabled and self._loop is not None:
-            self.connect(server_id)
-        return True
+        with self._lock:
+            cfg = self._config.get(server_id)
+            if cfg is None:
+                return False
+            deny = list(cfg.tool_deny)
+            overrides = dict(cfg.tool_risk_overrides)
+            if enabled is False and tool not in deny:
+                deny.append(tool)
+            elif enabled is True and tool in deny:
+                deny.remove(tool)
+            if risk is not None:
+                overrides[tool] = risk
+            was_connected = server_id in self._workers
+            if was_connected:
+                self.disconnect(server_id)
+            self._config[server_id] = dataclasses.replace(
+                cfg, tool_deny=tuple(deny), tool_risk_overrides=overrides
+            )
+            save_mcp_config(self._config, self._config_path)
+            if was_connected and self._config[server_id].enabled and self._loop is not None:
+                self.connect(server_id)
+            return True
 
     def secret_present(self, server_id: str) -> bool:
         """Whether the Keychain secret referenced by this server's config is set.
@@ -303,7 +319,9 @@ class McpManager:
         """
         from autobot.secrets import has_secret
 
-        cfg = self._config.get(server_id)
-        if cfg is None or cfg.secret_ref is None:
-            return False
-        return has_secret(cfg.secret_ref)
+        with self._lock:
+            cfg = self._config.get(server_id)
+            if cfg is None or cfg.secret_ref is None:
+                return False
+            secret_ref = cfg.secret_ref
+        return has_secret(secret_ref)
