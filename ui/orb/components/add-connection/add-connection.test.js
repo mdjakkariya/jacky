@@ -1,0 +1,388 @@
+import { describe, it, expect, vi, beforeEach } from "vitest";
+
+vi.mock("../../lib/daemon.js", () => ({
+  daemon: {
+    addMcpServer: vi.fn().mockResolvedValue({ ok: true, server: "slack" }),
+    mcpSetToken: vi.fn().mockResolvedValue({ ok: true }),
+    enableMcpServer: vi.fn().mockResolvedValue({ ok: true }),
+    mcpAuthStart: vi.fn().mockResolvedValue({ ok: false, message: "oauth not yet supported (phase 6)" }),
+  },
+}));
+import { daemon } from "../../lib/daemon.js";
+import { showAddConnection, hideAddConnection } from "./add-connection.js";
+
+function makeContainer() {
+  const el = document.createElement("div");
+  document.body.appendChild(el);
+  return el;
+}
+
+beforeEach(() => {
+  vi.clearAllMocks();
+  document.body.innerHTML = "";
+});
+
+// ---------------------------------------------------------------------------
+// Step 1 — Source (catalog)
+// ---------------------------------------------------------------------------
+describe("Step 1 — catalog", () => {
+  it("renders catalog items including Custom as the last item", () => {
+    const container = makeContainer();
+    showAddConnection(container, { onDone: vi.fn(), onCancel: vi.fn() });
+    const items = container.querySelectorAll(".cat-item");
+    // 4 catalog entries + 1 custom = 5
+    expect(items.length).toBe(5);
+    const labels = [...items].map((el) => el.querySelector(".cat-name").textContent);
+    expect(labels[labels.length - 1]).toBe("Custom MCP server");
+  });
+
+  it("clicking a catalog item selects it (adds 'selected' class)", () => {
+    const container = makeContainer();
+    showAddConnection(container, { onDone: vi.fn(), onCancel: vi.fn() });
+    const items = container.querySelectorAll(".cat-item");
+    items[1].click(); // GitHub
+    expect(items[1].classList.contains("selected")).toBe(true);
+    // others not selected
+    expect(items[0].classList.contains("selected")).toBe(false);
+  });
+
+  it("Cancel button calls onCancel", () => {
+    const container = makeContainer();
+    const onCancel = vi.fn();
+    showAddConnection(container, { onDone: vi.fn(), onCancel });
+    const cancelBtn = container.querySelector(".btn-cancel");
+    cancelBtn.click();
+    expect(onCancel).toHaveBeenCalled();
+  });
+
+  it("progress bar shows 'now' on step 1 and blank on remaining", () => {
+    const container = makeContainer();
+    showAddConnection(container, { onDone: vi.fn(), onCancel: vi.fn() });
+    const steps = container.querySelectorAll(".wizard-step");
+    expect(steps[0].classList.contains("now")).toBe(true);
+    expect(steps[1].classList.contains("now")).toBe(false);
+    expect(steps[1].classList.contains("done")).toBe(false);
+    expect(steps[2].classList.contains("now")).toBe(false);
+    expect(steps[3].classList.contains("now")).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Step 1 → Step 2 navigation
+// ---------------------------------------------------------------------------
+describe("Step 1 → Step 2 navigation", () => {
+  it("Continue from step 1 advances to step 2", () => {
+    const container = makeContainer();
+    showAddConnection(container, { onDone: vi.fn(), onCancel: vi.fn() });
+    // Select Slack (first item) and continue
+    container.querySelector(".cat-item").click();
+    container.querySelector(".btn-next").click();
+    // Step 2 should be visible
+    expect(container.querySelector("[data-step='2']")).not.toBeNull();
+    expect(container.querySelector("[data-step='1']")).toBeNull();
+  });
+
+  it("progress bar shows step 1 done and step 2 now after continuing", () => {
+    const container = makeContainer();
+    showAddConnection(container, { onDone: vi.fn(), onCancel: vi.fn() });
+    container.querySelector(".cat-item").click();
+    container.querySelector(".btn-next").click();
+    const steps = container.querySelectorAll(".wizard-step");
+    expect(steps[0].classList.contains("done")).toBe(true);
+    expect(steps[1].classList.contains("now")).toBe(true);
+  });
+
+  it("Back from step 2 returns to step 1", () => {
+    const container = makeContainer();
+    showAddConnection(container, { onDone: vi.fn(), onCancel: vi.fn() });
+    container.querySelector(".cat-item").click();
+    container.querySelector(".btn-next").click();
+    // Now on step 2 — click back
+    container.querySelector(".btn-back").click();
+    expect(container.querySelector("[data-step='1']")).not.toBeNull();
+    expect(container.querySelector("[data-step='2']")).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Step 2 — Transport
+// ---------------------------------------------------------------------------
+describe("Step 2 — Transport", () => {
+  function goToStep2(container, catalogIndex = 0) {
+    showAddConnection(container, { onDone: vi.fn(), onCancel: vi.fn() });
+    const items = container.querySelectorAll(".cat-item");
+    items[catalogIndex].click();
+    container.querySelector(".btn-next").click();
+  }
+
+  it("catalog pick (Slack, HTTP) pre-fills HTTP and shows URL field", () => {
+    const container = makeContainer();
+    goToStep2(container, 0); // Slack
+    const urlField = container.querySelector("[data-field='url']");
+    expect(urlField).not.toBeNull();
+    expect(urlField.value).toBe("https://slack.com/api/mcp");
+  });
+
+  it("catalog pick (Local Files, stdio) pre-fills stdio and shows command field", () => {
+    const container = makeContainer();
+    goToStep2(container, 2); // Local Files (index 2)
+    const cmdField = container.querySelector("[data-field='command']");
+    expect(cmdField).not.toBeNull();
+    expect(cmdField.value).toBe("npx @mcp/server-files");
+  });
+
+  it("Custom MCP: selecting HTTP transport radio shows URL field and hides command fields", () => {
+    const container = makeContainer();
+    // Select "Custom" (last item, index 4)
+    showAddConnection(container, { onDone: vi.fn(), onCancel: vi.fn() });
+    const items = container.querySelectorAll(".cat-item");
+    items[4].click(); // Custom
+    container.querySelector(".btn-next").click();
+    // Click HTTP radio
+    const httpRadio = container.querySelector("[data-transport='http']");
+    httpRadio.click();
+    expect(container.querySelector("[data-field='url']")).not.toBeNull();
+    const cmdField = container.querySelector("[data-field='command']");
+    // command field should be hidden/absent
+    expect(!cmdField || cmdField.closest(".hidden") || cmdField.style.display === "none" || cmdField.classList.contains("hidden")).toBe(true);
+  });
+
+  it("Custom MCP: selecting stdio transport radio shows command+args and hides URL", () => {
+    const container = makeContainer();
+    showAddConnection(container, { onDone: vi.fn(), onCancel: vi.fn() });
+    const items = container.querySelectorAll(".cat-item");
+    items[4].click(); // Custom
+    container.querySelector(".btn-next").click();
+    // Click stdio radio
+    const stdioRadio = container.querySelector("[data-transport='stdio']");
+    stdioRadio.click();
+    const cmdField = container.querySelector("[data-field='command']");
+    expect(cmdField).not.toBeNull();
+    expect(!cmdField.closest(".hidden") && cmdField.style.display !== "none" && !cmdField.classList.contains("hidden")).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Step 2 → Step 3 navigation
+// ---------------------------------------------------------------------------
+describe("Step 2 → Step 3 navigation", () => {
+  function goToStep3(container) {
+    showAddConnection(container, { onDone: vi.fn(), onCancel: vi.fn() });
+    // Select Slack
+    container.querySelector(".cat-item").click();
+    container.querySelector(".btn-next").click();
+    // Continue to step 3
+    container.querySelector(".btn-next").click();
+  }
+
+  it("Continue from step 2 advances to step 3", () => {
+    const container = makeContainer();
+    goToStep3(container);
+    expect(container.querySelector("[data-step='3']")).not.toBeNull();
+    expect(container.querySelector("[data-step='2']")).toBeNull();
+  });
+
+  it("progress bar on step 3: steps 1+2 done, step 3 now", () => {
+    const container = makeContainer();
+    goToStep3(container);
+    const steps = container.querySelectorAll(".wizard-step");
+    expect(steps[0].classList.contains("done")).toBe(true);
+    expect(steps[1].classList.contains("done")).toBe(true);
+    expect(steps[2].classList.contains("now")).toBe(true);
+    expect(steps[3].classList.contains("now")).toBe(false);
+    expect(steps[3].classList.contains("done")).toBe(false);
+  });
+
+  it("Back from step 3 returns to step 2", () => {
+    const container = makeContainer();
+    goToStep3(container);
+    container.querySelector(".btn-back").click();
+    expect(container.querySelector("[data-step='2']")).not.toBeNull();
+    expect(container.querySelector("[data-step='3']")).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Step 3 — Auth
+// ---------------------------------------------------------------------------
+describe("Step 3 — Auth", () => {
+  function goToStep3(container, onDone = vi.fn(), onCancel = vi.fn()) {
+    showAddConnection(container, { onDone, onCancel });
+    container.querySelector(".cat-item").click();
+    container.querySelector(".btn-next").click();
+    container.querySelector(".btn-next").click();
+  }
+
+  it("renders OAuth and Token options", () => {
+    const container = makeContainer();
+    goToStep3(container);
+    const opts = container.querySelectorAll(".opt-item");
+    const texts = [...opts].map((o) => o.querySelector(".opt-title").textContent);
+    expect(texts.some((t) => t.toLowerCase().includes("oauth"))).toBe(true);
+    expect(texts.some((t) => t.toLowerCase().includes("token"))).toBe(true);
+  });
+
+  it("Keychain banner is shown", () => {
+    const container = makeContainer();
+    goToStep3(container);
+    const banner = container.querySelector(".keychain-banner");
+    expect(banner).not.toBeNull();
+  });
+
+  it("Selecting Token and continuing advances to step 4 with token input", () => {
+    const container = makeContainer();
+    goToStep3(container);
+    // Click Token option
+    const opts = container.querySelectorAll(".opt-item");
+    const tokenOpt = [...opts].find((o) => o.querySelector(".opt-title").textContent.toLowerCase().includes("token"));
+    tokenOpt.click();
+    container.querySelector(".btn-next").click();
+    // Step 4 should show token input
+    expect(container.querySelector("[data-step='4']")).not.toBeNull();
+    const tokenInput = container.querySelector("[data-field='token']");
+    expect(tokenInput).not.toBeNull();
+  });
+
+  it("Selecting OAuth and continuing advances to step 4 with hand-off explainer", () => {
+    const container = makeContainer();
+    goToStep3(container);
+    // OAuth is the default (first option); click continue
+    const opts = container.querySelectorAll(".opt-item");
+    const oauthOpt = [...opts].find((o) => o.querySelector(".opt-title").textContent.toLowerCase().includes("oauth"));
+    oauthOpt.click();
+    container.querySelector(".btn-next").click();
+    // Step 4 should show OAuth explainer
+    expect(container.querySelector("[data-step='4']")).not.toBeNull();
+    expect(container.querySelector(".oauth-explainer")).not.toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Step 4 — Token path: daemon calls
+// ---------------------------------------------------------------------------
+describe("Step 4 — Token path", () => {
+  async function goToTokenStep4(container, onDone = vi.fn()) {
+    showAddConnection(container, { onDone, onCancel: vi.fn() });
+    // Select Slack
+    container.querySelector(".cat-item").click();
+    container.querySelector(".btn-next").click();
+    // Step 2 transport — continue
+    container.querySelector(".btn-next").click();
+    // Step 3 auth — select token
+    const opts = container.querySelectorAll(".opt-item");
+    const tokenOpt = [...opts].find((o) => o.querySelector(".opt-title").textContent.toLowerCase().includes("token"));
+    tokenOpt.click();
+    container.querySelector(".btn-next").click();
+  }
+
+  it("token step 4 shows token input field", async () => {
+    const container = makeContainer();
+    await goToTokenStep4(container);
+    expect(container.querySelector("[data-field='token']")).not.toBeNull();
+  });
+
+  it("submitting token calls addMcpServer, mcpSetToken, enableMcpServer in order then onDone", async () => {
+    const container = makeContainer();
+    const onDone = vi.fn();
+    await goToTokenStep4(container, onDone);
+
+    // Enter a token
+    const tokenInput = container.querySelector("[data-field='token']");
+    tokenInput.value = "xoxb-test-token";
+
+    // Click connect
+    const connectBtn = container.querySelector(".btn-connect");
+    connectBtn.click();
+
+    // Wait for async operations
+    await new Promise((r) => setTimeout(r, 0));
+
+    expect(daemon.addMcpServer).toHaveBeenCalledOnce();
+    const descriptor = daemon.addMcpServer.mock.calls[0][0];
+    expect(descriptor.server).toBe("slack");
+    expect(descriptor.transport).toBe("http");
+    expect(descriptor.auth_type).toBe("token");
+
+    expect(daemon.mcpSetToken).toHaveBeenCalledWith("slack", "xoxb-test-token");
+    expect(daemon.enableMcpServer).toHaveBeenCalledWith("slack");
+    expect(onDone).toHaveBeenCalled();
+
+    // Verify call order using mock.invocationCallOrder
+    const addOrder = daemon.addMcpServer.mock.invocationCallOrder[0];
+    const tokenOrder = daemon.mcpSetToken.mock.invocationCallOrder[0];
+    const enableOrder = daemon.enableMcpServer.mock.invocationCallOrder[0];
+    expect(addOrder).toBeLessThan(tokenOrder);
+    expect(tokenOrder).toBeLessThan(enableOrder);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Step 4 — OAuth path: coming-soon stub
+// ---------------------------------------------------------------------------
+describe("Step 4 — OAuth path", () => {
+  async function goToOAuthStep4(container) {
+    showAddConnection(container, { onDone: vi.fn(), onCancel: vi.fn() });
+    container.querySelector(".cat-item").click(); // Slack
+    container.querySelector(".btn-next").click();
+    container.querySelector(".btn-next").click();
+    // OAuth is first option — click to ensure selected
+    const opts = container.querySelectorAll(".opt-item");
+    const oauthOpt = [...opts].find((o) => o.querySelector(".opt-title").textContent.toLowerCase().includes("oauth"));
+    oauthOpt.click();
+    container.querySelector(".btn-next").click();
+  }
+
+  it("OAuth step 4 shows the hand-off explainer", async () => {
+    const container = makeContainer();
+    await goToOAuthStep4(container);
+    expect(container.querySelector(".oauth-explainer")).not.toBeNull();
+  });
+
+  it("'Open browser' calls mcpAuthStart and shows coming-soon message on stub", async () => {
+    const container = makeContainer();
+    await goToOAuthStep4(container);
+
+    const openBrowserBtn = container.querySelector(".btn-open-browser");
+    openBrowserBtn.click();
+
+    // Wait for async
+    await new Promise((r) => setTimeout(r, 0));
+
+    expect(daemon.mcpAuthStart).toHaveBeenCalled();
+    // Should show coming-soon message — wizard stays open
+    const msg = container.querySelector(".oauth-coming-soon");
+    expect(msg).not.toBeNull();
+    expect(msg.textContent.toLowerCase()).toContain("coming");
+  });
+
+  it("wizard stays open after OAuth stub response (does NOT call onDone)", async () => {
+    const container = makeContainer();
+    const onDone = vi.fn();
+    showAddConnection(container, { onDone, onCancel: vi.fn() });
+    container.querySelector(".cat-item").click();
+    container.querySelector(".btn-next").click();
+    container.querySelector(".btn-next").click();
+    const opts = container.querySelectorAll(".opt-item");
+    const oauthOpt = [...opts].find((o) => o.querySelector(".opt-title").textContent.toLowerCase().includes("oauth"));
+    oauthOpt.click();
+    container.querySelector(".btn-next").click();
+
+    container.querySelector(".btn-open-browser").click();
+    await new Promise((r) => setTimeout(r, 0));
+
+    expect(onDone).not.toHaveBeenCalled();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// hideAddConnection
+// ---------------------------------------------------------------------------
+describe("hideAddConnection", () => {
+  it("removes the wizard card from the container", () => {
+    const container = makeContainer();
+    showAddConnection(container, { onDone: vi.fn(), onCancel: vi.fn() });
+    expect(container.querySelector(".wizard-card")).not.toBeNull();
+    hideAddConnection(container);
+    expect(container.querySelector(".wizard-card")).toBeNull();
+  });
+});

@@ -10,8 +10,7 @@ import "../components/access-list/access-list.js";
 import "../components/voice-download/voice-download.js";
 import { setupReportSheet } from "../components/report-sheet/report-sheet.js";
 import "../components/connections-list/connections-list.js";
-// TODO(task-5): uncomment when add-connection component is implemented
-// import "../components/add-connection/add-connection.js";
+import { showAddConnection, hideAddConnection } from "../components/add-connection/add-connection.js";
 // TODO(task-6): uncomment when connection-detail component is implemented
 // import "../components/connection-detail/connection-detail.js";
 import { privacyExits, renderPrivacySummary } from "./privacy-summary.js";
@@ -54,11 +53,20 @@ if (connList) {
   connList.addEventListener("server-select", (e) => openConnectionDetail(e.detail));
 }
 
-/** Open the add-connection wizard (implemented in Task 5). */
-// TODO(task-5): replace this stub with the real wizard mount.
+/** Open the add-connection wizard in a modal overlay within the connections panel. */
 function openAddConnection() {
-  // Task 5 will replace this with a wizard modal.
-  setStatus("Add connection wizard coming soon.", false);
+  // Use the connections panel as the container so the wizard is scoped to that tab.
+  const panel = document.getElementById("tab-connections");
+  if (!panel) return;
+  showAddConnection(panel, {
+    onDone: () => {
+      hideAddConnection(panel);
+      // Reload the connections list so the new server appears.
+      const connList = $("connList");
+      if (connList) connList.load();
+    },
+    onCancel: () => hideAddConnection(panel),
+  });
 }
 
 /** Open the connection-detail panel for the given server id (implemented in Task 6). */
