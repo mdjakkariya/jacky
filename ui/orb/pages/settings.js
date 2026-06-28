@@ -11,8 +11,7 @@ import "../components/voice-download/voice-download.js";
 import { setupReportSheet } from "../components/report-sheet/report-sheet.js";
 import "../components/connections-list/connections-list.js";
 import { showAddConnection, hideAddConnection } from "../components/add-connection/add-connection.js";
-// TODO(task-6): uncomment when connection-detail component is implemented
-// import "../components/connection-detail/connection-detail.js";
+import { showConnectionDetail, hideConnectionDetail } from "../components/connection-detail/connection-detail.js";
 import { privacyExits, renderPrivacySummary } from "./privacy-summary.js";
 
 const CHECKS = ["tts_enabled", "barge_in", "aec", "allow_app_control", "allow_system_info", "allow_memory", "allow_file_search", "allow_clipboard", "allow_reminders", "allow_file_io", "allow_web"];
@@ -69,11 +68,26 @@ function openAddConnection() {
   });
 }
 
-/** Open the connection-detail panel for the given server id (implemented in Task 6). */
-// TODO(task-6): replace this stub with the real detail panel mount.
-function openConnectionDetail(_id) {
-  // Task 6 will replace this with a detail panel.
-  setStatus("Connection detail coming soon.", false);
+/** Open the connection-detail panel for the given server id. */
+function openConnectionDetail(id) {
+  const panel = document.getElementById("tab-connections");
+  if (!panel) return;
+  // Resolve server meta from the connList cards that are already rendered.
+  // We read from the DOM data attributes set by connections-list.js (#renderCard).
+  const card = document.querySelector(`.srv-card[data-server-id="${id}"]`);
+  const meta = {
+    label: card ? (card.querySelector(".srv-name span")?.textContent || id) : id,
+    egress: card ? card.querySelector(".pill.net") !== null : false,
+    state: card ? (card.querySelector(".status-dot")?.classList[1] || "disconnected") : "disconnected",
+    auth_type: card ? (card.dataset.authType || "") : "",
+  };
+  showConnectionDetail(panel, id, meta, {
+    onClose: () => {
+      hideConnectionDetail(panel);
+      const connList = $("connList");
+      if (connList) connList.load();
+    },
+  });
 }
 
 // --- privacy summary ---------------------------------------------------------
