@@ -367,3 +367,14 @@ Real-device testing on macOS 15.7.4 surfaced two changes to the original design:
   the cross-cutting "confirm before opening external URLs" note tracked separately).
   This is the one sanctioned network action in the module, and it is opt-in +
   confirmed + disclosed, consistent with the project's off-device exception rules.
+- **Brightness exact-% is honest about Apple Silicon.** The `brightness` binary
+  exits 0 but is a **no-op on Apple Silicon built-in panels** — it can't even read
+  them (`failed to get brightness … error -536870201`). `set_brightness` therefore
+  **probes `brightness -l` before trusting a set**: if the display is unsupported it
+  returns a truthful "can't control this Mac's built-in display — use brighter/
+  dimmer" message instead of a false "Brightness set to N%". `install_brightness`
+  runs the same probe post-install rather than promising exact control. Net: exact
+  levels work on Intel / external displays; on Apple Silicon (the target tier) only
+  relative brighter/dimmer (hardware keys) works, and Jack says so. A future, truly
+  reliable absolute path on Apple Silicon would need the private DisplayServices
+  framework — out of scope here.

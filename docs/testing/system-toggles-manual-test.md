@@ -83,7 +83,9 @@ Or watch the volume slider in the menu bar / Control Center.
 
 **Expected replies:**
 - Relative: `Brightness turned up.` / `Brightness turned down.` (screen visibly changes)
-- Exact **with** binary installed: `Brightness set to 40%.`
+- Exact, Intel/external display with binary: `Brightness set to 40%.`
+- Exact, **Apple Silicon built-in display**: an honest "can't control this Mac's built-in
+  display" message (see the caveat below) — **not** a false "set to 40%."
 - Exact **without** binary: Jack *offers to install it* — `Setting an exact level needs the
   'brightness' tool, which isn't installed. Want me to install it for you? …`
 - If Accessibility isn't granted for the relative path: a friendly message pointing you to
@@ -94,14 +96,21 @@ Or watch the volume slider in the menu bar / Control Center.
 - [ ] Say "yes, install it" → the model calls `install_brightness_tool`, and the **permission
       gate asks you to confirm** ("Install the 'brightness' tool via Homebrew? This downloads
       it from the internet…"). Confirm.
-- [ ] Jack runs `brew install brightness`, then you can say "set brightness to 40" again →
-      `Brightness set to 40%.` (Afterwards exact levels just work.)
+- [ ] Jack runs `brew install brightness`, then **verifies it can actually drive your display**.
 - [ ] If Homebrew isn't installed at all, Jack points you to **https://brew.sh** instead of
       failing — it never tries to bootstrap Homebrew itself, and never opens the URL for you.
 
+> ⚠️ **Apple Silicon caveat (important).** The `brightness` tool **cannot control the
+> built-in display on M-series Macs** (it fails with `error -536870201`). On those machines
+> Jack is now **honest about it**: after install (or on an exact request) it says *"the
+> brightness tool can't control this Mac's built-in display — say 'brighter' or 'dimmer'
+> instead"* rather than falsely reporting "Brightness set to 40%." Exact-% only works on
+> Intel Macs or external displays. Relative **brighter/dimmer always works** (hardware keys).
+
 **Verify independently:**
-- Watch the screen brightness change, or the Control Center brightness slider.
-- After install: `brightness -l` prints the current level (0.0–1.0); `which brightness` resolves.
+- Relative brighter/dimmer: watch the screen / Control Center slider move.
+- Exact %: `brightness -l` — if it prints `failed to get brightness … error -5368…`, your
+  display is unsupported (Apple Silicon) and Jack will say so instead of claiming success.
 
 **Edge cases:**
 - [ ] Decline the install confirmation → nothing is installed; Jack just acknowledges.
