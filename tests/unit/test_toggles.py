@@ -178,8 +178,9 @@ def test_set_appearance_light() -> None:
 
 def test_set_appearance_toggle() -> None:
     runner = SeqRunner([(0, ""), (0, "true")])
-    SystemToggles(runner).set_appearance("toggle")
+    msg = SystemToggles(runner).set_appearance("toggle")
     assert runner.calls[0][-1] == f"{_APPEARANCE_SET} to set dark mode to not dark mode"
+    assert msg == "Now in dark mode."
 
 
 def test_set_appearance_bad_mode() -> None:
@@ -189,3 +190,14 @@ def test_set_appearance_bad_mode() -> None:
 def test_set_appearance_failure_is_friendly() -> None:
     msg = SystemToggles(FakeRunner(rc=1, out="not authorized")).set_appearance("dark")
     assert "couldn't change the appearance" in msg
+
+
+def test_set_appearance_dark_readback_fails_still_correct() -> None:
+    # SET succeeds, read-back fails -> report the requested mode, not a wrong one.
+    runner = SeqRunner([(0, ""), (1, "")])
+    assert SystemToggles(runner).set_appearance("dark") == "Now in dark mode."
+
+
+def test_set_appearance_toggle_readback_fails_is_neutral() -> None:
+    runner = SeqRunner([(0, ""), (1, "")])
+    assert "switched the appearance" in SystemToggles(runner).set_appearance("toggle")

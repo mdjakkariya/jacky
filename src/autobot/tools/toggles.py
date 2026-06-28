@@ -170,7 +170,14 @@ class SystemToggles:
         rc, out = self._run(["osascript", "-e", expr])
         if rc != 0:
             return f"I couldn't change the appearance: {out or 'unknown error'}"
-        _rc, now = self._run(["osascript", "-e", f"{base} to return dark mode"])
+        read_rc, now = self._run(["osascript", "-e", f"{base} to return dark mode"])
+        if read_rc != 0:
+            # The change applied; we just couldn't confirm the new state.
+            if mode in ("dark", "light"):
+                _log.info("appearance mode=%s (read-back failed)", mode)
+                return f"Now in {mode} mode."
+            _log.info("appearance toggled (read-back failed)")
+            return "Done — I switched the appearance."
         is_dark = now.strip().lower() == "true"
         _log.info("appearance dark=%s", is_dark)
         return "Now in dark mode." if is_dark else "Now in light mode."
