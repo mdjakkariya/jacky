@@ -84,3 +84,13 @@ body.has-card #cards {
   position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0;
   overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0;
 }
+/* MCP network-egress ring (shown while a network-egress tool is running) */
+.net-ring { position:absolute; inset:-14px; border-radius:50%;
+  border:2px solid rgba(251,146,60,.55);
+  opacity:0; transition:opacity .3s ease; pointer-events:none; }
+.net-ring.active { opacity:1; }
+.net-conn { position:absolute; right:-8px; bottom:-8px; width:26px; height:26px;
+  border-radius:50%; background:var(--panel); border:1.5px solid var(--net);
+  display:flex; align-items:center; justify-content:center; font-size:12px;
+  opacity:0; transition:opacity .3s ease; pointer-events:none; }
+.net-conn.active { opacity:1; }

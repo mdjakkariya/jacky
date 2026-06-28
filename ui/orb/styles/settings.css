@@ -95,6 +95,77 @@
   .tip { position: absolute; bottom: calc(100% + 7px); left: 50%; transform: translateX(-50%); background: var(--text); color: var(--panel); font-size: 11px; font-weight: 500; padding: 3px 8px; border-radius: 6px; white-space: nowrap; opacity: 0; pointer-events: none; transition: opacity .15s ease; box-shadow: 0 2px 8px rgba(0, 0, 0, .25); }
   .tip:after { content: ""; position: absolute; top: 100%; left: 50%; transform: translateX(-50%); border: 4px solid transparent; border-top-color: var(--text); }
   .tip.show { opacity: 1; }
+  /* MCP info banner */
+  .mcp-banner { display:flex; gap:10px; padding:11px 12px; border-radius:10px; font-size:12.5px; line-height:1.45;
+    background:var(--net-bg); border:1px solid rgba(251,146,60,.28); color:var(--net); margin-bottom:14px; }
+  .mcp-banner.local { background:rgba(40,180,90,.08); border-color:rgba(40,180,90,.25); color:var(--ok); }
+  /* MCP server card (connections list) */
+  .srv-card { display:flex; align-items:center; gap:12px; padding:11px 14px;
+    border-top:.5px solid var(--line); }
+  .srv-card:first-child { border-top:none; }
+  .srv-icon { width:36px; height:36px; border-radius:9px; flex:0 0 auto;
+    display:flex; align-items:center; justify-content:center; font-size:18px;
+    background:var(--seg-bg); border:.5px solid var(--line); }
+  .srv-meta { flex:1; min-width:0; }
+  .srv-name { font-weight:600; display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
+  .srv-desc { color:var(--muted); font-size:12px; margin-top:2px; display:flex; gap:6px; align-items:center; flex-wrap:wrap; }
+  .status-dot { width:7px; height:7px; border-radius:50%; display:inline-block; flex:none; }
+  .status-dot.connected { background:var(--ok); }
+  .status-dot.disconnected { background:var(--muted); }
+  .status-dot.auth_needed { background:var(--warn); }
+  .status-dot.reconnecting { background:var(--warn); }
+  .add-conn-row { display:flex; justify-content:flex-end; padding:12px 14px 2px; }
+  /* MCP risk pills */
+  .pill { display:inline-flex; align-items:center; gap:5px; padding:1px 8px;
+    border-radius:999px; font-size:11px; font-weight:600; line-height:1.7; white-space:nowrap; }
+  .pill.read  { background:rgba(10,132,255,.13); color:var(--accent); }
+  .pill.write { background:rgba(230,135,14,.14); color:var(--net); }
+  .pill.danger { background:var(--danger-bg); color:var(--danger); }
+  .pill.net   { background:var(--net-bg); color:var(--net); }
+  .pill.local { background:rgba(40,180,90,.12); color:var(--ok); }
+  /* Add-connection wizard stepper */
+  .wizard-steps { display:flex; gap:5px; margin-bottom:16px; }
+  .wizard-step { flex:1; height:4px; border-radius:3px; background:var(--line); }
+  .wizard-step.done { background:var(--accent); }
+  .wizard-step.now { background:var(--accent); opacity:.55; }
+  /* Wizard catalog grid */
+  .catalog-grid { display:grid; grid-template-columns:1fr 1fr; gap:8px; margin-bottom:8px; }
+  .cat-item { display:flex; align-items:center; gap:9px; padding:10px; border:.5px solid var(--line);
+    border-radius:9px; background:var(--panel); cursor:pointer; }
+  .cat-item:hover { border-color:var(--accent); }
+  .cat-item.selected { border-color:var(--accent); background:var(--accent-bg); }
+  .cat-icon { width:28px; height:28px; border-radius:7px; display:flex; align-items:center;
+    justify-content:center; font-size:15px; background:var(--seg-bg); flex:none; }
+  .cat-name { font-weight:600; font-size:12.5px; }
+  .cat-desc { color:var(--muted); font-size:11px; margin-top:1px; }
+  /* Wizard radio option */
+  .opt-item { display:flex; gap:10px; padding:10px; border:.5px solid var(--line);
+    border-radius:9px; margin-bottom:8px; background:var(--panel); cursor:pointer; }
+  .opt-item.selected { border-color:var(--accent); }
+  .opt-radio { width:15px; height:15px; border-radius:50%; border:2px solid var(--muted); flex:none; margin-top:2px; }
+  .opt-item.selected .opt-radio { border-color:var(--accent); background:radial-gradient(circle,var(--accent) 38%,transparent 42%); }
+  .opt-title { font-weight:600; font-size:12.5px; }
+  .opt-desc  { color:var(--muted); font-size:11.5px; margin-top:2px; }
+  /* Connection detail tool list */
+  .tool-row { display:flex; align-items:center; gap:11px; padding:10px 14px;
+    border-top:.5px solid var(--line); }
+  .tool-row:first-child { border-top:none; }
+  .tool-name { font-weight:600; font-size:13px; }
+  .tool-desc { color:var(--muted); font-size:12px; margin-top:2px; }
+  .tool-meta { flex:1; min-width:0; }
+  /* Privacy summary exit rows */
+  .exit-row { display:flex; align-items:center; gap:11px; padding:11px 14px;
+    border-top:.5px solid var(--line); }
+  .exit-row:first-child { border-top:none; }
+  .exit-icon { width:28px; height:28px; border-radius:7px; display:flex; align-items:center;
+    justify-content:center; font-size:14px; background:var(--seg-bg); flex:none; }
+  .exit-meta { flex:1; min-width:0; }
+  .exit-name { font-weight:600; font-size:13px; }
+  .exit-desc { color:var(--muted); font-size:12px; margin-top:2px; }
+  /* Danger zone */
+  .danger-zone { border-top:.5px solid var(--danger-bg); margin-top:4px; padding-top:12px; display:flex; gap:8px; }
+  button.btn.danger { background:var(--danger-bg); color:var(--danger); border-color:var(--danger-bg); }
+  button.btn.ghost-sm { background:transparent; color:var(--muted); border:none; font-size:12px; }
   .hidden { display: none !important; }
   /* First-load overlay: the daemon may take a moment to answer /settings, so cover the
      (empty) form with a spinner until it does, instead of flashing a blank window. */

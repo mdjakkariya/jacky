@@ -163,4 +163,9 @@
   .steptrace .row.done .dot { background: #34c759; }
   .steptrace .row.failed .dot { background: var(--danger); }
   .steptrace .row.running .label { opacity: .9; } .steptrace .row.done .label, .steptrace .row.failed .label { opacity: .6; }
+  /* MCP step trace extensions */
+  .steptrace .srvbadge { display:inline-flex; align-items:center; gap:4px; font-size:10.5px;
+    font-weight:600; background:var(--seg-bg); border:.5px solid var(--line);
+    padding:1px 6px; border-radius:6px; color:var(--muted); margin-left:6px; }
+  .steptrace .egress { font-size:10.5px; color:var(--net); margin-left:4px; }
 }
