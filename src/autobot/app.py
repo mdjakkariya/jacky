@@ -450,6 +450,25 @@ def build(
         log.info("web search ENABLED provider=%s (queries leave the device)", provider)
         print(f"[web] web search ENABLED via {provider} — queries leave the device.")
 
+    if settings.allow_mcp:
+        # MCP integration (opt-in, the third disclosed exception). Adds each enabled
+        # server's tools to the same registry, gated like any other tool. Network-egress
+        # servers send data off-device; that is disclosed per-connection and confirmed
+        # by the gate (see PermissionGate). Local stdio servers stay on-device.
+        import atexit
+
+        from autobot.mcp.config import load_mcp_config
+        from autobot.mcp.manager import McpManager
+
+        mcp_config = load_mcp_config()
+        mcp_manager = McpManager(mcp_config, registry)
+        mcp_manager.start()
+        mcp_manager.connect_enabled()
+        atexit.register(mcp_manager.shutdown)
+        enabled = sum(1 for c in mcp_config.values() if c.enabled)
+        log.info("mcp ENABLED servers=%d enabled=%d", len(mcp_config), enabled)
+        print(f"[mcp] MCP enabled — {enabled} of {len(mcp_config)} server(s) connecting.")
+
     if on_visibility is not None:
         # A UI is attached: let the user dismiss the orb by voice ("go away").
         from autobot.tools.orb import register_orb_tools
