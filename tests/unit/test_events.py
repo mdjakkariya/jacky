@@ -254,3 +254,32 @@ def test_publish_workspace_emits_and_remembers_last() -> None:
     bus.publish_workspace("/Users/me/proj", "proj")
     assert seen == [{"type": "workspace", "path": "/Users/me/proj", "name": "proj"}]
     assert bus.last_workspace == {"type": "workspace", "path": "/Users/me/proj", "name": "proj"}
+
+
+def test_publish_mcp_reaches_subscriber() -> None:
+    bus = EventBus()
+    received: list[dict[str, object]] = []
+    bus.subscribe(received.append)
+
+    payload: dict[str, object] = {
+        "type": "mcp_status",
+        "server": "slack",
+        "state": "connected",
+        "tool_count": 7,
+    }
+    bus.publish_mcp(payload)
+
+    assert received == [payload]
+
+
+def test_publish_mcp_passes_payload_unchanged() -> None:
+    bus = EventBus()
+    received: list[dict[str, object]] = []
+    bus.subscribe(received.append)
+
+    # Any dict shape flows through — publish_mcp is a typed passthrough
+    oauth_payload: dict[str, object] = {"type": "mcp_oauth", "server": "github", "url": "https://x"}
+    bus.publish_mcp(oauth_payload)
+
+    assert len(received) == 1
+    assert received[0]["type"] == "mcp_oauth"
