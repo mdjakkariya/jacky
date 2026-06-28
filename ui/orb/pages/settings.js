@@ -75,7 +75,8 @@ async function renderPrivacy(el) {
   try {
     const [settings, serversRes] = await Promise.all([daemon.settings(), daemon.mcpServers()]);
     const exits = privacyExits(settings, serversRes.servers || []);
-    renderPrivacySummary(el, exits, () => daemon.reportFile());
+    // "View audit log" opens the activity/report sheet (recent gated tool activity).
+    renderPrivacySummary(el, exits, () => report.open());
   } catch (_) {
     el.textContent = "Couldn't load privacy summary — is Jack running?";
   }
