@@ -185,6 +185,7 @@ class Settings:
     allow_clipboard: bool = True
     allow_reminders: bool = True
     allow_file_io: bool = True
+    allow_system_toggles: bool = True
     access_store: str = "~/.autobot/access.json"
     memory_db: str = "~/.autobot/memory.db"
     # --- debugging / logging ---
