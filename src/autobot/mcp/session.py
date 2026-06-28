@@ -178,6 +178,7 @@ class McpServerWorker:
             self._fail_pending()
             self._unregister_all()
             self._tool_count = 0
+            self._all_tools = []  # don't serve a stale tool snapshot after disconnect
             self._emit_status()
             _log.info("mcp disconnected server=%s", self._cfg.id)
 
