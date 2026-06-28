@@ -34,6 +34,7 @@ if TYPE_CHECKING:
     from pathlib import Path
 
     from autobot.config import Settings
+    from autobot.mcp.manager import McpManager
 
 _log = get_logger("daemon")
 
@@ -80,7 +81,7 @@ def create_app(
     on_chat: Any | None = None,
     on_new_session: Any | None = None,
     on_action: Any | None = None,
-    mcp: Any | None = None,
+    mcp: McpManager | None = None,
 ) -> Any:
     """Build the FastAPI app: the event stream plus the Settings-view API.
 
@@ -415,6 +416,104 @@ def create_app(
             on_confirm_answer(str(value))
         return {"ok": True}
 
+    # ------------------------------------------------------------------ MCP
+    # All /mcp/* handlers check mcp is not None and return a graceful error
+    # when MCP is disabled (allow_mcp=False). Blocking manager calls are run
+    # via asyncio.to_thread so the event loop stays responsive.
+
+    _mcp_disabled: dict[str, object] = {"ok": False, "error": "mcp disabled"}
+
+    async def get_mcp_servers() -> dict[str, Any]:
+        """List all configured MCP servers with status + auth metadata."""
+        if mcp is None:
+            return _mcp_disabled
+        rows = await asyncio.to_thread(mcp.status)
+        # status() rows already carry auth_type; enrich each with secret_present
+        # (a Keychain lookup) via the public method — no reaching into mcp internals.
+        enriched: list[dict[str, Any]] = [
+            {
+                **row,
+                "secret_present": await asyncio.to_thread(mcp.secret_present, str(row["server"])),
+            }
+            for row in rows
+        ]
+        return {"ok": True, "servers": enriched}
+
+    async def post_mcp_servers(request: Request) -> dict[str, Any]:
+        """Add or update an MCP server (validated via _coerce_server)."""
+        if mcp is None:
+            return _mcp_disabled
+        body = await request.json()
+        if not isinstance(body, dict):
+            return {"ok": False, "error": "expected a JSON object"}
+        return await asyncio.to_thread(mcp.add_or_update_server, body)
+
+    async def delete_mcp_server(server_id: str) -> dict[str, Any]:
+        """Remove a configured MCP server."""
+        if mcp is None:
+            return _mcp_disabled
+        removed = await asyncio.to_thread(mcp.remove_server, server_id)
+        if not removed:
+            return {"ok": False, "error": f"unknown server: {server_id!r}"}
+        return {"ok": True}
+
+    async def post_mcp_enable(server_id: str) -> dict[str, Any]:
+        """Enable an MCP server (persist + connect)."""
+        if mcp is None:
+            return _mcp_disabled
+        ok = await asyncio.to_thread(mcp.set_enabled, server_id, True)
+        return {"ok": ok} if ok else {"ok": False, "error": f"unknown server: {server_id!r}"}
+
+    async def post_mcp_disable(server_id: str) -> dict[str, Any]:
+        """Disable an MCP server (persist + disconnect)."""
+        if mcp is None:
+            return _mcp_disabled
+        ok = await asyncio.to_thread(mcp.set_enabled, server_id, False)
+        return {"ok": ok} if ok else {"ok": False, "error": f"unknown server: {server_id!r}"}
+
+    async def post_mcp_connect(server_id: str) -> dict[str, Any]:
+        """Connect to an MCP server (start worker if not running)."""
+        if mcp is None:
+            return _mcp_disabled
+        await asyncio.to_thread(mcp.connect, server_id)
+        return {"ok": True}
+
+    async def post_mcp_test(server_id: str) -> dict[str, Any]:
+        """Connect to an MCP server and return its current status row."""
+        if mcp is None:
+            return _mcp_disabled
+        await asyncio.to_thread(mcp.connect, server_id)
+        rows = await asyncio.to_thread(mcp.status)
+        match = next((r for r in rows if r["server"] == server_id), None)
+        if match is None:
+            return {"ok": False, "error": f"unknown server: {server_id!r}"}
+        return {"ok": True, "server": match}
+
+    async def get_mcp_tools(server_id: str) -> dict[str, Any]:
+        """Return the cached all-tools list for a server."""
+        if mcp is None:
+            return _mcp_disabled
+        tools = await asyncio.to_thread(mcp.tools_for, server_id)
+        return {"ok": True, "tools": tools}
+
+    async def post_mcp_tool_override(server_id: str, tool: str, request: Request) -> dict[str, Any]:
+        """Adjust a tool's risk classification or enable/disable it."""
+        if mcp is None:
+            return _mcp_disabled
+        body = await request.json()
+        risk: str | None = body.get("risk") if isinstance(body, dict) else None
+        enabled: bool | None = body.get("enabled") if isinstance(body, dict) else None
+        ok = await asyncio.to_thread(
+            mcp.set_tool_override, server_id, tool, risk=risk, enabled=enabled
+        )
+        return {"ok": ok} if ok else {"ok": False, "error": f"unknown server: {server_id!r}"}
+
+    async def post_mcp_auth_start(server_id: str) -> dict[str, Any]:
+        """OAuth start — stub until Phase 6."""
+        if mcp is None:
+            return _mcp_disabled
+        return {"ok": False, "error": "oauth not yet supported (phase 6)"}
+
     # Register routes explicitly (rather than via decorators) so the handlers
     # stay statically typed under mypy strict — FastAPI ships no type info here.
     app.add_api_route("/healthz", healthz, methods=["GET"])
@@ -440,6 +539,18 @@ def create_app(
     app.add_api_route("/session/new", post_new_session, methods=["POST"])
     app.add_api_route("/voice/status", get_voice_status, methods=["GET"])
     app.add_api_route("/voice/download", post_voice_download, methods=["POST"])
+    app.add_api_route("/mcp/servers", get_mcp_servers, methods=["GET"])
+    app.add_api_route("/mcp/servers", post_mcp_servers, methods=["POST"])
+    app.add_api_route("/mcp/servers/{server_id}", delete_mcp_server, methods=["DELETE"])
+    app.add_api_route("/mcp/servers/{server_id}/enable", post_mcp_enable, methods=["POST"])
+    app.add_api_route("/mcp/servers/{server_id}/disable", post_mcp_disable, methods=["POST"])
+    app.add_api_route("/mcp/servers/{server_id}/connect", post_mcp_connect, methods=["POST"])
+    app.add_api_route("/mcp/servers/{server_id}/test", post_mcp_test, methods=["POST"])
+    app.add_api_route("/mcp/servers/{server_id}/tools", get_mcp_tools, methods=["GET"])
+    app.add_api_route(
+        "/mcp/servers/{server_id}/tools/{tool}", post_mcp_tool_override, methods=["POST"]
+    )
+    app.add_api_route("/mcp/servers/{server_id}/auth/start", post_mcp_auth_start, methods=["POST"])
     return app
 
 
