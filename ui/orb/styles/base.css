@@ -6,3 +6,11 @@ body {
   -webkit-font-smoothing: antialiased;
   color: var(--text);
 }
+
+/* Autonomous custom elements default to display:inline; our light-DOM components are
+   block-level containers. Default them to block so a card/section never collapses to a
+   bare sliver of border. Components with their own layout (flex via .tabs/#log/.upd)
+   override this in the components layer. */
+chat-log, update-banner, settings-tabs, permissions-list, access-list, voice-download {
+  display: block;
+}
