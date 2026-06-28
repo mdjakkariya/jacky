@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
-import { $, el, on } from "./dom.js";
+import { $, el, on, pointCaretAt } from "./dom.js";
 
 it("$ finds by id", () => {
   document.body.innerHTML = '<div id="x">hi</div>';
@@ -26,4 +26,15 @@ it("on adds and the returned fn removes the listener", () => {
   const off = on(node, "click", handler);
   node.click(); expect(handler).toHaveBeenCalledTimes(1);
   off(); node.click(); expect(handler).toHaveBeenCalledTimes(1);
+});
+
+it("pointCaretAt sets the --caret-x custom property (clamped, in px)", () => {
+  const pop = el("div"), trig = el("div");
+  document.body.append(pop, trig);
+  pointCaretAt(pop, trig);
+  expect(pop.style.getPropertyValue("--caret-x")).toMatch(/^\d+px$/);
+});
+
+it("pointCaretAt is a no-op when an element is missing", () => {
+  expect(() => pointCaretAt(null, el("div"))).not.toThrow();
 });

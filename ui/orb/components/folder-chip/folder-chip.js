@@ -1,7 +1,7 @@
 /** Active-folder chip + detail modal in the chat header. Controller module (the chip
  *  #folder and the modal #folderDetail are separate elements). Driven by the "workspace"
  *  WS frame and GET /workspace. Returns { refresh, renderFromEvent }. Moved from chat.html. */
-import { $ } from "../../lib/dom.js";
+import { $, pointCaretAt } from "../../lib/dom.js";
 import { daemon } from "../../lib/daemon.js";
 import { revealInFinder, pickFolder } from "../../lib/tauri.js";
 
@@ -48,7 +48,11 @@ export function setupFolderChip() {
     if (!d.classList.contains("hidden")) return; // already open
     refresh(); // populate/refresh path + grants before showing
     d.classList.remove("hidden");
-    const chip = $("folder"); if (chip) chip.setAttribute("aria-expanded", "true");
+    const chip = $("folder");
+    if (chip) {
+      chip.setAttribute("aria-expanded", "true"); // lights the chip (see chat.css)
+      pointCaretAt(d, chip); // aim the popover's caret at the chip (now visible)
+    }
   }
   function closeDetail() {
     const d = $("folderDetail"); if (!d) return;

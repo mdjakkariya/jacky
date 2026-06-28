@@ -48,6 +48,7 @@ it("clicking the chip opens the modal (and refreshes from /workspace)", async ()
   const fc = setupFolderChip();
   document.getElementById("folder").click();
   expect(document.getElementById("folderDetail").classList.contains("hidden")).toBe(false);
+  expect(document.getElementById("folder").getAttribute("aria-expanded")).toBe("true"); // lit
   await Promise.resolve();
   expect(daemon.workspace).toHaveBeenCalled();
 });

@@ -2,7 +2,7 @@
  *  card). Controller module (not a custom element): the ring #ctx and the detail card
  *  #ctxDetail are separate, positioned elements. Returns { update, reset }. Moved from
  *  chat.html. */
-import { $ } from "../../lib/dom.js";
+import { $, pointCaretAt } from "../../lib/dom.js";
 import { fmtK, fmtModel, fmtUSD } from "../../lib/format.js";
 
 const CTX_CIRC = 94.2;
@@ -59,7 +59,7 @@ export function setupContextMeter() {
   if (ctx) ctx.addEventListener("click", () => {
     if (!lastCtx) return;
     const d = $("ctxDetail"), hidden = d.classList.toggle("hidden");
-    if (!hidden) renderDetail();
+    if (!hidden) { renderDetail(); pointCaretAt(d, ctx); } // aim the caret at the ring
   });
 
   return { update, reset };

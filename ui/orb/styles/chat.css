@@ -40,19 +40,25 @@
   .ctx.show { display: inline-flex; } .ctx svg { display: block; width: 14px; height: 14px; }
   .ctx.show { cursor: pointer; } .ctx .pct { font-size: 11px; line-height: 1; color: var(--muted); }
   .ctx-detail { position: absolute; top: 46px; left: 12px; z-index: 6; background: var(--panel); border: .5px solid var(--field-line); border-radius: 10px; padding: 9px 11px; min-width: 180px; box-shadow: 0 6px 20px rgba(0, 0, 0, .35); }
+  /* Same caret as the folder popover, pointed at the context ring on open. */
+  .ctx-detail::before { content: ""; position: absolute; top: -5px; left: var(--caret-x, 22px); width: 9px; height: 9px; background: var(--panel); border-left: .5px solid var(--field-line); border-top: .5px solid var(--field-line); transform: rotate(45deg); }
   .ctx-detail .t { display: flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 600; color: var(--text); margin-bottom: 7px; }
   .ctx-detail .t svg { width: 14px; height: 14px; flex: none; opacity: .85; }
   .ctx-detail .r { display: flex; justify-content: space-between; font-size: 11.5px; color: var(--muted); gap: 14px; margin-top: 3px; }
   .ctx-detail .r b { font-weight: 500; color: var(--text); font-variant-numeric: tabular-nums; }
   .ctx-detail .note { font-size: 11px; color: var(--muted); margin-top: 8px; opacity: .8; }
-  .folder { display: inline-flex; align-items: center; gap: 5px; -webkit-app-region: no-drag; cursor: pointer; color: var(--muted); font-size: 12px; }
+  .folder { display: inline-flex; align-items: center; gap: 5px; -webkit-app-region: no-drag; cursor: pointer; color: var(--muted); font-size: 12px; border: .5px solid transparent; border-radius: 7px; padding: 3px 7px; transition: background .12s, border-color .12s, color .12s; }
+  .folder:hover { background: var(--bubble); }
+  /* Lit while its popover is open (driven by the chip's aria-expanded toggle). */
+  .folder[aria-expanded="true"] { color: var(--accent); background: var(--accent-bg); border-color: rgba(10, 132, 255, .5); }
   .folder svg { width: 14px; height: 14px; display: block; }
   .folder .fname { max-width: 140px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   /* Active-folder popover ("Working in"). Matches the design mockup, with a small
      caret pointing up toward the folder chip so it reads as anchored to it. */
   .folder-detail { position: absolute; top: 46px; left: 12px; z-index: 6; width: 262px; background: var(--panel); border: .5px solid var(--field-line); border-radius: 11px; padding: 12px 13px; box-shadow: 0 14px 40px rgba(0, 0, 0, .5); }
-  /* Caret: a rotated square whose top+left edges poke above the card as a "^" tail. */
-  .folder-detail::before { content: ""; position: absolute; top: -5px; left: 22px; width: 9px; height: 9px; background: var(--panel); border-left: .5px solid var(--field-line); border-top: .5px solid var(--field-line); transform: rotate(45deg); }
+  /* Caret: a rotated square whose top+left edges poke above the card as a "^" tail.
+     Its x is set per-open by lib/dom.js pointCaretAt so it lands under the chip. */
+  .folder-detail::before { content: ""; position: absolute; top: -5px; left: var(--caret-x, 22px); width: 9px; height: 9px; background: var(--panel); border-left: .5px solid var(--field-line); border-top: .5px solid var(--field-line); transform: rotate(45deg); }
   .fd-h { display: flex; align-items: center; gap: 7px; font-size: 12px; font-weight: 600; color: var(--text); margin-bottom: 9px; }
   .fd-h svg { width: 14px; height: 14px; opacity: .9; }
   .fd-path { font-family: "SF Mono", ui-monospace, Menlo, monospace; font-size: 12px; color: var(--text); word-break: break-all; background: var(--field); border-radius: 7px; padding: 7px 9px; margin-bottom: 9px; }
