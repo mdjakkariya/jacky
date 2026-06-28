@@ -568,3 +568,30 @@ def test_mcp_disabled_all_endpoints_return_error() -> None:
         else:
             resp = client.request(method, path, json={}).json()
         assert resp["ok"] is False, f"{method} {path} should return ok=False when mcp disabled"
+
+
+def test_mcp_list_includes_secret_present_false_when_no_ref() -> None:
+    """Servers without a secret_ref report secret_present=False."""
+    client = _mcp_client(_FakeMcp())
+    resp = client.get("/mcp/servers").json()
+    assert resp["ok"] is True
+    echo = next(s for s in resp["servers"] if s["server"] == "echo")
+    assert echo["secret_present"] is False
+
+
+def test_mcp_list_includes_secret_present_true_when_ref_set() -> None:
+    """Servers with a secret_ref and a set Keychain entry report secret_present=True."""
+
+    class _FakeMcpWithRef(_FakeMcp):
+        def __init__(self) -> None:
+            super().__init__()
+            self._servers["echo"]["secret_ref"] = "mcp.echo.token"
+
+        def secret_present(self, server_id: str) -> bool:
+            cfg_data = self._servers.get(server_id, {})
+            return cfg_data.get("secret_ref") is not None
+
+    client = _mcp_client(_FakeMcpWithRef())
+    resp = client.get("/mcp/servers").json()
+    echo = next(s for s in resp["servers"] if s["server"] == "echo")
+    assert echo["secret_present"] is True

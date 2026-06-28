@@ -563,7 +563,7 @@ def run_daemon(
     on_chat: Any | None = None,
     on_new_session: Any | None = None,
     on_action: Any | None = None,
-    mcp: Any | None = None,
+    mcp: McpManager | None = None,
 ) -> None:
     """Run the daemon server (blocking) on ``host:port``.
 
@@ -589,8 +589,12 @@ def run_daemon(
         on_action=on_action,
         mcp=mcp,
     )
-    with contextlib.suppress(KeyboardInterrupt):
-        uvicorn.run(app, host=host, port=port, log_level="warning", lifespan="off")
+    try:
+        with contextlib.suppress(KeyboardInterrupt):
+            uvicorn.run(app, host=host, port=port, log_level="warning", lifespan="off")
+    finally:
+        if mcp is not None:
+            mcp.shutdown()
     print("\n[daemon] stopped.")
 
 
