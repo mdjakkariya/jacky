@@ -84,7 +84,7 @@ describe("privacyExits", () => {
   it("uses server id as fallback hostname when url is absent", () => {
     const noUrl = { server: "myservice", label: "My Service", enabled: true, egress: "network", icon: "🔌" };
     const exits = privacyExits(NO_EXITS_SETTINGS, [noUrl]);
-    expect(exits[0].desc).toContain("myservice.com");
+    expect(exits[0].desc).toContain("myservice");
   });
 
   it("handles multiple network MCP servers", () => {
@@ -99,6 +99,8 @@ describe("privacyExits", () => {
 
 // ---------------------------------------------------------------------------
 // renderPrivacySummary — DOM integration (happy-dom)
+// CSS tokens used: .mcp-banner.local, .exit-row, .exit-icon, .exit-meta,
+//                  .exit-name, .exit-desc, button.btn.ghost-sm
 // ---------------------------------------------------------------------------
 
 describe("renderPrivacySummary", () => {
@@ -112,34 +114,34 @@ describe("renderPrivacySummary", () => {
     const el = makeContainer();
     const exits = [{ icon: "🔎", name: "Web search", desc: "Sends only your search query" }];
     renderPrivacySummary(el, exits, vi.fn());
-    const head = el.querySelector(".secthead");
+    const head = el.querySelector(".label");
     expect(head).not.toBeNull();
     expect(head.textContent).toContain("1");
   });
 
-  it("renders one .exit row per exit", () => {
+  it("renders one .exit-row per exit", () => {
     const el = makeContainer();
     const exits = [
       { icon: "🔎", name: "Web search", desc: "Sends only your search query" },
       { icon: "🧠", name: "Cloud LLM (Anthropic)", desc: "Sends conversation + memory profile + tool results" },
     ];
     renderPrivacySummary(el, exits, vi.fn());
-    expect(el.querySelectorAll(".exit")).toHaveLength(2);
+    expect(el.querySelectorAll(".exit-row")).toHaveLength(2);
   });
 
-  it("renders exit icon (.ei), name (.en), and description (.ed)", () => {
+  it("renders exit icon (.exit-icon), name (.exit-name), and description (.exit-desc)", () => {
     const el = makeContainer();
     const exits = [{ icon: "💬", name: "Slack", desc: "Sends data to slack.com" }];
     renderPrivacySummary(el, exits, vi.fn());
-    expect(el.querySelector(".ei").textContent).toBe("💬");
-    expect(el.querySelector(".en").textContent).toBe("Slack");
-    expect(el.querySelector(".ed").textContent).toBe("Sends data to slack.com");
+    expect(el.querySelector(".exit-icon").textContent).toBe("💬");
+    expect(el.querySelector(".exit-name").textContent).toBe("Slack");
+    expect(el.querySelector(".exit-desc").textContent).toBe("Sends data to slack.com");
   });
 
   it("shows a no-exits message when the list is empty", () => {
     const el = makeContainer();
     renderPrivacySummary(el, [], vi.fn());
-    expect(el.querySelectorAll(".exit")).toHaveLength(0);
+    expect(el.querySelectorAll(".exit-row")).toHaveLength(0);
     expect(el.textContent).toContain("No off-device exits");
   });
 
@@ -159,14 +161,14 @@ describe("renderPrivacySummary", () => {
     const exits = [{ icon: "🔎", name: "Web search", desc: "query only" }];
     renderPrivacySummary(el, exits, vi.fn());
     renderPrivacySummary(el, exits, vi.fn());
-    expect(el.querySelectorAll(".exit")).toHaveLength(1);
+    expect(el.querySelectorAll(".exit-row")).toHaveLength(1);
   });
 
-  it("renders privacy banner with lock icon", () => {
+  it("renders privacy banner with .mcp-banner.local class", () => {
     const el = makeContainer();
     renderPrivacySummary(el, [], vi.fn());
-    const banner = el.querySelector(".banner.local");
+    const banner = el.querySelector(".mcp-banner.local");
     expect(banner).not.toBeNull();
-    expect(banner.querySelector(".banner-icon").textContent).toBe("🔒");
+    expect(banner.textContent).toContain("By default, everything runs on your Mac.");
   });
 });

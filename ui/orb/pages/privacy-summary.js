@@ -37,10 +37,10 @@ export function privacyExits(settings, servers) {
         try {
           host = new URL(srv.url).hostname;
         } catch (_) {
-          host = srv.server + ".com";
+          host = srv.server;
         }
       } else {
-        host = srv.server + ".com";
+        host = srv.server;
       }
       exits.push({
         icon: srv.icon || "🔌",
@@ -55,6 +55,8 @@ export function privacyExits(settings, servers) {
 
 /**
  * Render the privacy summary into `el`, given exits inventory.
+ * Uses the CSS tokens defined in settings.css: .mcp-banner, .exit-row, .exit-icon,
+ * .exit-meta, .exit-name, .exit-desc, button.btn.ghost-sm.
  * Separated from privacyExits() so DOM rendering is not under test.
  *
  * @param {HTMLElement} el - Container element to render into.
@@ -62,61 +64,58 @@ export function privacyExits(settings, servers) {
  * @param {() => void} onViewAuditLog - Called when "View audit log →" is clicked.
  */
 export function renderPrivacySummary(el, exits, onViewAuditLog) {
-  el.innerHTML = "";
+  // Clear previous render (idempotent re-render support).
+  while (el.firstChild) el.removeChild(el.firstChild);
 
-  // Privacy banner
+  // Privacy banner (.mcp-banner.local per settings.css)
   const banner = document.createElement("div");
-  banner.className = "banner local";
-  banner.style.marginBottom = "14px";
-  const bannerIcon = document.createElement("span");
-  bannerIcon.className = "banner-icon";
-  bannerIcon.textContent = "🔒";
-  const bannerText = document.createElement("div");
+  banner.className = "mcp-banner local";
   const bannerStrong = document.createElement("strong");
   bannerStrong.textContent = "By default, everything runs on your Mac.";
-  bannerText.appendChild(bannerStrong);
-  bannerText.appendChild(document.createTextNode(" The items below are the only ways data can leave it. All are opt-in."));
-  banner.appendChild(bannerIcon);
-  banner.appendChild(bannerText);
+  const bannerBody = document.createElement("div");
+  bannerBody.appendChild(bannerStrong);
+  bannerBody.appendChild(document.createTextNode(" The items below are the only ways data can leave it. All are opt-in."));
+  banner.appendChild(bannerBody);
   el.appendChild(banner);
 
   // Section heading
   const head = document.createElement("div");
-  head.className = "secthead";
+  head.className = "label";
+  head.style.padding = "10px 14px 4px";
   head.textContent = `Active off-device exits · ${exits.length}`;
   el.appendChild(head);
 
   if (exits.length === 0) {
     const none = document.createElement("div");
     none.className = "hint";
-    none.style.margin = "8px 0 12px";
+    none.style.padding = "8px 14px 12px";
     none.textContent = "No off-device exits are active. Everything stays on your Mac.";
     el.appendChild(none);
   } else {
-    // Exit rows
+    // Exit rows — using .exit-row / .exit-icon / .exit-meta / .exit-name / .exit-desc
     for (const exit of exits) {
       const row = document.createElement("div");
-      row.className = "exit";
+      row.className = "exit-row";
 
       const icon = document.createElement("div");
-      icon.className = "ei";
+      icon.className = "exit-icon";
       icon.textContent = exit.icon;
 
-      const text = document.createElement("div");
-      text.className = "et";
+      const meta = document.createElement("div");
+      meta.className = "exit-meta";
 
       const name = document.createElement("div");
-      name.className = "en";
+      name.className = "exit-name";
       name.textContent = exit.name;
 
       const desc = document.createElement("div");
-      desc.className = "ed";
+      desc.className = "exit-desc";
       desc.textContent = exit.desc;
 
-      text.appendChild(name);
-      text.appendChild(desc);
+      meta.appendChild(name);
+      meta.appendChild(desc);
       row.appendChild(icon);
-      row.appendChild(text);
+      row.appendChild(meta);
       el.appendChild(row);
     }
   }
@@ -124,11 +123,11 @@ export function renderPrivacySummary(el, exits, onViewAuditLog) {
   // Audit log link row
   const linkRow = document.createElement("div");
   linkRow.className = "row";
-  linkRow.style.marginTop = "6px";
+  linkRow.style.padding = "6px 14px 2px";
   const spacer = document.createElement("span");
   spacer.className = "spacer";
   const auditLink = document.createElement("button");
-  auditLink.className = "btn ghost sm";
+  auditLink.className = "btn ghost-sm";
   auditLink.textContent = "View audit log →";
   auditLink.addEventListener("click", onViewAuditLog);
   linkRow.appendChild(spacer);

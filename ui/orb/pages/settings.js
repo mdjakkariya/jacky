@@ -10,6 +10,10 @@ import "../components/access-list/access-list.js";
 import "../components/voice-download/voice-download.js";
 import { setupReportSheet } from "../components/report-sheet/report-sheet.js";
 import "../components/connections-list/connections-list.js";
+// TODO(task-5): uncomment when add-connection component is implemented
+// import "../components/add-connection/add-connection.js";
+// TODO(task-6): uncomment when connection-detail component is implemented
+// import "../components/connection-detail/connection-detail.js";
 import { privacyExits, renderPrivacySummary } from "./privacy-summary.js";
 
 const CHECKS = ["tts_enabled", "barge_in", "aec", "allow_app_control", "allow_system_info", "allow_memory", "allow_file_search", "allow_clipboard", "allow_reminders", "allow_file_io", "allow_web"];
