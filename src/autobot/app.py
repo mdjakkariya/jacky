@@ -309,6 +309,7 @@ def build(
     on_choices: ChoicesSink | None = None,
     on_step: Callable[[int, str, str, str], None] | None = None,
     on_workspace: Callable[[str, str], None] | None = None,
+    on_mcp_event: Callable[[dict[str, object]], None] | None = None,
 ) -> Orchestrator:
     """Compose a fully wired :class:`Orchestrator`.
 
@@ -346,6 +347,9 @@ def build(
             changes (e.g. via ``set_working_directory``), so the chat drawer can
             update its folder chip; the daemon wires it to the bus's
             ``publish_workspace``.
+        on_mcp_event: Optional callback invoked when the MCP manager publishes an
+            event; the daemon passes the bus's ``publish_mcp`` to wire MCP state
+            to connected clients.
 
     Returns:
         A ready-to-run orchestrator. Constructing it loads the STT model, opens
@@ -450,6 +454,8 @@ def build(
         log.info("web search ENABLED provider=%s (queries leave the device)", provider)
         print(f"[web] web search ENABLED via {provider} — queries leave the device.")
 
+    mcp_manager: object | None = None
+
     if settings.allow_mcp:
         # MCP integration (opt-in, the third disclosed exception). Adds each enabled
         # server's tools to the same registry, gated like any other tool. Network-egress
@@ -461,7 +467,7 @@ def build(
         from autobot.mcp.manager import McpManager
 
         mcp_config = load_mcp_config()
-        mcp_manager = McpManager(mcp_config, registry)
+        mcp_manager = McpManager(mcp_config, registry, on_event=on_mcp_event)
         mcp_manager.start()
         mcp_manager.connect_enabled()
         atexit.register(mcp_manager.shutdown)
@@ -570,7 +576,7 @@ def build(
     if settings.barge_in:
         log.info("barge-in enabled — engages when voice starts (if AEC is active)")
 
-    return Orchestrator(
+    orch = Orchestrator(
         settings=settings,
         audio=audio,
         stt=stt,
@@ -589,6 +595,9 @@ def build(
         # the voice I/O rebuilds lazily on the next switch back to voice.
         release_voice_io=_voice_io.release,
     )
+    if mcp_manager is not None:
+        orch.mcp = mcp_manager  # type: ignore[assignment]
+    return orch
 
 
 def main() -> None:

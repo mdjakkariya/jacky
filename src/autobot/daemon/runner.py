@@ -132,6 +132,7 @@ def serve(settings: Settings | None = None) -> None:
         on_choices=publish_choices,
         on_step=publish_step,
         on_workspace=publish_workspace,
+        on_mcp_event=bus.publish_mcp,
     )
     holder["orch"] = orchestrator
     thread = threading.Thread(target=orchestrator.run, name="engine", daemon=True)
@@ -147,6 +148,7 @@ def serve(settings: Settings | None = None) -> None:
         on_chat=orchestrator.run_text_turn,
         on_new_session=orchestrator.new_chat_session,
         on_action=orchestrator.run_tool,
+        mcp=orchestrator.mcp,
     )
 
 

@@ -15,7 +15,10 @@ import re
 import threading
 import time
 from collections.abc import Callable
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from autobot.mcp.manager import McpManager
 
 import numpy as np
 
@@ -384,6 +387,9 @@ class Orchestrator:
         # transitions and crash ("listening -> executing", "planning -> transcribing").
         # Re-entrant so a turn can call helpers that also take it.
         self._turn_lock = threading.RLock()
+        # Set by the composition root (app.build) when MCP is enabled.
+        # Exposed so the daemon can delegate /mcp/* requests to the live manager.
+        self.mcp: McpManager | None = None
 
     def _greeting(self) -> str:
         """The reply to a bare wake word — name-aware, and a first hello if new."""

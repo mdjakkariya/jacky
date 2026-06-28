@@ -80,6 +80,7 @@ def create_app(
     on_chat: Any | None = None,
     on_new_session: Any | None = None,
     on_action: Any | None = None,
+    mcp: Any | None = None,
 ) -> Any:
     """Build the FastAPI app: the event stream plus the Settings-view API.
 
@@ -98,6 +99,8 @@ def create_app(
         on_action: Optional callback (tool: str, args: dict -> str) that runs one tool
             through the permission gate for a clicked action card; wired to the
             orchestrator's ``run_tool``.
+        mcp: Optional McpManager handle (wired by the daemon when MCP is enabled);
+            reserved for future Task 5 endpoints.
 
     Returns:
         A FastAPI app: ``/healthz``, WebSocket ``/ws``, the settings API, and
@@ -449,6 +452,7 @@ def run_daemon(
     on_chat: Any | None = None,
     on_new_session: Any | None = None,
     on_action: Any | None = None,
+    mcp: Any | None = None,
 ) -> None:
     """Run the daemon server (blocking) on ``host:port``.
 
@@ -472,6 +476,7 @@ def run_daemon(
         on_chat=on_chat,
         on_new_session=on_new_session,
         on_action=on_action,
+        mcp=mcp,
     )
     with contextlib.suppress(KeyboardInterrupt):
         uvicorn.run(app, host=host, port=port, log_level="warning", lifespan="off")
