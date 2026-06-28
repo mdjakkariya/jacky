@@ -87,10 +87,14 @@ body.has-card #cards {
 /* MCP network-egress ring (shown while a network-egress tool is running) */
 .net-ring { position:absolute; inset:-14px; border-radius:50%;
   border:2px solid rgba(251,146,60,.55);
-  opacity:0; transition:opacity .3s ease; pointer-events:none; }
+  opacity:0; transition:opacity .8s ease; pointer-events:none; }
 .net-ring.active { opacity:1; }
 .net-conn { position:absolute; right:-8px; bottom:-8px; width:26px; height:26px;
   border-radius:50%; background:var(--panel); border:1.5px solid var(--net);
   display:flex; align-items:center; justify-content:center; font-size:12px;
-  opacity:0; transition:opacity .3s ease; pointer-events:none; }
+  opacity:0; transition:opacity .8s ease; pointer-events:none; }
 .net-conn.active { opacity:1; }
+#net-cap { position:absolute; bottom:-44px; left:50%; transform:translateX(-50%);
+  font-size:11px; color:#fb923c; font-weight:600; white-space:nowrap;
+  opacity:0; transition:opacity .8s ease; pointer-events:none; }
+#net-cap.active { opacity:1; }

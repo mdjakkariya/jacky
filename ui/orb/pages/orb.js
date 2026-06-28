@@ -6,10 +6,15 @@ import { daemon } from "../lib/daemon.js";
 import { createOrbRenderer, SC } from "../lib/orb-renderer.js";
 import { createEarcons } from "../lib/earcons.js";
 import { $ } from "../lib/dom.js";
+import { mcpInfoForTool } from "../components/chat-log/chat-log.js";
 import "../components/orb-cards/orb-cards.js";
 
 const conn = $("conn");
 const orbCards = $("cards"); // the <orb-cards id="cards"> element
+
+// MCP server map cache for egress ring
+let _serverMap = {};
+let _ringFadeTimeout = null;
 
 const earcons = createEarcons({ gain: 0.30 });
 // Some webviews start the audio context suspended until a gesture; resume once.
@@ -155,6 +160,54 @@ function init() {
     const p = parkedPos; parkedPos = null; glideTo(p.x, p.y);
   }
 
+  // --- MCP egress ring -------------------------------------------------------
+  async function refreshServerMap() {
+    try {
+      const res = await daemon.mcpServers();
+      if (res && res.servers) {
+        _serverMap = {};
+        res.servers.forEach((srv) => {
+          _serverMap[srv.server] = {
+            label: srv.label,
+            icon: srv.icon || srv.label?.[0].toUpperCase() || "🔌",
+            egress: srv.egress,
+          };
+        });
+      }
+    } catch (e) {
+      // On fetch failure, stay graceful: _serverMap stays empty → no ring
+    }
+  }
+
+  function activateEgressRing(label) {
+    const ring = $("net-ring");
+    const conn = $("net-conn");
+    const cap = $("net-cap");
+    if (ring && conn && cap) {
+      ring.classList.add("active");
+      conn.classList.add("active");
+      cap.textContent = "Reaching " + label + "…";
+      cap.classList.add("active");
+    }
+    // Clear any pending fade timeout
+    if (_ringFadeTimeout) clearTimeout(_ringFadeTimeout);
+    _ringFadeTimeout = null;
+  }
+
+  function deactivateEgressRing() {
+    const ring = $("net-ring");
+    const conn = $("net-conn");
+    const cap = $("net-cap");
+    if (ring && conn && cap) {
+      ring.classList.remove("active");
+      conn.classList.remove("active");
+      cap.classList.remove("active");
+    }
+    // Clear any pending fade timeout
+    if (_ringFadeTimeout) clearTimeout(_ringFadeTimeout);
+    _ringFadeTimeout = null;
+  }
+
   // --- daemon connection ------------------------------------------------------
   let prevState = "idle";
   daemon.on("state", (msg) => {
@@ -168,7 +221,17 @@ function init() {
   daemon.on("confirm", (msg) => { if (msg.mode !== "chat") { orbCards.clearChoices(); orbCards.showConfirm(msg.text, msg.kind); } });
   daemon.on("confirm_clear", () => orbCards.clear());
   daemon.on("choices", (msg) => { if (msg.mode === "voice") orbCards.showChoices(msg); });
-  daemon.onOpen(() => { conn.textContent = ""; });
+  daemon.on("step", (m) => {
+    const info = mcpInfoForTool(m.tool, _serverMap);
+    if (m.status === "running" && info && info.egress) {
+      activateEgressRing(info.label);
+    } else if ((m.status === "done" || m.status === "failed") && info && info.egress) {
+      // Fade out: CSS transition handles the 800ms, then remove active class
+      _ringFadeTimeout = setTimeout(() => deactivateEgressRing(), 800);
+    }
+  });
+  daemon.on("mcp_status", () => refreshServerMap());
+  daemon.onOpen(() => { conn.textContent = ""; refreshServerMap(); });
   daemon.onClose(() => { conn.textContent = "reconnecting…"; });
 
   // The orb can launch hidden (chat-first); re-run resize whenever the canvas gains
