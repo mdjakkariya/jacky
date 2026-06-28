@@ -6,7 +6,10 @@
 @import url("./reset.css") layer(reset);
 @import url("./base.css") layer(base);
 
-/* Chat surface diverges on a few tokens (translucent drawer bg + softer fields). */
+/* Chat surface diverges on a few tokens (translucent drawer bg + softer fields).
+   IMPORTANT: every token overridden in light MUST also be set in the dark block —
+   these are unlayered + after the import, so an unset token leaks its light value
+   into dark mode (it wins over tokens.css's dark rule by source order). */
 :root {
   --bg: rgba(245, 245, 247, .86);
   --field: #f1f1f3;
@@ -15,6 +18,7 @@
 @media (prefers-color-scheme: dark) {
   :root {
     --bg: rgba(30, 30, 30, .82);
+    --field: #1c1c1e;
     --field-line: rgba(255, 255, 255, .14);
   }
 }
