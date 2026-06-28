@@ -87,17 +87,34 @@ class McpManager:
         if future is not None:
             try:
                 future.result(timeout=timeout)
-            except (concurrent.futures.TimeoutError, Exception):
+            except concurrent.futures.TimeoutError:
+                _log.warning(
+                    "mcp worker did not stop within %.0fs server=%s; cancelling",
+                    timeout,
+                    server_id,
+                )
+                future.cancel()
+            except Exception:  # an unexpected worker error must not break shutdown
+                _log.exception("mcp worker raised on disconnect server=%s", server_id)
                 future.cancel()
 
     def shutdown(self, timeout: float = 5.0) -> None:
-        """Disconnect all servers and stop the loop thread (idempotent)."""
+        """Disconnect all servers, stop the loop thread, and close the loop (idempotent).
+
+        Safe before ``start()`` and across restart cycles: the loop is closed so its
+        file descriptors / executor are released, and a later ``start()`` builds a
+        fresh one (so a reloadable manager can stop and restart cleanly).
+        """
         for server_id in list(self._workers):
             self.disconnect(server_id, timeout=timeout)
-        if self._loop is not None:
-            self._loop.call_soon_threadsafe(self._loop.stop)
-        if self._thread is not None:
-            self._thread.join(timeout=timeout)
+        loop = self._loop
+        thread = self._thread
+        if loop is not None:
+            loop.call_soon_threadsafe(loop.stop)
+        if thread is not None:
+            thread.join(timeout=timeout)
+        if loop is not None and not loop.is_closed():
+            loop.close()
         self._thread = None
         self._loop = None
         _log.info("mcp loop stopped")

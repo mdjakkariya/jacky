@@ -55,3 +55,13 @@ def test_status_lists_all_configured_servers() -> None:
     mgr = McpManager({"a": _cfg("a", enabled=False), "b": _cfg("b", enabled=False)}, ToolRegistry())
     ids = {s["server"] for s in mgr.status()}
     assert ids == {"a", "b"}
+
+
+def test_start_shutdown_restart_cycle() -> None:
+    # shutdown() closes the loop; a later start() must build a fresh one and run again,
+    # so a reloadable manager can stop and restart without leaking or erroring.
+    mgr = McpManager({}, ToolRegistry())
+    mgr.start()
+    mgr.shutdown(timeout=5.0)
+    mgr.start()  # fresh loop after the previous one was closed
+    mgr.shutdown(timeout=5.0)  # must not raise
