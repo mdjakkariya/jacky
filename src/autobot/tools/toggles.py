@@ -243,3 +243,23 @@ class SystemToggles:
             unit = "minute" if minutes == 1 else "minutes"
             return f"I'll keep your Mac awake for {minutes} {unit}."
         return "I'll keep your Mac awake until you tell me to stop."
+
+    def lock_screen(self) -> str:
+        """Lock the screen; fall back to a keystroke where CGSession is gone."""
+        rc, _out = self._run([_CGSESSION, "-suspend"])
+        if rc == 0:
+            _log.info("lock via=cgsession")
+            return "Locking the screen."
+        keystroke = (
+            'tell application "System Events" to keystroke "q" using {control down, command down}'
+        )
+        rc2, out2 = self._run(["osascript", "-e", keystroke])
+        if rc2 == 0:
+            _log.info("lock via=keystroke")
+            return "Locking the screen."
+        if is_accessibility_error(out2):
+            return (
+                "I need Accessibility access to lock the screen. Enable Jack under System "
+                "Settings → Privacy & Security → Accessibility."
+            )
+        return f"I couldn't lock the screen: {out2 or 'unknown error'}"

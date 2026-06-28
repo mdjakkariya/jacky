@@ -311,3 +311,22 @@ def test_keep_awake_replaces_previous_without_leaking() -> None:
 def test_keep_awake_one_minute_singular() -> None:
     tools = SystemToggles(FakeRunner(), FakeProcs())
     assert "1 minute." in tools.keep_awake(minutes=1)
+
+
+def test_lock_screen_uses_cgsession_when_present() -> None:
+    runner = FakeRunner()  # rc 0 == CGSession path works
+    assert SystemToggles(runner).lock_screen() == "Locking the screen."
+    assert runner.calls[-1][-1] == "-suspend"
+
+
+def test_lock_screen_falls_back_to_keystroke() -> None:
+    # CGSession missing (rc 127), keystroke succeeds (rc 0).
+    runner = SeqRunner([(127, "command not found"), (0, "")])
+    assert SystemToggles(runner).lock_screen() == "Locking the screen."
+    assert runner.calls[1][0] == "osascript"
+    assert "control down" in runner.calls[1][-1]
+
+
+def test_lock_screen_keystroke_blocked_is_friendly() -> None:
+    runner = SeqRunner([(127, "no path"), (1, "(-1719)")])
+    assert "Accessibility" in SystemToggles(runner).lock_screen()
