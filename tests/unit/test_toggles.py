@@ -156,3 +156,36 @@ def test_set_brightness_accessibility_blocked() -> None:
 
 def test_set_brightness_no_args_asks() -> None:
     assert "Tell me" in SystemToggles(FakeRunner()).set_brightness()
+
+
+_APPEARANCE_SET = 'tell application "System Events" to tell appearance preferences'
+
+
+def test_set_appearance_dark() -> None:
+    # Set call succeeds, then read-back returns "true".
+    runner = SeqRunner([(0, ""), (0, "true")])
+    msg = SystemToggles(runner).set_appearance("dark")
+    assert msg == "Now in dark mode."
+    assert runner.calls[0][-1] == f"{_APPEARANCE_SET} to set dark mode to true"
+
+
+def test_set_appearance_light() -> None:
+    runner = SeqRunner([(0, ""), (0, "false")])
+    msg = SystemToggles(runner).set_appearance("light")
+    assert msg == "Now in light mode."
+    assert runner.calls[0][-1] == f"{_APPEARANCE_SET} to set dark mode to false"
+
+
+def test_set_appearance_toggle() -> None:
+    runner = SeqRunner([(0, ""), (0, "true")])
+    SystemToggles(runner).set_appearance("toggle")
+    assert runner.calls[0][-1] == f"{_APPEARANCE_SET} to set dark mode to not dark mode"
+
+
+def test_set_appearance_bad_mode() -> None:
+    assert "dark" in SystemToggles(FakeRunner()).set_appearance("rainbow")
+
+
+def test_set_appearance_failure_is_friendly() -> None:
+    msg = SystemToggles(FakeRunner(rc=1, out="not authorized")).set_appearance("dark")
+    assert "couldn't change the appearance" in msg

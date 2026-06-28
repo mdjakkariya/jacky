@@ -155,3 +155,22 @@ class SystemToggles:
             return f"I couldn't set the brightness: {out or 'unknown error'}"
         _log.info("brightness set to=%d", level)
         return f"Brightness set to {level}%."
+
+    def set_appearance(self, mode: str) -> str:
+        """Switch the system appearance to dark, light, or the opposite of now."""
+        mode = (mode or "").lower()
+        base = 'tell application "System Events" to tell appearance preferences'
+        if mode == "toggle":
+            expr = f"{base} to set dark mode to not dark mode"
+        elif mode in ("dark", "light"):
+            value = "true" if mode == "dark" else "false"
+            expr = f"{base} to set dark mode to {value}"
+        else:
+            return "Say 'dark', 'light', or 'toggle'."
+        rc, out = self._run(["osascript", "-e", expr])
+        if rc != 0:
+            return f"I couldn't change the appearance: {out or 'unknown error'}"
+        _rc, now = self._run(["osascript", "-e", f"{base} to return dark mode"])
+        is_dark = now.strip().lower() == "true"
+        _log.info("appearance dark=%s", is_dark)
+        return "Now in dark mode." if is_dark else "Now in light mode."
