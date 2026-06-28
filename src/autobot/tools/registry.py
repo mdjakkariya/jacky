@@ -65,18 +65,34 @@ class ToolRegistry:
     def __init__(self) -> None:
         self._tools: dict[str, ToolSpec] = {}
 
-    def register(self, spec: ToolSpec) -> None:
-        """Add a tool. Raises if a tool with the same name already exists.
+    def register(self, spec: ToolSpec, *, replace: bool = False) -> None:
+        """Add a tool. Raises if the name already exists, unless ``replace`` is set.
 
         Args:
             spec: The tool to register.
+            replace: When ``True``, overwrite an existing tool of the same name
+                (used by the MCP manager to re-sync a changed tool definition);
+                when ``False`` (default), a duplicate raises.
 
         Raises:
-            ValueError: If ``spec.name`` is already registered.
+            ValueError: If ``spec.name`` is already registered and ``replace`` is
+                ``False``.
         """
-        if spec.name in self._tools:
+        if spec.name in self._tools and not replace:
             raise ValueError(f"tool already registered: {spec.name!r}")
         self._tools[spec.name] = spec
+
+    def unregister(self, name: str) -> bool:
+        """Remove a registered tool.
+
+        Args:
+            name: The tool name to remove.
+
+        Returns:
+            ``True`` if a tool was removed, ``False`` if ``name`` was not registered.
+            Used when an MCP server is disabled or a tool disappears on re-sync.
+        """
+        return self._tools.pop(name, None) is not None
 
     def get(self, name: str) -> ToolSpec | None:
         """Return the spec for ``name``, or ``None`` if it is not registered."""

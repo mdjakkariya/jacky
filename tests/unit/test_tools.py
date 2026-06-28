@@ -65,3 +65,35 @@ def test_toolspec_network_defaults_false() -> None:
 def test_toolspec_network_can_be_set() -> None:
     spec = ToolSpec(name="t", description="", parameters={}, handler=lambda: "", network=True)
     assert spec.network is True
+
+
+def _spec(name: str, desc: str = "") -> ToolSpec:
+    return ToolSpec(name=name, description=desc, parameters={}, handler=lambda: name)
+
+
+def test_register_duplicate_still_raises_by_default() -> None:
+    registry = ToolRegistry()
+    registry.register(_spec("dup"))
+    with pytest.raises(ValueError, match="already registered"):
+        registry.register(_spec("dup"))
+
+
+def test_register_replace_overwrites_existing() -> None:
+    registry = ToolRegistry()
+    registry.register(_spec("t", "old"))
+    registry.register(_spec("t", "new"), replace=True)
+    spec = registry.get("t")
+    assert spec is not None
+    assert spec.description == "new"
+
+
+def test_unregister_removes_tool_and_reports_existed() -> None:
+    registry = ToolRegistry()
+    registry.register(_spec("gone"))
+    assert registry.unregister("gone") is True
+    assert registry.get("gone") is None
+    assert "gone" not in [s["function"]["name"] for s in registry.schemas()]
+
+
+def test_unregister_missing_tool_returns_false() -> None:
+    assert ToolRegistry().unregister("never") is False
