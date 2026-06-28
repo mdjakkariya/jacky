@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from autobot.config import Settings
 from autobot.core.types import Risk
 from autobot.permissions import AUTOMATION
 from autobot.tools.registry import ToolRegistry
@@ -374,3 +375,7 @@ def test_dispatch_runs_through_registry() -> None:
     result = registry.dispatch("set_volume", {"level": 25})
     assert result.ok
     assert "25%" in result.content
+
+
+def test_system_toggles_enabled_by_default() -> None:
+    assert Settings().allow_system_toggles is True

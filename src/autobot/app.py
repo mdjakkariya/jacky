@@ -394,6 +394,14 @@ def build(
         register_system_tools(registry)
         log.info("system info ENABLED (battery/wifi/disk)")
 
+    if settings.allow_system_toggles:
+        # Write-side system controls (volume/brightness/appearance/sleep/wifi/
+        # keep-awake/lock) — audited WRITEs through the gate; no sudo, ever.
+        from autobot.tools.toggles import register_system_toggles
+
+        register_system_toggles(registry)
+        log.info("system toggles ENABLED (volume/brightness/appearance/sleep/wifi/keep-awake/lock)")
+
     if settings.allow_file_search:
         # Read-only Spotlight file search (on-device).
         from autobot.tools.files import register_file_tools
