@@ -118,3 +118,13 @@ def test_tool_selection_overlays_from_file(tmp_path: Path) -> None:
     assert s.tool_selection == "all"
     assert s.tool_core_extra == ["slack__search"]
     assert s.tool_core_remove == ["disk_space"]
+
+
+def test_anthropic_tool_search_defaults_auto() -> None:
+    assert Settings().anthropic_tool_search == "auto"
+
+
+def test_anthropic_tool_search_overlays_from_file(tmp_path: Path) -> None:
+    path = tmp_path / "settings.json"
+    write_settings({"anthropic_tool_search": "off"}, path)
+    assert Settings.load(path).anthropic_tool_search == "off"

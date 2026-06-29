@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import json
 import re
+from collections.abc import Sequence
 from typing import TYPE_CHECKING, Any
 
 from autobot.config import Settings
@@ -25,7 +26,7 @@ from autobot.core.types import ToolCall, ToolExecutor
 from autobot.llm.ollama_llm import _SUMMARIZE_INSTRUCTION, system_prompt
 from autobot.logging_setup import get_logger
 from autobot.session_log import NullTranscript, Transcript
-from autobot.tools.registry import ToolRegistry
+from autobot.tools.registry import ToolRegistry, ToolSpec
 
 if TYPE_CHECKING:
     from autobot.memory.store import MemoryStore
@@ -58,6 +59,23 @@ _MODEL_WINDOWS: dict[str, int] = {
     "claude-opus-4-5": 200_000,
 }
 _MAX_TOKENS_RE = re.compile(r">\s*([0-9]+)\s*maximum")
+
+# Anthropic server-side Tool Search Tool (verified against SDK 0.109.2 —
+# ToolSearchToolBm25_20251119Param is in the standard messages.create tools union,
+# so no beta header is needed). The model discovers deferred tools by searching this
+# tool; deferred tool defs cost ~0 baseline tokens until loaded on demand.
+TOOL_SEARCH_TYPE = "tool_search_tool_bm25_20251119"
+TOOL_SEARCH_NAME = "tool_search_tool_bm25"
+# Claude models known to support server-side tool search (prefix match, like
+# _MODEL_WINDOWS). "auto" mode enables tool search only for these; an unlisted model
+# (e.g. the default claude-haiku-4-5) safely advertises all tools instead. Extend
+# this as Anthropic adds support; "on" in settings forces it for a model not yet here.
+_TOOL_SEARCH_MODEL_PREFIXES: tuple[str, ...] = (
+    "claude-opus-4-8",
+    "claude-opus-4-7",
+    "claude-opus-4-6",
+    "claude-sonnet-4-6",
+)
 
 
 def default_window_for(model: str) -> int:
@@ -127,6 +145,75 @@ def to_anthropic_tools(schemas: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 "input_schema": fn.get("parameters", {"type": "object", "properties": {}}),
             }
         )
+    return tools
+
+
+def tool_search_supported(model: str, mode: str) -> bool:
+    """Whether to use Anthropic's native Tool Search Tool for ``model``.
+
+    Resolves the ``anthropic_tool_search`` setting: ``"off"`` never uses it,
+    ``"on"`` always does (to try a model not yet in the table), and ``"auto"``
+    enables it only for models known to support it (prefix match against
+    :data:`_TOOL_SEARCH_MODEL_PREFIXES`). Unknown ``mode`` is treated as ``"auto"``.
+    """
+    if mode == "off":
+        return False
+    if mode == "on":
+        return True
+    return any(model.startswith(p) for p in _TOOL_SEARCH_MODEL_PREFIXES)
+
+
+def partition_tools(specs: Sequence[ToolSpec]) -> tuple[list[ToolSpec], list[ToolSpec]]:
+    """Split specs into ``(core, gated)`` by :attr:`ToolSpec.core`.
+
+    Core tools are advertised to the cloud model normally; gated tools are deferred
+    (``defer_loading``) and discovered via tool search. This is the only place the
+    cloud path reads the tiering flag — it deliberately does not import the local
+    ``tools.selection`` module (the cloud path uses native server-side search, not the
+    client-side lexical selector).
+    """
+    core = [s for s in specs if s.core]
+    gated = [s for s in specs if not s.core]
+    return core, gated
+
+
+def assemble_anthropic_tools(
+    specs: Sequence[ToolSpec], *, tool_search: bool
+) -> list[dict[str, Any]]:
+    """Build the cloud ``tools`` payload: tiered + search + cached, or legacy all-tools.
+
+    When ``tool_search`` is ``False`` (model/SDK unsupported, or disabled in settings),
+    returns every tool exactly as before — the pre-Phase-3 behavior — so the request is
+    byte-for-byte the legacy one. When ``True``: core tools are advertised normally,
+    gated tools each get ``defer_loading: True`` (so connecting MCP servers add ~0
+    baseline tokens), the non-deferred Tool Search Tool is appended (it both lets the
+    model load deferred tools and guarantees the required ≥1 non-deferred tool), and a
+    ``cache_control`` ephemeral breakpoint is stamped on the last tool so the whole
+    now-static tool prefix is prompt-cached.
+    """
+    if not tool_search:
+        return to_anthropic_tools([s.to_schema() for s in specs])
+    core, gated = partition_tools(specs)
+    tools: list[dict[str, Any]] = []
+    for s in core:
+        tools.append(
+            {
+                "name": s.name,
+                "description": s.description,
+                "input_schema": s.parameters or {"type": "object", "properties": {}},
+            }
+        )
+    for s in gated:
+        tools.append(
+            {
+                "name": s.name,
+                "description": s.description,
+                "input_schema": s.parameters or {"type": "object", "properties": {}},
+                "defer_loading": True,
+            }
+        )
+    tools.append({"type": TOOL_SEARCH_TYPE, "name": TOOL_SEARCH_NAME})
+    tools[-1] = {**tools[-1], "cache_control": {"type": "ephemeral"}}
     return tools
 
 
@@ -313,8 +400,17 @@ class AnthropicLanguageModel:
         # an over-long prompt. So 200k, 1M, or a smaller model all just work. Needs
         # self._client, so resolve after it's set.
         self._window = self._resolve_window()
+        # Gate on model support (auto), or honor an explicit on/off. Pure decision —
+        # never raises — so a misconfigured flag degrades to advertise-all, never a
+        # startup crash. Logged as a bool only (no tokens/secrets).
+        self._tool_search = tool_search_supported(
+            settings.anthropic_model, settings.anthropic_tool_search
+        )
         _log.info(
-            "cloud LLM ready model=%s context_window=%d", settings.anthropic_model, self._window
+            "cloud LLM ready model=%s context_window=%d tool_search=%s",
+            settings.anthropic_model,
+            self._window,
+            self._tool_search,
         )
 
     def _resolve_window(self) -> int:
@@ -527,6 +623,16 @@ class AnthropicLanguageModel:
                 raise
         raise RuntimeError("prompt too long after trimming")
 
+    def _assemble_tools(self) -> list[dict[str, Any]]:
+        """Tools to advertise this turn: tiered + tool-search + cached, or all tools.
+
+        Reads the live registry, so MCP tools that connect/disconnect between turns
+        are reflected. When tool search is supported (see :meth:`__init__`), gated
+        tools are deferred and the search tool loads them on demand; otherwise every
+        tool is advertised — the pre-Phase-3 behavior — so the path degrades cleanly.
+        """
+        return assemble_anthropic_tools(self._registry.specs(), tool_search=self._tool_search)
+
     def run_turn(self, user_text: str, execute: ToolExecutor) -> str:
         """Handle one turn end-to-end; tool calls run through ``execute`` (the gate).
 
@@ -537,7 +643,7 @@ class AnthropicLanguageModel:
         retries), so a long session can't get permanently stuck. A cache breakpoint on
         the last block caches tools + system + prior turns; per-turn we log usage.
         """
-        tools = to_anthropic_tools(self._registry.schemas())
+        tools = self._assemble_tools()
         overhead = (len(self._system()) + sum(len(str(t)) for t in tools)) // _CHARS_PER_TOKEN
         # Append-only: everything for this turn is added to the live history. On a
         # request failure we roll back to here so a half-built turn can't corrupt it.

@@ -190,6 +190,15 @@ class Settings:
     # Tool names to force into / out of the core set without code edits.
     tool_core_extra: list[str] = field(default_factory=list)
     tool_core_remove: list[str] = field(default_factory=list)
+    # Anthropic-only: how the cloud path advertises tools. "auto" (default) uses
+    # Anthropic's server-side Tool Search Tool when the configured model supports it
+    # (gated built-ins marked defer_loading so connecting MCP servers add ~0 baseline
+    # tokens; the search tool loads them on demand) and otherwise advertises every
+    # tool. "on" forces native Tool Search regardless of the support table (to try a
+    # newer model). "off" always advertises every tool — the pre-optimization cloud
+    # behavior, for debugging/comparison. The local (Ollama) path is unaffected; it
+    # uses tool_selection instead.
+    anthropic_tool_search: str = "auto"
     # --- daemon (Phase 3c) ---
     daemon_host: str = "127.0.0.1"
     daemon_port: int = 8765

@@ -279,7 +279,11 @@ def _build_llm(
             from autobot.llm.anthropic_llm import AnthropicLanguageModel
 
             llm = AnthropicLanguageModel(settings, registry, transcript, memory=memory)
-            log.info("llm provider=anthropic model=%s (OFF-DEVICE)", settings.anthropic_model)
+            log.info(
+                "llm provider=anthropic model=%s tool_search=%s (OFF-DEVICE)",
+                settings.anthropic_model,
+                settings.anthropic_tool_search,
+            )
             print(
                 f"[llm] CLOUD mode — Claude ({settings.anthropic_model}). Your requests and "
                 "remembered profile are sent to Anthropic. Actions still run locally."

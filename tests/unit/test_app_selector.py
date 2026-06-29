@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import pytest
+
 from autobot.app import _build_llm
 from autobot.config import Settings
 from autobot.llm.ollama_llm import OllamaLanguageModel
@@ -23,3 +25,22 @@ def test_build_llm_honors_tool_selection_all() -> None:
     )
     assert isinstance(model, OllamaLanguageModel)
     assert isinstance(model._selector, AllToolsSelector)
+
+
+def test_build_llm_anthropic_off_falls_back_to_local_without_key(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Force the fallback branch deterministically: patch get_secret so it always
+    # returns None regardless of whether a real Keychain entry exists.  This causes
+    # _require_key() (anthropic_llm.py line 810-816) to raise ValueError, which
+    # _build_llm catches (app.py line 298-300) and converts to an OllamaLanguageModel.
+    # The strong assertion verifies the fallback contract — not merely "no crash".
+    monkeypatch.setattr("autobot.secrets.get_secret", lambda *_args, **_kwargs: None)
+
+    model = _build_llm(
+        Settings(context_tokens=4096, llm_provider="anthropic"),
+        ToolRegistry(),
+        NullTranscript(),
+        None,
+    )
+    assert isinstance(model, OllamaLanguageModel)
