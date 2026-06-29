@@ -32,6 +32,9 @@ models/
 # Secrets / local config (never commit; use .env.example as the template)
 .env
 
+# Build-embedded OAuth client secrets (developer-supplied; never commit)
+secrets/oauth_clients.json
+
 # Logs / session transcripts
 *.log
 logs/

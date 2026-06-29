@@ -618,6 +618,27 @@ Register this URL exactly as-is in your OAuth app's settings.
 `mcp.<id>.client_secret` — never written to disk. OAuth tokens are stored in the
 Keychain under `mcp.<id>.oauth` as before.
 
+**Shipping a client secret for distribution.** For bundled (`.dmg`) releases, the
+developer may ship the `client_secret` in a gitignored file rather than requiring
+each end-user to supply their own OAuth app. This is optional and transparent to the
+user.
+
+- `secrets/oauth_clients.json` (gitignored, **never committed**) — a JSON object
+  keyed by server id, e.g. `{"github": "…", "slack": "…"}`. A committed template
+  `secrets/oauth_clients.example.json` shows the expected format.
+- `src/autobot/mcp/client_secrets.py` — pure stdlib module that reads the file and
+  exposes `default_client_secret(server_id) -> str | None`.
+- Resolution order: **Keychain entry wins** (`mcp.<id>.client_secret`) → embedded file
+  → None (DCR / user supplies nothing). A per-user Keychain entry always overrides the
+  build-embedded secret.
+- `packaging/autobot-daemon.spec` includes the file in the frozen bundle (at the
+  `sys._MEIPASS` root) when it exists at build time. In open-source / CI builds the
+  file is absent and no secret is bundled.
+- The UI's add-connection wizard detects baked-in catalog `client_id` values and hides
+  the credential fields for those servers (showing a "built-in app" note instead). The
+  `client_secret` is never collected from the user for these servers; it comes from the
+  embedded file or the Keychain.
+
 **Live flow.** The live OAuth flow is a manual smoke-test; it cannot be automated
 in unit tests because it requires a real browser and a real authorization server.
 After clicking **Open browser**, Jack opens the provider's authorization URL, waits

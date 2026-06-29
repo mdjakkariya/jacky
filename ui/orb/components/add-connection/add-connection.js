@@ -402,40 +402,53 @@ function renderOAuthExplainer(wrap, state, callbacks) {
   explainer.appendChild(banner);
   wrap.appendChild(explainer);
 
-  // Optional pre-registered OAuth credentials block.
-  // Servers that lack dynamic client registration (e.g. Slack, GitHub) require a
-  // Client ID + Client Secret registered at their developer console.
-  const credsBlock = div("oauth-creds-block");
+  // Determine whether this server has a build-embedded (baked-in) OAuth app.
+  // A catalog entry with a non-empty client_id seeded into state.clientId qualifies.
+  const hasBuiltInClient = !!(state.catalogEntry && !state.catalogEntry.custom && state.clientId);
 
-  const credsNote = div("oauth-creds-note");
-  credsNote.textContent = "If this server requires a pre-registered OAuth app (e.g. Slack, GitHub), fill in your credentials below — otherwise leave blank.";
-  credsBlock.appendChild(credsNote);
+  // Credential inputs — only declared and appended when we need user-supplied creds.
+  let clientIdInput = null;
+  let clientSecretInput = null;
 
-  const redirectNote = div("oauth-redirect-note");
-  const redirectLabel = document.createTextNode("Register this redirect URL in your OAuth app: ");
-  const redirectCode = el("code", "oauth-redirect-uri", "http://127.0.0.1:8975/callback");
-  redirectNote.appendChild(redirectLabel);
-  redirectNote.appendChild(redirectCode);
-  credsBlock.appendChild(redirectNote);
+  if (hasBuiltInClient) {
+    // Built-in app: no credentials needed from the user. Show a brief note instead.
+    const builtInNote = div("oauth-creds-note");
+    builtInNote.textContent = "Using Jack's built-in " + state.catalogEntry.label + " app — just click Open browser.";
+    wrap.appendChild(builtInNote);
+  } else {
+    // User must supply their own pre-registered OAuth app credentials (or leave blank for DCR).
+    const credsBlock = div("oauth-creds-block");
 
-  const clientIdLabel = div("field-label", "Client ID");
-  credsBlock.appendChild(clientIdLabel);
-  const clientIdInput = el("input", "field-input");
-  clientIdInput.type = "text";
-  clientIdInput.dataset.field = "client_id";
-  clientIdInput.placeholder = "Your OAuth app's Client ID (optional)";
-  clientIdInput.value = state.clientId || ""; // pre-filled for catalog servers with a baked-in client_id
-  credsBlock.appendChild(clientIdInput);
+    const credsNote = div("oauth-creds-note");
+    credsNote.textContent = "If this server requires a pre-registered OAuth app (e.g. Slack, GitHub), fill in your credentials below — otherwise leave blank.";
+    credsBlock.appendChild(credsNote);
 
-  const clientSecretLabel = div("field-label", "Client secret");
-  credsBlock.appendChild(clientSecretLabel);
-  const clientSecretInput = el("input", "field-input");
-  clientSecretInput.type = "password";
-  clientSecretInput.dataset.field = "client_secret";
-  clientSecretInput.placeholder = "Your OAuth app's Client Secret (optional)";
-  credsBlock.appendChild(clientSecretInput);
+    const redirectNote = div("oauth-redirect-note");
+    const redirectLabel = document.createTextNode("Register this redirect URL in your OAuth app: ");
+    const redirectCode = el("code", "oauth-redirect-uri", "http://127.0.0.1:8975/callback");
+    redirectNote.appendChild(redirectLabel);
+    redirectNote.appendChild(redirectCode);
+    credsBlock.appendChild(redirectNote);
 
-  wrap.appendChild(credsBlock);
+    const clientIdLabel = div("field-label", "Client ID");
+    credsBlock.appendChild(clientIdLabel);
+    clientIdInput = el("input", "field-input");
+    clientIdInput.type = "text";
+    clientIdInput.dataset.field = "client_id";
+    clientIdInput.placeholder = "Your OAuth app's Client ID (optional)";
+    clientIdInput.value = state.clientId || "";
+    credsBlock.appendChild(clientIdInput);
+
+    const clientSecretLabel = div("field-label", "Client secret");
+    credsBlock.appendChild(clientSecretLabel);
+    clientSecretInput = el("input", "field-input");
+    clientSecretInput.type = "password";
+    clientSecretInput.dataset.field = "client_secret";
+    clientSecretInput.placeholder = "Your OAuth app's Client Secret (optional)";
+    credsBlock.appendChild(clientSecretInput);
+
+    wrap.appendChild(credsBlock);
+  }
 
   // Live status line (browser opening → waiting → connected / error).
   const statusEl = div("oauth-msg-placeholder");
@@ -472,13 +485,17 @@ function renderOAuthExplainer(wrap, state, callbacks) {
     if (settled) return;
     openBtn.disabled = true;
 
-    // Read pre-registered credentials from the fields into state before building descriptor.
-    state.clientId = clientIdInput.value.trim();
-    state.clientSecret = clientSecretInput.value;
+    if (!hasBuiltInClient) {
+      // Read user-supplied credentials from the fields into state.
+      state.clientId = clientIdInput.value.trim();
+      state.clientSecret = clientSecretInput.value;
+    }
+    // else: state.clientId is the baked-in catalog value (already set); the secret comes
+    // from the build-embedded file / Keychain, never the UI.
+    const secret = hasBuiltInClient ? "" : state.clientSecret;
 
     const descriptor = buildDescriptor(state);
     const id = descriptor.id;
-    const secret = state.clientSecret;
 
     offOauth = daemon.on("mcp_oauth", (m) => {
       if (m.server !== id || settled) return;
@@ -502,6 +519,7 @@ function renderOAuthExplainer(wrap, state, callbacks) {
     try {
       await daemon.addMcpServer(descriptor);
       // Store client_secret in the Keychain (never written to config/disk).
+      // For built-in-client servers, secret is "" so this branch is skipped.
       if (secret) {
         await daemon.secret("mcp." + id + ".client_secret", secret);
       }

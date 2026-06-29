@@ -405,8 +405,12 @@ class McpServerWorker:
         if client_id is not None:
             from autobot.mcp.auth import OAUTH_CALLBACK_PORT
 
-            # client_secret only exists for pre-registered apps (Keychain-only).
+            # client_secret: Keychain wins; fall back to the build-embedded file.
             client_secret = _get_secret(f"mcp.{self._cfg.id}.client_secret")
+            if not client_secret:
+                from autobot.mcp.client_secrets import default_client_secret
+
+                client_secret = default_client_secret(self._cfg.id)
             cb_server = LoopbackCallbackServer(port=OAUTH_CALLBACK_PORT)
             redirect_uri = await cb_server.start()
             storage: Any = KeychainTokenStorage(

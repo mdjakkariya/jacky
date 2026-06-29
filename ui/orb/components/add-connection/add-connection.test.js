@@ -371,16 +371,40 @@ describe("Step 4 — OAuth path", () => {
     expect(container.querySelector(".oauth-explainer")).not.toBeNull();
   });
 
-  it("pre-fills the Client ID for a catalog server with a baked-in client_id (GitHub)", () => {
+  it("GitHub (built-in client_id) shows the built-in app note and NO client_id input on step 4", () => {
     const container = makeContainer();
     showAddConnection(container, { onDone: vi.fn(), onCancel: vi.fn() });
     container.querySelectorAll(".cat-item")[1].click(); // GitHub (auth: oauth, baked-in client_id)
     container.querySelector(".btn-next").click(); // step 2 (URL prefilled)
     container.querySelector(".btn-next").click(); // step 3 (oauth preselected)
     container.querySelector(".btn-next").click(); // step 4 (OAuth explainer)
-    const clientIdField = container.querySelector("[data-field='client_id']");
-    expect(clientIdField).not.toBeNull();
-    expect(clientIdField.value).toBe("Ov23livdLJSZe2WjUMrp");
+    // Built-in app: credential inputs must NOT be rendered
+    expect(container.querySelector("[data-field='client_id']")).toBeNull();
+    expect(container.querySelector("[data-field='client_secret']")).toBeNull();
+    // A note about the built-in app must be shown
+    const note = container.querySelector(".oauth-creds-note");
+    expect(note).not.toBeNull();
+    expect(note.textContent.toLowerCase()).toContain("built-in");
+  });
+
+  it("GitHub (built-in client_id): 'Open browser' sends descriptor with client_id and does NOT call daemon.secret", async () => {
+    const container = makeContainer();
+    const onDone = vi.fn();
+    showAddConnection(container, { onDone, onCancel: vi.fn() });
+    container.querySelectorAll(".cat-item")[1].click(); // GitHub
+    container.querySelector(".btn-next").click(); // step 2
+    container.querySelector(".btn-next").click(); // step 3
+    container.querySelector(".btn-next").click(); // step 4
+
+    container.querySelector(".btn-open-browser").click();
+    await new Promise((r) => setTimeout(r, 0));
+
+    // descriptor must carry the baked-in client_id
+    const descriptor = daemon.addMcpServer.mock.calls[0][0];
+    expect(descriptor.client_id).toBe("Ov23livdLJSZe2WjUMrp");
+    // No client_secret written to Keychain from the UI (comes from build-embedded file)
+    expect(daemon.secret).not.toHaveBeenCalled();
+    expect(daemon.enableMcpServer).toHaveBeenCalledWith("github");
   });
 
   it("'Open browser' registers + enables the server and shows progress (not coming-soon)", async () => {

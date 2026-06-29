@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import concurrent.futures
+import json
 from collections.abc import Iterator
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -12,6 +13,7 @@ from unittest.mock import patch
 
 import pytest
 
+import autobot.mcp.client_secrets as _cs
 from autobot.mcp import adapter
 from autobot.mcp.approvals import load_approvals, record_fingerprints
 from autobot.mcp.config import McpServerConfig
@@ -280,6 +282,92 @@ def test_build_oauth_provider_pre_registered_client(
     # the user registers (so the pre-registered redirect_uri matches).
     assert storage._redirect_uri == "http://127.0.0.1:8975/callback"
     assert captured[0]._fixed_port == OAUTH_CALLBACK_PORT
+
+
+def test_build_oauth_provider_falls_back_to_embedded_secret_when_keychain_empty(
+    worker_loop: asyncio.AbstractEventLoop,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """_build_oauth_provider uses the embedded secret when the Keychain returns None."""
+    pytest.importorskip("mcp")  # skip if mcp extra absent
+    from autobot.mcp.auth import KeychainTokenStorage, LoopbackCallbackServer
+
+    # Write an embedded secrets file with a github secret.
+    secrets_file = tmp_path / "oauth_clients.json"
+    secrets_file.write_text(json.dumps({"github": "embedded-github-secret"}), encoding="utf-8")
+    monkeypatch.setenv("JACK_OAUTH_SECRETS_FILE", str(secrets_file))
+    _cs._load.cache_clear()
+
+    cfg = McpServerConfig(
+        id="github",
+        label="GitHub",
+        transport="http",
+        auth_type="oauth",
+        client_id="Ov23livdLJSZe2WjUMrp",
+        url="https://api.githubcopilot.com/mcp/",
+    )
+    worker = McpServerWorker(cfg, ToolRegistry(), loop=worker_loop)
+
+    async def _fake_start(self: LoopbackCallbackServer) -> str:
+        return "http://127.0.0.1:8975/callback"
+
+    try:
+        with (
+            patch.object(LoopbackCallbackServer, "start", _fake_start),
+            patch("autobot.mcp.session._get_secret", return_value=None),  # Keychain empty
+        ):
+            provider = asyncio.run(worker._build_oauth_provider())
+
+        storage = provider.context.storage
+        assert isinstance(storage, KeychainTokenStorage)
+        # Embedded secret picked up
+        assert storage._client_secret == "embedded-github-secret"
+    finally:
+        _cs._load.cache_clear()
+
+
+def test_build_oauth_provider_keychain_secret_wins_over_embedded(
+    worker_loop: asyncio.AbstractEventLoop,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Keychain secret takes priority over the embedded file (resolution order)."""
+    pytest.importorskip("mcp")  # skip if mcp extra absent
+    from autobot.mcp.auth import KeychainTokenStorage, LoopbackCallbackServer
+
+    # Both Keychain and embedded file provide a secret; Keychain must win.
+    secrets_file = tmp_path / "oauth_clients.json"
+    secrets_file.write_text(json.dumps({"github": "embedded-secret"}), encoding="utf-8")
+    monkeypatch.setenv("JACK_OAUTH_SECRETS_FILE", str(secrets_file))
+    _cs._load.cache_clear()
+
+    cfg = McpServerConfig(
+        id="github",
+        label="GitHub",
+        transport="http",
+        auth_type="oauth",
+        client_id="Ov23livdLJSZe2WjUMrp",
+        url="https://api.githubcopilot.com/mcp/",
+    )
+    worker = McpServerWorker(cfg, ToolRegistry(), loop=worker_loop)
+
+    async def _fake_start(self: LoopbackCallbackServer) -> str:
+        return "http://127.0.0.1:8975/callback"
+
+    try:
+        with (
+            patch.object(LoopbackCallbackServer, "start", _fake_start),
+            patch("autobot.mcp.session._get_secret", return_value="keychain-secret"),
+        ):
+            provider = asyncio.run(worker._build_oauth_provider())
+
+        storage = provider.context.storage
+        assert isinstance(storage, KeychainTokenStorage)
+        # Keychain wins
+        assert storage._client_secret == "keychain-secret"
+    finally:
+        _cs._load.cache_clear()
 
 
 # ---------------------------------------------------------------------------
