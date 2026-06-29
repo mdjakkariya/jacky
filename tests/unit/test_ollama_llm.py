@@ -13,6 +13,7 @@ from autobot.config import Settings
 from autobot.core.types import ToolCall, ToolResult
 from autobot.llm.ollama_llm import OllamaLanguageModel
 from autobot.tools.registry import ToolRegistry, ToolSpec
+from autobot.tools.selection import LexicalToolSelector
 
 
 def _tc(name: str, args: dict[str, Any]) -> dict[str, Any]:
@@ -161,3 +162,43 @@ def test_history_keeps_tool_messages_across_turns() -> None:
     sent = model._client.calls[-1]["messages"]
     roles = [m.get("role") for m in sent]
     assert "tool" in roles  # the prior turn's tool result is carried into turn 2
+
+
+def test_selector_gates_advertised_tools() -> None:
+    reg = ToolRegistry()
+    reg.register(
+        ToolSpec(
+            name="battery_status",
+            description="Check the Mac's battery level and charging state.",
+            parameters={},
+            handler=lambda: "100%",
+            core=True,
+        )
+    )
+    reg.register(
+        ToolSpec(
+            name="slack__send",
+            description="Send a message to a Slack channel.",
+            parameters={},
+            handler=lambda **k: "sent",
+        )
+    )
+    selector = LexicalToolSelector(reg, budget=20, core_extra=frozenset(), core_remove=frozenset())
+    client = _FakeOllama([_resp(content="100%.")])
+    model = OllamaLanguageModel(
+        Settings(context_tokens=4096), reg, client=client, selector=selector
+    )
+    model.run_turn("what's my battery?", lambda c: ToolResult(name=c.name, content=""))
+    advertised = {t["function"]["name"] for t in client.calls[0]["tools"]}
+    assert "battery_status" in advertised  # core, always advertised
+    assert "slack__send" not in advertised  # gated, irrelevant to a battery query
+
+
+def test_no_selector_advertises_all_tools() -> None:
+    client = _FakeOllama([_resp(content="hi")])
+    model = OllamaLanguageModel(
+        Settings(context_tokens=4096), _registry(), client=client
+    )  # no selector → legacy behavior
+    model.run_turn("hi", lambda c: ToolResult(name=c.name, content=""))
+    advertised = {t["function"]["name"] for t in client.calls[0]["tools"]}
+    assert advertised == {"list_files", "open_path"}

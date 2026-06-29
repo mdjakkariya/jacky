@@ -11,7 +11,10 @@ are pure functions so they can be unit-tested without a live Ollama server.
 from __future__ import annotations
 
 import json
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from autobot.core.interfaces import ToolSelector
 
 from autobot.config import Settings
 from autobot.core.types import ToolCall, ToolExecutor
@@ -235,9 +238,12 @@ class OllamaLanguageModel:
         transcript: Transcript | None = None,
         memory: MemoryStore | None = None,
         client: Any | None = None,
+        selector: ToolSelector | None = None,
     ) -> None:
         self._settings = settings
         self._registry = registry
+        self._selector = selector
+        self._round_query = ""  # current turn's user text; the relevance signal
         self._transcript = transcript or NullTranscript()
         self._memory = memory
         if client is not None:  # injected (tests)
@@ -289,7 +295,7 @@ class OllamaLanguageModel:
             },
         }
         if with_tools:
-            kwargs["tools"] = self._registry.schemas()
+            kwargs["tools"] = self._tools_for_round()
         # Only qwen3 supports the reasoning toggle; other models reject the kwarg.
         if "qwen3" in model:
             try:
@@ -301,6 +307,18 @@ class OllamaLanguageModel:
         self._last_prompt_tokens = int(_get(response, "prompt_eval_count") or 0)
         self._last_eval_tokens = int(_get(response, "eval_count") or 0)
         return response
+
+    def _tools_for_round(self) -> list[dict[str, Any]]:
+        """Schemas to advertise this round: the selector's subset, or all tools.
+
+        With a selector wired, only the relevance-gated subset for this turn's
+        message is advertised (bounded context). Without one, every registered tool
+        is advertised — the original behavior, kept so existing callers/tests are
+        unaffected.
+        """
+        if self._selector is None:
+            return self._registry.schemas()
+        return [spec.to_schema() for spec in self._selector.select(self._round_query)]
 
     def _assemble(self, user_msg: dict[str, Any]) -> list[dict[str, Any]]:
         """System prompt + running summary (if any) + recent turns + the new message."""
@@ -335,6 +353,7 @@ class OllamaLanguageModel:
         re-run, so a flapping step can't spin the loop.
         """
         user_msg = {"role": "user", "content": user_text}
+        self._round_query = user_text  # relevance signal for tool selection this turn
 
         # Proactive: compact BEFORE sending if this prompt would cross the budget.
         estimated = estimate_tokens(self._assemble(user_msg))
