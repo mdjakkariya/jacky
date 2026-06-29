@@ -329,9 +329,12 @@ class McpManager:
 
         Connects (or reconnects) the server, which will trigger the browser-open +
         loopback callback flow on the worker's event loop and emit ``mcp_oauth`` stage
-        events through ``on_event``. The method is non-blocking: it schedules the
-        connect and returns immediately. The UI polls ``mcp_status`` and listens for
-        ``mcp_oauth`` events.
+        events through ``on_event``. The connect itself is scheduled (it does not wait
+        for the browser flow), so the call returns once the worker is started; the UI
+        polls ``mcp_status`` and listens for ``mcp_oauth`` events. Note: when a worker
+        is already connected (a re-auth), the preceding ``disconnect`` waits up to ~5 s
+        for the old worker to shut down, so call this off the daemon's event loop (the
+        endpoint already dispatches it via ``asyncio.to_thread``).
 
         Args:
             server_id: The server's config id.
