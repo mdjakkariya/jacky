@@ -623,6 +623,16 @@ class AnthropicLanguageModel:
                 raise
         raise RuntimeError("prompt too long after trimming")
 
+    def _assemble_tools(self) -> list[dict[str, Any]]:
+        """Tools to advertise this turn: tiered + tool-search + cached, or all tools.
+
+        Reads the live registry, so MCP tools that connect/disconnect between turns
+        are reflected. When tool search is supported (see :meth:`__init__`), gated
+        tools are deferred and the search tool loads them on demand; otherwise every
+        tool is advertised — the pre-Phase-3 behavior — so the path degrades cleanly.
+        """
+        return assemble_anthropic_tools(self._registry.specs(), tool_search=self._tool_search)
+
     def run_turn(self, user_text: str, execute: ToolExecutor) -> str:
         """Handle one turn end-to-end; tool calls run through ``execute`` (the gate).
 
@@ -633,7 +643,7 @@ class AnthropicLanguageModel:
         retries), so a long session can't get permanently stuck. A cache breakpoint on
         the last block caches tools + system + prior turns; per-turn we log usage.
         """
-        tools = to_anthropic_tools(self._registry.schemas())
+        tools = self._assemble_tools()
         overhead = (len(self._system()) + sum(len(str(t)) for t in tools)) // _CHARS_PER_TOKEN
         # Append-only: everything for this turn is added to the live history. On a
         # request failure we roll back to here so a half-built turn can't corrupt it.

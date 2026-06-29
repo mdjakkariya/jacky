@@ -567,6 +567,67 @@ def _spec(name: str, *, core: bool = False) -> ToolSpec:
     )
 
 
+def _tiered_registry() -> ToolRegistry:
+    reg = ToolRegistry()
+    reg.register(
+        ToolSpec(
+            name="battery_status",
+            description="Check the Mac's battery level.",
+            parameters={"type": "object", "properties": {}},
+            handler=lambda: "100%",
+            core=True,
+        )
+    )
+    reg.register(
+        ToolSpec(
+            name="slack__send",
+            description="Send a Slack message.",
+            parameters={"type": "object", "properties": {}},
+            handler=lambda **k: "sent",
+        )
+    )
+    return reg
+
+
+def test_run_turn_advertises_tiered_tools_when_search_supported() -> None:
+    resp = SimpleNamespace(
+        content=[_block(type="text", text="ok")],
+        usage=SimpleNamespace(input_tokens=5, output_tokens=2),
+    )
+    model = AnthropicLanguageModel(
+        Settings(llm_provider="anthropic", anthropic_model="claude-opus-4-8"),
+        _tiered_registry(),
+        client=FakeClient([resp]),
+    )
+    model.run_turn("hi", lambda c: ToolResult(name=c.name, content=""))
+    sent = model._client.messages.calls[0]["tools"]
+    by_name = {t.get("name"): t for t in sent}
+    assert "defer_loading" not in by_name["battery_status"]  # core advertised normally
+    assert by_name["slack__send"]["defer_loading"] is True  # gated -> deferred
+    assert TOOL_SEARCH_NAME in by_name  # search tool present
+    assert "defer_loading" not in by_name[TOOL_SEARCH_NAME]  # and never deferred
+    assert sent[-1]["cache_control"] == {"type": "ephemeral"}  # cache on the last tool
+
+
+def test_run_turn_advertises_all_tools_when_search_unsupported() -> None:
+    resp = SimpleNamespace(
+        content=[_block(type="text", text="ok")],
+        usage=SimpleNamespace(input_tokens=5, output_tokens=2),
+    )
+    model = AnthropicLanguageModel(
+        Settings(llm_provider="anthropic"),  # default model -> auto disables search
+        _tiered_registry(),
+        client=FakeClient([resp]),
+    )
+    model.run_turn("hi", lambda c: ToolResult(name=c.name, content=""))
+    sent = model._client.messages.calls[0]["tools"]
+    names = {t.get("name") for t in sent}
+    assert names == {"battery_status", "slack__send"}  # every tool, legacy shape
+    assert TOOL_SEARCH_NAME not in names  # no search tool
+    assert all("defer_loading" not in t for t in sent)  # no deferral
+    assert all("cache_control" not in t for t in sent)  # legacy request unchanged
+
+
 def test_tool_search_supported_resolves_mode_and_model() -> None:
     # "off" always disables; "on" always enables; "auto" follows the model table.
     assert tool_search_supported("claude-opus-4-8", "off") is False
