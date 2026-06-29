@@ -1,13 +1,23 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
-vi.mock("../../lib/daemon.js", () => ({
-  daemon: {
-    addMcpServer: vi.fn().mockResolvedValue({ ok: true, server: "slack" }),
-    mcpSetToken: vi.fn().mockResolvedValue({ ok: true }),
-    enableMcpServer: vi.fn().mockResolvedValue({ ok: true }),
-    mcpAuthStart: vi.fn().mockResolvedValue({ ok: false, message: "oauth not yet supported (phase 6)" }),
-  },
-}));
+vi.mock("../../lib/daemon.js", () => {
+  // Captured WS subscriptions so tests can emit mcp_oauth / mcp_status events.
+  const handlers = {};
+  return {
+    daemon: {
+      addMcpServer: vi.fn().mockResolvedValue({ ok: true, server: "slack" }),
+      mcpSetToken: vi.fn().mockResolvedValue({ ok: true }),
+      enableMcpServer: vi.fn().mockResolvedValue({ ok: true }),
+      mcpAuthStart: vi.fn().mockResolvedValue({ ok: true, started: true }),
+      on: vi.fn((type, fn) => {
+        (handlers[type] = handlers[type] || []).push(fn);
+        return () => { handlers[type] = (handlers[type] || []).filter((h) => h !== fn); };
+      }),
+      __emit: (type, msg) => { (handlers[type] || []).forEach((fn) => fn(msg)); },
+      __reset: () => { for (const k in handlers) delete handlers[k]; },
+    },
+  };
+});
 import { daemon } from "../../lib/daemon.js";
 import { showAddConnection, hideAddConnection } from "./add-connection.js";
 
@@ -17,8 +27,17 @@ function makeContainer() {
   return el;
 }
 
+/** Slack/Notion catalog URLs ship blank (flagged for the user to verify). Fill the
+ *  URL field on step 2 so HTTP navigation isn't blocked by the "URL required" gate.
+ *  No-op for stdio entries (no URL field). */
+function fillUrl(container, url = "https://slack.test/mcp") {
+  const u = container.querySelector("[data-field='url']");
+  if (u) u.value = url;
+}
+
 beforeEach(() => {
   vi.clearAllMocks();
+  daemon.__reset();
   document.body.innerHTML = "";
 });
 
@@ -115,12 +134,20 @@ describe("Step 2 — Transport", () => {
     container.querySelector(".btn-next").click();
   }
 
-  it("catalog pick (Slack, HTTP) pre-fills HTTP and shows URL field", () => {
+  it("catalog pick (Slack, HTTP) shows an editable URL field (blank, flagged)", () => {
     const container = makeContainer();
-    goToStep2(container, 0); // Slack
+    goToStep2(container, 0); // Slack — ships blank so the user pastes a verified URL
     const urlField = container.querySelector("[data-field='url']");
     expect(urlField).not.toBeNull();
-    expect(urlField.value).toBe("https://slack.com/api/mcp");
+    expect(urlField.value).toBe("");
+    expect(urlField.readOnly).toBe(false);
+  });
+
+  it("catalog pick (GitHub, HTTP) pre-fills its verified URL", () => {
+    const container = makeContainer();
+    goToStep2(container, 1); // GitHub
+    const urlField = container.querySelector("[data-field='url']");
+    expect(urlField.value).toBe("https://api.githubcopilot.com/mcp/");
   });
 
   it("catalog pick (Local Files, stdio) pre-fills stdio and shows command field", () => {
@@ -171,6 +198,7 @@ describe("Step 2 → Step 3 navigation", () => {
     // Select Slack
     container.querySelector(".cat-item").click();
     container.querySelector(".btn-next").click();
+    fillUrl(container); // Slack ships blank — provide a URL to pass the gate
     // Continue to step 3
     container.querySelector(".btn-next").click();
   }
@@ -210,6 +238,7 @@ describe("Step 3 — Auth", () => {
     showAddConnection(container, { onDone, onCancel });
     container.querySelector(".cat-item").click();
     container.querySelector(".btn-next").click();
+    fillUrl(container);
     container.querySelector(".btn-next").click();
   }
 
@@ -266,7 +295,8 @@ describe("Step 4 — Token path", () => {
     // Select Slack
     container.querySelector(".cat-item").click();
     container.querySelector(".btn-next").click();
-    // Step 2 transport — continue
+    // Step 2 transport — provide a URL, then continue
+    fillUrl(container);
     container.querySelector(".btn-next").click();
     // Step 3 auth — select token
     const opts = container.querySelectorAll(".opt-item");
@@ -318,13 +348,14 @@ describe("Step 4 — Token path", () => {
 });
 
 // ---------------------------------------------------------------------------
-// Step 4 — OAuth path: coming-soon stub
+// Step 4 — OAuth path: registers + enables the server, then shows live progress
 // ---------------------------------------------------------------------------
 describe("Step 4 — OAuth path", () => {
-  async function goToOAuthStep4(container) {
-    showAddConnection(container, { onDone: vi.fn(), onCancel: vi.fn() });
+  async function goToOAuthStep4(container, onDone = vi.fn()) {
+    showAddConnection(container, { onDone, onCancel: vi.fn() });
     container.querySelector(".cat-item").click(); // Slack
     container.querySelector(".btn-next").click();
+    fillUrl(container);
     container.querySelector(".btn-next").click();
     // OAuth is first option — click to ensure selected
     const opts = container.querySelectorAll(".opt-item");
@@ -339,38 +370,61 @@ describe("Step 4 — OAuth path", () => {
     expect(container.querySelector(".oauth-explainer")).not.toBeNull();
   });
 
-  it("'Open browser' calls mcpAuthStart and shows coming-soon message on stub", async () => {
+  it("'Open browser' registers + enables the server and shows progress (not coming-soon)", async () => {
     const container = makeContainer();
     await goToOAuthStep4(container);
-
-    const openBrowserBtn = container.querySelector(".btn-open-browser");
-    openBrowserBtn.click();
-
-    // Wait for async
-    await new Promise((r) => setTimeout(r, 0));
-
-    expect(daemon.mcpAuthStart).toHaveBeenCalled();
-    // Should show coming-soon message — wizard stays open
-    const msg = container.querySelector(".oauth-coming-soon");
-    expect(msg).not.toBeNull();
-    expect(msg.textContent.toLowerCase()).toContain("coming");
-  });
-
-  it("wizard stays open after OAuth stub response (does NOT call onDone)", async () => {
-    const container = makeContainer();
-    const onDone = vi.fn();
-    showAddConnection(container, { onDone, onCancel: vi.fn() });
-    container.querySelector(".cat-item").click();
-    container.querySelector(".btn-next").click();
-    container.querySelector(".btn-next").click();
-    const opts = container.querySelectorAll(".opt-item");
-    const oauthOpt = [...opts].find((o) => o.querySelector(".opt-title").textContent.toLowerCase().includes("oauth"));
-    oauthOpt.click();
-    container.querySelector(".btn-next").click();
 
     container.querySelector(".btn-open-browser").click();
     await new Promise((r) => setTimeout(r, 0));
 
+    // Registers then enables (enabling connects → triggers the OAuth hand-off).
+    expect(daemon.addMcpServer).toHaveBeenCalledOnce();
+    const descriptor = daemon.addMcpServer.mock.calls[0][0];
+    expect(descriptor.id).toBe("slack");
+    expect(descriptor.auth).toEqual({ type: "oauth" });
+    expect(daemon.enableMcpServer).toHaveBeenCalledWith("slack");
+    // A live status line is shown — and it is NOT the old coming-soon stub.
+    expect(container.querySelector(".oauth-coming-soon")).toBeNull();
+    expect(container.querySelector(".oauth-status")).not.toBeNull();
+  });
+
+  it("reflects mcp_oauth stage events as progress text", async () => {
+    const container = makeContainer();
+    await goToOAuthStep4(container);
+    container.querySelector(".btn-open-browser").click();
+    await new Promise((r) => setTimeout(r, 0));
+
+    daemon.__emit("mcp_oauth", { server: "slack", stage: "waiting_callback" });
+    const status = container.querySelector(".oauth-status");
+    expect(status.textContent.toLowerCase()).toContain("waiting");
+  });
+
+  it("calls onDone when mcp_status reports connected", async () => {
+    vi.useFakeTimers();
+    const container = makeContainer();
+    const onDone = vi.fn();
+    await goToOAuthStep4(container, onDone);
+    container.querySelector(".btn-open-browser").click();
+    await Promise.resolve(); // let the addMcpServer/enable promise chain settle
+    await Promise.resolve();
+
+    daemon.__emit("mcp_status", { server: "slack", state: "connected" });
+    expect(container.querySelector(".oauth-status").textContent.toLowerCase()).toContain("connected");
+    vi.advanceTimersByTime(700); // the onDone is fired after a short success delay
+    expect(onDone).toHaveBeenCalled();
+    vi.useRealTimers();
+  });
+
+  it("shows an error and does NOT call onDone when mcp_status reports error", async () => {
+    const container = makeContainer();
+    const onDone = vi.fn();
+    await goToOAuthStep4(container, onDone);
+    container.querySelector(".btn-open-browser").click();
+    await new Promise((r) => setTimeout(r, 0));
+
+    daemon.__emit("mcp_status", { server: "slack", state: "error", error: "bad url" });
+    const status = container.querySelector(".oauth-status.error");
+    expect(status).not.toBeNull();
     expect(onDone).not.toHaveBeenCalled();
   });
 });
@@ -398,6 +452,7 @@ describe("Descriptor contract", () => {
     items[catalogIndex].click();
     container.querySelector(".btn-next").click(); // step 2
     if (extraSetup) extraSetup(container);
+    fillUrl(container); // no-op for stdio entries (no URL field)
     container.querySelector(".btn-next").click(); // step 3
     // Select token auth
     const opts = container.querySelectorAll(".opt-item");
@@ -439,6 +494,7 @@ describe("Descriptor contract", () => {
     items[0].click();
     // Advance to step 3
     container.querySelector(".btn-next").click(); // step 2
+    fillUrl(container);
     container.querySelector(".btn-next").click(); // step 3
     const opts = container.querySelectorAll(".opt-item");
     const oauthOpt = [...opts].find((o) => o.querySelector(".opt-title").textContent.toLowerCase().includes("oauth"));

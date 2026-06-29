@@ -52,19 +52,30 @@ if (connList) {
   connList.addEventListener("server-select", (e) => openConnectionDetail(e.detail));
 }
 
-/** Open the add-connection wizard in a modal overlay within the connections panel. */
+/** Show or hide the connections list + intro banner (so the wizard / detail
+ *  view replaces them in-place rather than stacking below). */
+function setConnListVisible(panel, visible) {
+  const list = panel.querySelector("connections-list");
+  const banner = panel.querySelector(".mcp-banner");
+  if (list) list.classList.toggle("hidden", !visible);
+  if (banner) banner.classList.toggle("hidden", !visible);
+}
+
+/** Open the add-connection wizard in place of the connections list. */
 function openAddConnection() {
   // Use the connections panel as the container so the wizard is scoped to that tab.
   const panel = document.getElementById("tab-connections");
   if (!panel) return;
+  setConnListVisible(panel, false);
+  const restore = () => { hideAddConnection(panel); setConnListVisible(panel, true); };
   showAddConnection(panel, {
     onDone: () => {
-      hideAddConnection(panel);
+      restore();
       // Reload the connections list so the new server appears.
       const connList = $("connList");
       if (connList) connList.load();
     },
-    onCancel: () => hideAddConnection(panel),
+    onCancel: restore,
   });
 }
 
@@ -80,9 +91,11 @@ function openConnectionDetail(srv) {
     state: srv.state || "disconnected",
     auth_type: srv.auth_type || "",
   };
+  setConnListVisible(panel, false);
   showConnectionDetail(panel, srv.server, meta, {
     onClose: () => {
       hideConnectionDetail(panel);
+      setConnListVisible(panel, true);
       const connList = $("connList");
       if (connList) connList.load();
     },

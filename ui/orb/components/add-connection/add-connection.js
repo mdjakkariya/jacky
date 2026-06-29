@@ -3,12 +3,15 @@
  *  Exports showAddConnection(container, {onDone, onCancel}) and hideAddConnection(container). */
 import { daemon } from "../../lib/daemon.js";
 
-/** Static catalog of known MCP servers. */
+/** Static catalog of known MCP servers.
+ *  Only GitHub's endpoint is a verified MCP URL; Slack/Notion ship blank so the
+ *  user pastes the server URL from that provider's MCP docs (the transport step's
+ *  URL field is editable for catalog entries too). */
 const CATALOG = [
-  { id: "slack",  label: "Slack",       icon: "💬", transport: "http",  url: "https://slack.com/api/mcp",       auth: "oauth", egress: true,  desc: "OAuth / bot token" },
-  { id: "github", label: "GitHub",      icon: "🐙", transport: "http",  url: "https://api.github.com/mcp",      auth: "oauth", egress: true,  desc: "OAuth" },
-  { id: "files",  label: "Local Files", icon: "📁", transport: "stdio", command: "npx @mcp/server-files",        auth: "none",  egress: false, desc: "on-device" },
-  { id: "notion", label: "Notion",      icon: "🗒️", transport: "http",  url: "https://api.notion.com/v1/mcp",   auth: "oauth", egress: true,  desc: "OAuth" },
+  { id: "slack",  label: "Slack",       icon: "💬", transport: "http",  url: "",                                   auth: "oauth", egress: true,  desc: "OAuth · paste your Slack MCP URL" },
+  { id: "github", label: "GitHub",      icon: "🐙", transport: "http",  url: "https://api.githubcopilot.com/mcp/", auth: "oauth", egress: true,  desc: "OAuth" },
+  { id: "files",  label: "Local Files", icon: "📁", transport: "stdio", command: "npx @mcp/server-files",          auth: "none",  egress: false, desc: "on-device" },
+  { id: "notion", label: "Notion",      icon: "🗒️", transport: "http",  url: "",                                   auth: "oauth", egress: true,  desc: "OAuth · paste your Notion MCP URL" },
 ];
 
 const CUSTOM_ENTRY = {
@@ -211,11 +214,10 @@ function renderStep2(state, callbacks) {
     if (cmdField) state.command = cmdField.value;
     if (argsField) state.args = argsField.value;
     if (envField) state.env = envField.value;
-    // Gate: custom server must have required field filled in
-    if (isCustom) {
-      if (state.transport === "http" && !state.url.trim()) return;
-      if (state.transport === "stdio" && !state.command.trim()) return;
-    }
+    // Gate: an HTTP server always needs a URL (catalog entries may ship blank);
+    // a custom stdio server needs a command.
+    if (state.transport === "http" && !state.url.trim()) return;
+    if (isCustom && state.transport === "stdio" && !state.command.trim()) return;
     callbacks.goTo(3);
   });
 
@@ -249,7 +251,9 @@ function renderTransportFields(container, state, editable) {
     input.type = "text";
     input.dataset.field = "url";
     input.value = state.url || "";
-    if (!editable) input.readOnly = true;
+    input.placeholder = "https://…/mcp";
+    // URL is always editable (even for catalog) so a flagged/blank catalog URL
+    // can be corrected before connecting.
     container.appendChild(input);
   } else {
     // stdio
@@ -394,35 +398,77 @@ function renderOAuthExplainer(wrap, state, callbacks) {
   explainer.appendChild(banner);
   wrap.appendChild(explainer);
 
+  // Live status line (browser opening → waiting → connected / error).
+  const statusEl = div("oauth-msg-placeholder");
+  wrap.appendChild(statusEl);
+
   // Buttons
   const row = div("wizard-row");
   const backBtn = btn("btn btn-back", "Back");
   const spacer = div("spacer");
   const openBtn = btn("btn primary btn-open-browser", "Open browser");
 
-  // Placeholder for coming-soon message (inserted after click)
-  const msgPlaceholder = div("oauth-msg-placeholder");
-  wrap.appendChild(msgPlaceholder);
+  // OAuth runs on the daemon: registering + enabling the server connects it,
+  // which triggers the SDK's browser hand-off. We subscribe to the mcp_oauth
+  // stage events and mcp_status before kicking it off so no early stage is missed.
+  let offOauth = null;
+  let offStatus = null;
+  let settled = false;
+  function cleanup() {
+    if (offOauth) { offOauth(); offOauth = null; }
+    if (offStatus) { offStatus(); offStatus = null; }
+  }
+  function setStatus(text, kind) {
+    statusEl.textContent = "";
+    const s = div("oauth-status" + (kind && kind !== "progress" ? " " + kind : ""));
+    if (kind === "progress") s.appendChild(div("oauth-spinner"));
+    const t = document.createElement("span");
+    t.textContent = text;
+    s.appendChild(t);
+    statusEl.appendChild(s);
+  }
 
-  backBtn.addEventListener("click", () => callbacks.goTo(3));
+  backBtn.addEventListener("click", () => { cleanup(); callbacks.goTo(3); });
   openBtn.addEventListener("click", async () => {
+    if (settled) return;
     openBtn.disabled = true;
+    const descriptor = buildDescriptor(state);
+    const id = descriptor.id;
+
+    offOauth = daemon.on("mcp_oauth", (m) => {
+      if (m.server !== id || settled) return;
+      if (m.stage === "browser_open") setStatus("Opening your browser — sign in there…", "progress");
+      else if (m.stage === "waiting_callback") setStatus("Waiting for you to finish signing in…", "progress");
+      else if (m.stage === "callback_received") setStatus("Signing in…", "progress");
+    });
+    offStatus = daemon.on("mcp_status", (m) => {
+      if (m.server !== id || settled) return;
+      if (m.state === "connected") {
+        settled = true; cleanup();
+        setStatus("Connected!", "ok");
+        setTimeout(() => callbacks.onDone(), 600);
+      } else if (m.state === "error") {
+        settled = true; cleanup();
+        setStatus("Sign-in failed — " + (m.error || "check the server URL and try again."), "error");
+        openBtn.disabled = false;
+      }
+    });
+
     try {
-      const entry = state.catalogEntry;
-      const id = entry ? entry.id : "custom";
-      const res = await daemon.mcpAuthStart(id);
-      // Phase-6 stub — show coming-soon message, do NOT close the wizard
-      const comingSoon = div("oauth-coming-soon");
-      comingSoon.textContent = "OAuth coming in Phase 6 — not yet supported. (" + (res.message || "Check back soon.") + ")";
-      msgPlaceholder.textContent = "";
-      msgPlaceholder.appendChild(comingSoon);
-    } catch (_) {
-      const errMsg = div("oauth-coming-soon");
-      errMsg.textContent = "OAuth coming in Phase 6 — not yet supported.";
-      msgPlaceholder.textContent = "";
-      msgPlaceholder.appendChild(errMsg);
-    } finally {
-      openBtn.disabled = false;
+      await daemon.addMcpServer(descriptor);
+      setStatus("Opening your browser — sign in there…", "progress");
+      const res = await daemon.enableMcpServer(id); // connects → triggers the OAuth hand-off
+      if (res && res.ok === false && !settled) {
+        settled = true; cleanup();
+        setStatus("Couldn't start sign-in — " + (res.error || "is Jack running?"), "error");
+        openBtn.disabled = false;
+      }
+    } catch (e) {
+      if (!settled) {
+        settled = true; cleanup();
+        setStatus("Couldn't start sign-in — " + ((e && e.message) || "check that Jack is running."), "error");
+        openBtn.disabled = false;
+      }
     }
   });
 

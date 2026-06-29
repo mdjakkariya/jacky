@@ -3,21 +3,29 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 // ---------------------------------------------------------------------------
 // Mock daemon before importing the component under test
 // ---------------------------------------------------------------------------
-vi.mock("../../lib/daemon.js", () => ({
-  daemon: {
-    mcpTools: vi.fn().mockResolvedValue([
-      { name: "search_messages", description: "Search across channels", risk: "read_only", network: false, enabled: true },
-      { name: "send_message",    description: "Post a message",         risk: "write",     network: true,  enabled: true },
-      { name: "delete_message",  description: "Delete a message",       risk: "destructive", network: true, enabled: false },
-    ]),
-    setMcpToolOverride: vi.fn().mockResolvedValue({ ok: true }),
-    removeMcpServer:    vi.fn().mockResolvedValue({ ok: true }),
-    connectMcpServer:   vi.fn().mockResolvedValue({ ok: true }),
-    mcpAuthStart:       vi.fn().mockResolvedValue({ ok: false, message: "oauth not yet supported (phase 6)" }),
-    mcpSetToken:        vi.fn().mockResolvedValue({ ok: true }),
-    on: vi.fn().mockReturnValue(() => {}), // returns unsubscribe fn
-  },
-}));
+vi.mock("../../lib/daemon.js", () => {
+  const handlers = {};
+  return {
+    daemon: {
+      mcpTools: vi.fn().mockResolvedValue([
+        { name: "search_messages", description: "Search across channels", risk: "read_only", network: false, enabled: true },
+        { name: "send_message",    description: "Post a message",         risk: "write",     network: true,  enabled: true },
+        { name: "delete_message",  description: "Delete a message",       risk: "destructive", network: true, enabled: false },
+      ]),
+      setMcpToolOverride: vi.fn().mockResolvedValue({ ok: true }),
+      removeMcpServer:    vi.fn().mockResolvedValue({ ok: true }),
+      connectMcpServer:   vi.fn().mockResolvedValue({ ok: true }),
+      mcpAuthStart:       vi.fn().mockResolvedValue({ ok: true, started: true }),
+      mcpSetToken:        vi.fn().mockResolvedValue({ ok: true }),
+      on: vi.fn((type, fn) => {
+        (handlers[type] = handlers[type] || []).push(fn);
+        return () => { handlers[type] = (handlers[type] || []).filter((h) => h !== fn); };
+      }),
+      __emit: (type, msg) => { (handlers[type] || []).forEach((fn) => fn(msg)); },
+      __reset: () => { for (const k in handlers) delete handlers[k]; },
+    },
+  };
+});
 
 import { daemon } from "../../lib/daemon.js";
 import { showConnectionDetail, hideConnectionDetail } from "./connection-detail.js";
@@ -43,6 +51,7 @@ async function mount(container, id = "slack", meta = { label: "Slack", egress: t
 
 beforeEach(() => {
   vi.clearAllMocks();
+  daemon.__reset();
   document.body.innerHTML = "";
   // Reset mcpTools to the default three-tool list
   daemon.mcpTools.mockResolvedValue([
@@ -294,19 +303,11 @@ describe("mcp_status subscription", () => {
   });
 
   it("mcp_status event for this server immediately shows reconnecting status dot", async () => {
-    let capturedHandler = null;
-    daemon.on.mockImplementation((type, fn) => {
-      if (type === "mcp_status") capturedHandler = fn;
-      return () => {};
-    });
-
     const container = makeContainer();
     await mount(container, "slack");
 
-    expect(capturedHandler).not.toBeNull();
-
-    // Fire an mcp_status event for this server
-    capturedHandler({ server: "slack", state: "connected", tool_count: 3 });
+    // Fire an mcp_status event for this server via the captured WS subscription.
+    daemon.__emit("mcp_status", { server: "slack", state: "connected", tool_count: 3 });
 
     // The status dot should immediately show 'reconnecting'
     const dot = container.querySelector(".status-dot");
@@ -315,12 +316,6 @@ describe("mcp_status subscription", () => {
   });
 
   it("mcp_status event for a DIFFERENT server does not change the header", async () => {
-    let capturedHandler = null;
-    daemon.on.mockImplementation((type, fn) => {
-      if (type === "mcp_status") capturedHandler = fn;
-      return () => {};
-    });
-
     const container = makeContainer();
     await mount(container, "slack");
 
@@ -329,7 +324,7 @@ describe("mcp_status subscription", () => {
     const classBefore = dotBefore ? dotBefore.className : "";
 
     // Fire for a different server
-    capturedHandler({ server: "github", state: "disconnected", tool_count: 0 });
+    daemon.__emit("mcp_status", { server: "github", state: "disconnected", tool_count: 0 });
 
     const dotAfter = container.querySelector(".status-dot");
     expect(dotAfter.className).toBe(classBefore); // unchanged
@@ -373,18 +368,43 @@ describe("Sign out button", () => {
     expect(daemon.mcpSetToken).toHaveBeenCalledWith("slack", "");
   });
 
-  it("Sign out button for oauth server shows coming-soon note", async () => {
+  it("oauth (connected) server shows a 'Re-authenticate' button that runs auth/start with progress", async () => {
     const container = makeContainer();
     await mount(container, "slack", { label: "Slack", egress: true, state: "connected", auth_type: "oauth" });
-    const signOutBtn = [...container.querySelectorAll("button")].find(
-      (b) => b.textContent.includes("Sign out")
+    const reauthBtn = [...container.querySelectorAll("button")].find(
+      (b) => b.textContent.includes("Re-authenticate")
     );
-    signOutBtn.click();
+    expect(reauthBtn).toBeTruthy();
+    reauthBtn.click();
     await new Promise((r) => setTimeout(r, 0));
-    // Should call mcpAuthStart or show a note — check for "coming" text in the card
-    const cardText = container.textContent.toLowerCase();
-    expect(
-      daemon.mcpAuthStart.mock.calls.length > 0 || cardText.includes("coming")
-    ).toBe(true);
+    expect(daemon.mcpAuthStart).toHaveBeenCalledWith("slack");
+    // No stale "coming soon" copy anywhere.
+    expect(container.textContent.toLowerCase()).not.toContain("coming");
+    // A stage event renders as inline progress text.
+    daemon.__emit("mcp_oauth", { server: "slack", stage: "waiting_callback" });
+    expect(container.querySelector(".signout-note").textContent.toLowerCase()).toContain("waiting");
+  });
+
+  it("oauth (not connected) server shows a 'Sign in' button", async () => {
+    const container = makeContainer();
+    await mount(container, "gh", { label: "GitHub", egress: true, state: "auth_needed", auth_type: "oauth" });
+    const signInBtn = [...container.querySelectorAll("button")].find(
+      (b) => b.textContent.includes("Sign in")
+    );
+    expect(signInBtn).toBeTruthy();
+  });
+
+  it("oauth sign-in success refreshes the tools list", async () => {
+    const container = makeContainer();
+    await mount(container, "slack", { label: "Slack", egress: true, state: "connected", auth_type: "oauth" });
+    daemon.mcpTools.mockClear();
+    const reauthBtn = [...container.querySelectorAll("button")].find(
+      (b) => b.textContent.includes("Re-authenticate")
+    );
+    reauthBtn.click();
+    await new Promise((r) => setTimeout(r, 0));
+    daemon.__emit("mcp_status", { server: "slack", state: "connected" });
+    await new Promise((r) => setTimeout(r, 0));
+    expect(daemon.mcpTools).toHaveBeenCalledWith("slack");
   });
 });

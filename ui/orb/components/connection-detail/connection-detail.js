@@ -186,6 +186,11 @@ export function showConnectionDetail(container, serverId, serverMeta, { onClose 
   // Debounce state for mcp_status churn tolerance (1500 ms)
   let debounceTimer = null;
 
+  // Back to the connections list (the list is hidden while the detail is open).
+  const backLink = btn("btn btn-back detail-back", "‹ Connections");
+  backLink.addEventListener("click", () => onClose());
+  card.appendChild(backLink);
+
   // -------------------------------------------------------------------------
   // Header row: icon + name + status dot + "Sign out" button
   // -------------------------------------------------------------------------
@@ -209,32 +214,86 @@ export function showConnectionDetail(container, serverId, serverMeta, { onClose 
 
   header.appendChild(headerMeta);
 
-  // Sign out button
-  const signOutBtn = btn("btn ghost-sm btn-signout", "Sign out");
-  signOutBtn.addEventListener("click", async () => {
-    const authType = serverMeta.auth_type || "";
-    if (authType === "token") {
-      // Clear the stored token
-      await daemon.mcpSetToken(serverId, "");
-    } else if (authType === "oauth") {
-      // OAuth not yet supported — show note and call mcpAuthStart for consistency
+  // Auth button (context-aware) + a live status line below the header.
+  //  - OAuth  → "Sign in" / "Re-authenticate": runs the daemon OAuth flow
+  //    (browser hand-off) and reports mcp_oauth stages inline.
+  //  - token  → "Sign out": clears the stored Keychain token.
+  //  - none   → no button (local/stdio servers need no credential).
+  const authType = serverMeta.auth_type || "";
+  const authStatus = div("signout-note");
+  authStatus.classList.add("hidden");
+  function sayAuth(text, kind) {
+    authStatus.classList.remove("hidden");
+    authStatus.className = "signout-note" + (kind ? " oauth-status " + kind : "");
+    authStatus.textContent = text;
+  }
+
+  if (authType === "oauth") {
+    const connected = serverMeta.state === "connected";
+    const authBtn = btn("btn ghost-sm btn-signin", connected ? "Re-authenticate" : "Sign in");
+    let offOauth = null;
+    let offStatus2 = null;
+    const stopAuth = () => {
+      if (offOauth) { offOauth(); offOauth = null; }
+      if (offStatus2) { offStatus2(); offStatus2 = null; }
+    };
+    authBtn.addEventListener("click", async () => {
+      authBtn.disabled = true;
+      let done = false;
+      stopAuth();
+      offOauth = daemon.on("mcp_oauth", (m) => {
+        if (m.server !== serverId || done) return;
+        if (m.stage === "browser_open") sayAuth("Opening your browser — sign in there…");
+        else if (m.stage === "waiting_callback") sayAuth("Waiting for you to finish signing in…");
+        else if (m.stage === "callback_received") sayAuth("Signing in…");
+      });
+      offStatus2 = daemon.on("mcp_status", (m) => {
+        if (m.server !== serverId || done) return;
+        if (m.state === "connected") {
+          done = true; stopAuth();
+          sayAuth("Signed in.", "ok");
+          authBtn.disabled = false;
+          loadTools(serverId, toolsSection, toolsLabel);
+        } else if (m.state === "error") {
+          done = true; stopAuth();
+          sayAuth("Sign-in failed — " + (m.error || "try again."), "error");
+          authBtn.disabled = false;
+        }
+      });
       try {
-        await daemon.mcpAuthStart(serverId);
-      } catch (_) {}
-      // Show a transient "coming soon" note below the sign-out button
-      const existing = card.querySelector(".signout-note");
-      if (!existing) {
-        const note = div("signout-note");
-        note.textContent = "OAuth sign-out coming in Phase 6 — not yet supported.";
-        signOutBtn.insertAdjacentElement
-          ? signOutBtn.parentNode.insertBefore(note, signOutBtn.nextSibling)
-          : card.appendChild(note);
+        const res = await daemon.mcpAuthStart(serverId);
+        if (res && res.ok === false) {
+          done = true; stopAuth();
+          sayAuth("Couldn't start sign-in — " + (res.error || "is Jack running?"), "error");
+          authBtn.disabled = false;
+        } else {
+          sayAuth("Opening your browser — sign in there…");
+        }
+      } catch (e) {
+        done = true; stopAuth();
+        sayAuth("Couldn't start sign-in — " + ((e && e.message) || "check that Jack is running."), "error");
+        authBtn.disabled = false;
       }
-    }
-  });
-  header.appendChild(signOutBtn);
+    });
+    header.appendChild(authBtn);
+    card._stopAuth = stopAuth;
+  } else if (authType === "token") {
+    const signOutBtn = btn("btn ghost-sm btn-signout", "Sign out");
+    signOutBtn.addEventListener("click", async () => {
+      signOutBtn.disabled = true;
+      try {
+        await daemon.mcpSetToken(serverId, "");
+        sayAuth("Token cleared.", "ok");
+      } catch (_) {
+        sayAuth("Couldn't clear the token — is Jack running?", "error");
+      }
+      signOutBtn.disabled = false;
+    });
+    header.appendChild(signOutBtn);
+  }
 
   card.appendChild(header);
+  card.appendChild(authStatus);
 
   // -------------------------------------------------------------------------
   // MCP banner (egress vs local)
@@ -334,5 +393,6 @@ export function hideConnectionDetail(container) {
   if (!existing) return;
   if (typeof existing._clearDebounce === "function") existing._clearDebounce();
   if (typeof existing._offStatus === "function") existing._offStatus();
+  if (typeof existing._stopAuth === "function") existing._stopAuth();
   existing.remove();
 }
