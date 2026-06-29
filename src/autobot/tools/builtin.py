@@ -28,6 +28,43 @@ GET_TIME = ToolSpec(
 )
 
 
+def find_tools(intent: str) -> str:
+    """Fallback text for the discovery meta-tool.
+
+    The real behavior (search the gated tools, pin the matches, summarize them)
+    lives in the LLM turn loop, which intercepts ``find_tools`` calls before they
+    reach any registry/gate. This handler exists only so the tool has a valid,
+    string-returning handler — it is never dispatched in normal operation.
+    """
+    return f"Searching for tools matching: {intent}"
+
+
+FIND_TOOLS = ToolSpec(
+    name="find_tools",
+    description=(
+        "Discover tools that are not currently available to you. Call this the "
+        "moment a request needs an action you don't see among your tools (for "
+        "example messaging, calendars, code hosting, or any connected app). Pass a "
+        "short description of what you want to do as `intent` (e.g. 'send a message "
+        "on slack', 'create a github issue'). It returns the matching tools, which "
+        "then become available so you can call the right one on your next step. "
+        "Prefer this over telling the user you can't do something."
+    ),
+    parameters={
+        "type": "object",
+        "properties": {
+            "intent": {
+                "type": "string",
+                "description": "A short description of the action you want to perform.",
+            }
+        },
+        "required": ["intent"],
+    },
+    handler=find_tools,
+    risk=Risk.READ_ONLY,
+)
+
+
 def register_builtins(registry: ToolRegistry) -> None:
     """Register all built-in tools into ``registry``."""
     registry.register(GET_TIME)

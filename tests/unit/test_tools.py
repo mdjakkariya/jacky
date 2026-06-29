@@ -202,3 +202,22 @@ def test_get_time_is_core() -> None:
     spec = reg.get("get_time")
     assert spec is not None
     assert spec.core is True
+
+
+def test_find_tools_spec_is_well_formed() -> None:
+    from autobot.tools.builtin import FIND_TOOLS
+
+    assert FIND_TOOLS.name == "find_tools"
+    assert "intent" in FIND_TOOLS.parameters["properties"]
+    assert FIND_TOOLS.parameters["required"] == ["intent"]
+    # The handler returns a string and never raises (tool contract).
+    assert isinstance(FIND_TOOLS.handler(intent="anything"), str)
+
+
+def test_find_tools_is_not_registered_by_register_builtins() -> None:
+    from autobot.tools.builtin import register_builtins
+
+    reg = ToolRegistry()
+    register_builtins(reg)
+    # find_tools is owned by the LLM turn loop, not the registry/gate.
+    assert reg.get("find_tools") is None
