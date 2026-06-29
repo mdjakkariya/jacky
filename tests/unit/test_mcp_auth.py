@@ -542,6 +542,41 @@ def test_loopback_default_port_zero() -> None:
     assert server._fixed_port == 0
 
 
+def test_loopback_reclaims_fixed_port_from_abandoned_server() -> None:
+    """A second fixed-port start() reclaims the port from an abandoned prior flow.
+
+    Regression: a previous OAuth attempt that didn't complete left the fixed port
+    bound, so a retry hit OSError(EADDRINUSE). The new flow now closes the prior
+    fixed-port server before binding.
+    """
+    import socket
+
+    import autobot.mcp.auth as auth_mod
+
+    # Pick a currently-free port to use as the "fixed" port (avoids hardcoding 8975).
+    probe = socket.socket()
+    probe.bind(("127.0.0.1", 0))
+    fixed = probe.getsockname()[1]
+    probe.close()
+
+    async def _run() -> str:
+        first = LoopbackCallbackServer(port=fixed)
+        await first.start()  # binds `fixed`; abandoned (never wait()ed → never closed)
+        second = LoopbackCallbackServer(port=fixed)
+        try:
+            return await second.start()  # must reclaim the port, not raise EADDRINUSE
+        finally:
+            for srv in (second._server, first._server):
+                if srv is not None:
+                    srv.close()
+
+    try:
+        uri = asyncio.run(_run())
+        assert uri == f"http://127.0.0.1:{fixed}/callback"
+    finally:
+        auth_mod._active_fixed_server = None  # reset module state for other tests
+
+
 # ---------------------------------------------------------------------------
 # OAUTH_CALLBACK_PORT and oauth_redirect_uri
 # ---------------------------------------------------------------------------

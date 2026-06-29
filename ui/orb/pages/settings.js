@@ -59,12 +59,18 @@ if (connList) {
 
 // The "Enable MCP connections" master toggle applies immediately: it saves on
 // change and the daemon turns the MCP subsystem on/off live (no restart). The
-// "off by default" info banner is hidden once MCP is enabled (it would otherwise
-// contradict the on state).
+// "off by default" info banner is shown ONLY when MCP is disabled AND the list is
+// visible — it's hidden once MCP is on (it would contradict the on state) and while
+// the wizard/detail view has replaced the list. Single source of truth so the toggle
+// and setConnListVisible() don't fight over the banner.
 function updateMcpUI() {
-  const on = !!($("allow_mcp") && $("allow_mcp").checked);
-  const banner = $("mcpOffBanner");
-  if (banner) banner.classList.toggle("hidden", on);
+  const panel = document.getElementById("tab-connections");
+  const banner = panel && panel.querySelector(".mcp-banner");
+  if (!banner) return;
+  const list = panel.querySelector("connections-list");
+  const listHidden = !!(list && list.classList.contains("hidden"));
+  const mcpOn = !!($("allow_mcp") && $("allow_mcp").checked);
+  banner.classList.toggle("hidden", mcpOn || listHidden);
 }
 const allowMcpToggle = $("allow_mcp");
 if (allowMcpToggle) {
@@ -85,9 +91,8 @@ if (allowMcpToggle) {
  *  view replaces them in-place rather than stacking below). */
 function setConnListVisible(panel, visible) {
   const list = panel.querySelector("connections-list");
-  const banner = panel.querySelector(".mcp-banner");
   if (list) list.classList.toggle("hidden", !visible);
-  if (banner) banner.classList.toggle("hidden", !visible);
+  updateMcpUI(); // banner follows: hidden when MCP on OR list hidden
 }
 
 /** Open the add-connection wizard in place of the connections list. */

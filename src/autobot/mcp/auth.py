@@ -23,6 +23,7 @@ module stays importable without the ``mcp`` extra. Token values are **never** lo
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import webbrowser
 from collections.abc import Callable
@@ -254,6 +255,12 @@ def oauth_redirect_uri() -> str:
     return f"http://127.0.0.1:{OAUTH_CALLBACK_PORT}/callback"
 
 
+# The fixed-port callback server is process-wide single-use: only one OAuth flow can
+# hold OAUTH_CALLBACK_PORT at a time. We track the active one so a new flow (e.g. a
+# retry after an abandoned attempt) can reclaim the port instead of failing to bind.
+_active_fixed_server: asyncio.AbstractServer | None = None
+
+
 class LoopbackCallbackServer:
     """One-shot loopback HTTP server that captures the OAuth callback.
 
@@ -292,9 +299,19 @@ class LoopbackCallbackServer:
             When ``port=0`` was passed to the constructor, the OS assigns the
             actual port; when a fixed port was given it is used directly.
         """
+        global _active_fixed_server
         loop = asyncio.get_running_loop()
         self._result = loop.create_future()
+        if self._fixed_port and _active_fixed_server is not None:
+            # Reclaim the fixed port from a previous, abandoned flow (worker shut
+            # down mid-auth, or the browser flow was never completed). All OAuth
+            # flows share the manager's single loop, so closing here is in-loop.
+            with contextlib.suppress(Exception):  # already closing/closed — fine
+                _active_fixed_server.close()
+            _active_fixed_server = None
         self._server = await asyncio.start_server(self._handle, "127.0.0.1", self._fixed_port)
+        if self._fixed_port:
+            _active_fixed_server = self._server
         # Retrieve the actual bound port from the first socket (always correct,
         # even when a fixed port was requested and the OS chose the same value).
         sockets = self._server.sockets
@@ -313,6 +330,7 @@ class LoopbackCallbackServer:
             asyncio.TimeoutError: If no callback arrives within ``timeout``
                 seconds.
         """
+        global _active_fixed_server
         assert self._result is not None, "call start() before wait()"
         assert self._server is not None, "call start() before wait()"
         try:
@@ -320,6 +338,8 @@ class LoopbackCallbackServer:
         finally:
             self._server.close()
             await self._server.wait_closed()
+            if _active_fixed_server is self._server:
+                _active_fixed_server = None
 
     async def _handle(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
         """Parse GET /callback?code=...&state=... and resolve the future."""
