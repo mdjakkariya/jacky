@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
+
 from autobot.config import Settings
 from autobot.tools.registry import ToolRegistry, ToolSpec
 from autobot.tools.selection import (
     AllToolsSelector,
+    EmbeddingToolSelector,
     LexicalToolSelector,
     _doc_key,
     build_tool_selector,
@@ -190,3 +193,118 @@ def test_doc_key_stable_for_same_text_changes_with_description() -> None:
     a = _doc_key(_spec("t", "one"))
     assert a == _doc_key(_spec("t", "one"))  # same name+desc → same key
     assert a != _doc_key(_spec("t", "two"))  # changed description → new key
+
+
+def _fake_embedder(
+    table: dict[str, list[float]], *, default: list[float] | None = None
+) -> Callable[[str], list[float]]:
+    """Deterministic embedder: maps a text to a fixed vector (substring-keyed)."""
+
+    def embed(text: str) -> list[float]:
+        for key, vec in table.items():
+            if key in text:
+                return vec
+        if default is not None:
+            return default
+        raise AssertionError(f"no fake embedding for {text!r}")
+
+    return embed
+
+
+def _embedding(
+    reg: ToolRegistry, embedder: Callable[[str], list[float]], *, budget: int = 20
+) -> EmbeddingToolSelector:
+    fallback = LexicalToolSelector(
+        reg, budget=budget, core_extra=frozenset(), core_remove=frozenset()
+    )
+    return EmbeddingToolSelector(
+        reg,
+        embedder=embedder,
+        fallback=fallback,
+        budget=budget,
+        core_extra=frozenset(),
+        core_remove=frozenset(),
+    )
+
+
+def test_embedding_ranks_gated_by_cosine() -> None:
+    # Query vector points at slack__send; github__issue is orthogonal → excluded by K? No —
+    # K leaves room, but cosine 0 ranks it last; assert slack is chosen and ranked first.
+    table = {
+        "slack__send": [1.0, 0.0],
+        "github__issue": [0.0, 1.0],
+        "send a message via slack": [1.0, 0.0],  # query → slack direction
+    }
+    names = [
+        s.name for s in _embedding(_reg(), _fake_embedder(table)).select("send a message via slack")
+    ]
+    assert "slack__send" in names
+    assert names.index("slack__send") < names.index("github__issue")  # cosine ranks slack first
+
+
+def test_embedding_core_always_advertised() -> None:
+    table = {
+        "battery_status": [1.0, 0.0],
+        "set_volume": [0.0, 1.0],
+        "slack__send": [0.0, 0.0],
+        "github__issue": [0.0, 0.0],
+    }
+    names = {
+        s.name
+        for s in _embedding(_reg(), _fake_embedder(table, default=[0.0, 0.0])).select("anything")
+    }
+    assert {"battery_status", "set_volume"} <= names  # core always present
+
+
+def test_embedding_budget_caps_gated_core_kept() -> None:
+    table = {"slack__send": [1.0, 0.0]}
+    names = {
+        s.name
+        for s in _embedding(_reg(), _fake_embedder(table, default=[1.0, 0.0]), budget=2).select(
+            "send slack"
+        )
+    }
+    assert names == {"battery_status", "set_volume"}  # budget 2 == core → K=0, no gated
+
+
+def test_embedding_pinned_force_included() -> None:
+    table = {"github__issue": [0.0, 1.0]}
+    sel = _embedding(_reg(), _fake_embedder(table, default=[1.0, 0.0]))
+    names = {s.name for s in sel.select("hi", pinned=frozenset({"github__issue"}))}
+    assert "github__issue" in names  # forced in regardless of similarity
+
+
+def test_embedding_search_returns_ranked_gated_names() -> None:
+    table = {
+        "slack__send": [1.0, 0.0],
+        "github__issue": [0.0, 1.0],
+        "post to a slack channel": [1.0, 0.0],
+    }
+    names = _embedding(_reg(), _fake_embedder(table, default=[0.0, 0.0])).search(
+        "post to a slack channel", limit=1
+    )
+    assert names == ["slack__send"]  # best gated match only; core excluded from search
+
+
+def test_embedding_caches_tool_vectors_embeds_once_per_tool() -> None:
+    calls: list[str] = []
+
+    def counting_embed(text: str) -> list[float]:
+        calls.append(text)
+        return [1.0, 0.0] if "slack" in text else [0.0, 1.0]
+
+    sel = _embedding(_reg(), counting_embed)
+    sel.select("send slack")
+    sel.select("send slack")  # second call: tool vectors must be reused, not re-embedded
+    tool_embeds = [c for c in calls if "Send a message" in c or "Create a GitHub" in c]
+    # Two gated tools → embedded exactly once each across both select() calls.
+    assert len(tool_embeds) == 2
+
+
+def test_embedding_falls_back_to_lexical_on_embedder_error() -> None:
+    def boom(text: str) -> list[float]:
+        raise RuntimeError("ollama down / model not pulled")
+
+    names = {s.name for s in _embedding(_reg(), boom).select("send a slack message")}
+    assert "slack__send" in names  # lexical fallback found it despite the embedder failing
+    assert "battery_status" in names  # core still advertised via the fallback path

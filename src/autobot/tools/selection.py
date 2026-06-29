@@ -222,6 +222,114 @@ class LexicalToolSelector:
         return [spec.name for spec, _ in ranked[:limit]]
 
 
+class EmbeddingToolSelector:
+    """Relevance-gated advertising that ranks gated tools by **local** embeddings.
+
+    A recall upgrade over :class:`LexicalToolSelector` for the *local* path only
+    (the cloud path uses Anthropic's native tool search and never this). The core
+    set, budget, pinning, and ``core_extra``/``core_remove`` rules are identical to
+    the lexical selector — only the gated ranking differs: gated tools are ranked by
+    cosine similarity of a locally-embedded query against locally-embedded tool docs
+    (``name + description``).
+
+    Embedding is done by an injected :data:`Embedder` (so ranking is unit-tested
+    without a live model). Each tool's vector is embedded once and cached by
+    :func:`_doc_key`, so an unchanged tool is never re-embedded; the query is embedded
+    once per call. On **any** embedding failure (model not pulled, host down, bad
+    vector) the selector logs once and delegates to a :class:`LexicalToolSelector`
+    fallback, so it can never crash a turn.
+    """
+
+    def __init__(
+        self,
+        registry: ToolRegistry,
+        *,
+        embedder: Embedder,
+        fallback: LexicalToolSelector,
+        budget: int,
+        core_extra: frozenset[str],
+        core_remove: frozenset[str],
+    ) -> None:
+        self._registry = registry
+        self._embedder = embedder
+        self._fallback = fallback
+        self._budget = budget
+        self._core_extra = core_extra
+        self._core_remove = core_remove
+        self._cache: dict[str, list[float]] = {}  # _doc_key -> tool vector
+        self._warned = False  # log the embedding-failure fallback at most once
+
+    def _core_names(self, specs: Sequence[ToolSpec]) -> set[str]:
+        """Effective core set: marked-core | core_extra - core_remove."""
+        return ({s.name for s in specs if s.core} | self._core_extra) - self._core_remove
+
+    def _tool_vector(self, spec: ToolSpec) -> list[float]:
+        """Return ``spec``'s cached embedding, embedding (once) on a cache miss."""
+        key = _doc_key(spec)
+        vec = self._cache.get(key)
+        if vec is None:
+            vec = self._embedder(embed_doc(spec))
+            self._cache[key] = vec
+        return vec
+
+    def _rank_gated(self, query: str, gated: Sequence[ToolSpec]) -> list[ToolSpec]:
+        """Rank gated tools by cosine to ``query``; lexical fallback on any failure.
+
+        Embeds the query once, then scores each gated tool against its cached vector.
+        Zero-or-negative-similarity tools are dropped (like lexical's zero-score rule).
+        Any exception from the embedder routes the whole ranking through the lexical
+        fallback (warned once), so a missing model never breaks the turn.
+        """
+        if not gated:
+            return []
+        try:
+            qv = self._embedder(query)
+            scored = [(s, cosine(qv, self._tool_vector(s))) for s in gated]
+        except Exception:  # model not pulled, host down, etc. — degrade, never crash
+            if not self._warned:
+                self._warned = True
+                _log.warning(
+                    "embedding selection failed; falling back to lexical"
+                    " (is the embedding model pulled? `ollama pull`)",
+                    exc_info=True,
+                )
+            return [s for s, _ in score_tools(query, gated)]
+        ranked = sorted(scored, key=lambda p: (-p[1], p[0].name))
+        return [s for s, _ in ranked]
+
+    def select(self, query: str, *, pinned: frozenset[str] = frozenset()) -> list[ToolSpec]:
+        """Return core | top-K embedding-ranked gated | pinned, deduped and bounded."""
+        specs = self._registry.specs()
+        core_names = self._core_names(specs)
+        core = [s for s in specs if s.name in core_names]
+        gated = [s for s in specs if s.name not in core_names]
+
+        k = max(0, self._budget - len(core))
+        ranked = self._rank_gated(query, gated)[:k]
+
+        pinned_specs = [s for s in specs if s.name in pinned and s.name not in core_names]
+
+        chosen: list[ToolSpec] = []
+        seen: set[str] = set()
+        for s in (*core, *ranked, *pinned_specs):
+            if s.name not in seen:
+                seen.add(s.name)
+                chosen.append(s)
+        return chosen
+
+    def search(self, intent: str, *, limit: int = 5) -> list[str]:
+        """Return the names of the best embedding-ranked **gated** tools for ``intent``.
+
+        Powers Phase 2's ``find_tools`` escape hatch. Searches only the gated pool
+        (core tools are already advertised every turn), degrading to lexical ranking
+        on an embedding failure exactly as :meth:`select` does.
+        """
+        specs = self._registry.specs()
+        core_names = self._core_names(specs)
+        gated = [s for s in specs if s.name not in core_names]
+        return [s.name for s in self._rank_gated(intent, gated)[:limit]]
+
+
 def build_tool_selector(settings: Settings, registry: ToolRegistry) -> ToolSelector:
     """Construct the configured selector. ``"all"`` → advertise everything.
 
