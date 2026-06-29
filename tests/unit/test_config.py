@@ -92,3 +92,29 @@ def test_allow_mcp_overlays_from_file(tmp_path: Path) -> None:
     path = tmp_path / "settings.json"
     write_settings({"allow_mcp": True}, path)
     assert Settings.load(path).allow_mcp is True
+
+
+def test_tool_selection_defaults() -> None:
+    s = Settings()
+    assert s.tool_budget == 20
+    assert s.tool_selection == "lexical"
+    assert s.tool_core_extra == []
+    assert s.tool_core_remove == []
+
+
+def test_tool_selection_overlays_from_file(tmp_path: Path) -> None:
+    path = tmp_path / "settings.json"
+    write_settings(
+        {
+            "tool_budget": 12,
+            "tool_selection": "all",
+            "tool_core_extra": ["slack__search"],
+            "tool_core_remove": ["disk_space"],
+        },
+        path,
+    )
+    s = Settings.load(path)
+    assert s.tool_budget == 12
+    assert s.tool_selection == "all"
+    assert s.tool_core_extra == ["slack__search"]
+    assert s.tool_core_remove == ["disk_space"]

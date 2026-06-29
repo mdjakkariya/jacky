@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import contextlib
 import json
-from dataclasses import asdict, dataclass, fields, replace
+from dataclasses import asdict, dataclass, field, fields, replace
 from pathlib import Path
 from typing import Any
 
@@ -178,6 +178,18 @@ class Settings:
     # Master gate for the whole MCP subsystem, mirroring allow_web. Off by default;
     # individual servers are still each opt-in via ~/.autobot/mcp/servers.json.
     allow_mcp: bool = False
+    # --- tool selection / context budget ---
+    # Per-turn tool advertising is relevance-gated: a small always-on "core" set
+    # plus the top tools the ToolSelector judges relevant to the user's message,
+    # bounded by tool_budget. This keeps context (and cost, and a small model's
+    # tool-selection accuracy) from growing with the number of registered/MCP tools.
+    # tool_selection: "lexical" (on-device keyword ranking, default) or "all"
+    # (advertise every tool — the pre-optimization behavior, for debugging).
+    tool_budget: int = 20
+    tool_selection: str = "lexical"
+    # Tool names to force into / out of the core set without code edits.
+    tool_core_extra: list[str] = field(default_factory=list)
+    tool_core_remove: list[str] = field(default_factory=list)
     # --- daemon (Phase 3c) ---
     daemon_host: str = "127.0.0.1"
     daemon_port: int = 8765
