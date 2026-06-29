@@ -205,6 +205,92 @@ def test_add_or_update_server_rejects_missing_id(tmp_path: Path) -> None:
     assert "id" in result["error"]
 
 
+def _http_cfg(
+    server_id: str,
+    *,
+    auth_type: str = "oauth",
+    enabled: bool = False,
+) -> McpServerConfig:
+    """An HTTP server config for start_oauth tests."""
+    return McpServerConfig(
+        id=server_id,
+        label=server_id,
+        transport="http",
+        url="http://localhost:9999",
+        auth_type=auth_type,
+        enabled=enabled,
+    )
+
+
+def test_start_oauth_unknown_server_returns_error() -> None:
+    mgr = McpManager({}, ToolRegistry())
+    result = mgr.start_oauth("nonexistent")
+    assert result["ok"] is False
+    assert "unknown" in result["error"]
+
+
+def test_start_oauth_stdio_server_returns_error() -> None:
+    cfg = _cfg("stdio-srv", enabled=False)
+    mgr = McpManager({"stdio-srv": cfg}, ToolRegistry())
+    result = mgr.start_oauth("stdio-srv")
+    assert result["ok"] is False
+    assert "http" in result["error"]
+
+
+def test_start_oauth_non_oauth_http_returns_error() -> None:
+    cfg = _http_cfg("token-srv", auth_type="token")
+    mgr = McpManager({"token-srv": cfg}, ToolRegistry())
+    result = mgr.start_oauth("token-srv")
+    assert result["ok"] is False
+    assert "oauth" in result["error"]
+
+
+def test_start_oauth_none_auth_http_returns_error() -> None:
+    cfg = _http_cfg("none-srv", auth_type="none")
+    mgr = McpManager({"none-srv": cfg}, ToolRegistry())
+    result = mgr.start_oauth("none-srv")
+    assert result["ok"] is False
+    assert "oauth" in result["error"]
+
+
+def test_start_oauth_valid_calls_connect_and_returns_ok() -> None:
+    from unittest.mock import MagicMock
+
+    cfg = _http_cfg("oauth-srv", auth_type="oauth")
+    mgr = McpManager({"oauth-srv": cfg}, ToolRegistry())
+
+    # Replace connect with a spy so no real event loop or worker is spawned.
+    mock_connect = MagicMock()
+    mgr.connect = mock_connect  # type: ignore[method-assign]
+
+    result = mgr.start_oauth("oauth-srv")
+
+    assert result == {"ok": True, "started": True}
+    mock_connect.assert_called_once_with("oauth-srv")
+
+
+def test_start_oauth_valid_disconnects_if_already_connected() -> None:
+    from unittest.mock import MagicMock, patch
+
+    cfg = _http_cfg("oauth-srv2", auth_type="oauth")
+    mgr = McpManager({"oauth-srv2": cfg}, ToolRegistry())
+
+    # Seed _workers to simulate an already-connected server.
+    mgr._workers["oauth-srv2"] = object()  # type: ignore[assignment]
+
+    mock_disconnect = MagicMock()
+    mock_connect = MagicMock()
+    with (
+        patch.object(mgr, "disconnect", mock_disconnect),
+        patch.object(mgr, "connect", mock_connect),
+    ):
+        result = mgr.start_oauth("oauth-srv2")
+
+    assert result == {"ok": True, "started": True}
+    mock_disconnect.assert_called_once_with("oauth-srv2")
+    mock_connect.assert_called_once_with("oauth-srv2")
+
+
 def test_concurrent_status_and_crud_does_not_raise(tmp_path: Path) -> None:
     """RLock stress test: concurrent status() reads and add/remove CRUD must not raise."""
     p = _write_servers_json(tmp_path, {})

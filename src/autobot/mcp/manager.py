@@ -324,6 +324,34 @@ class McpManager:
                 self.connect(server_id)
             return True
 
+    def start_oauth(self, server_id: str) -> dict[str, Any]:
+        """Trigger the OAuth flow for an oauth HTTP server.
+
+        Connects (or reconnects) the server, which will trigger the browser-open +
+        loopback callback flow on the worker's event loop and emit ``mcp_oauth`` stage
+        events through ``on_event``. The method is non-blocking: it schedules the
+        connect and returns immediately. The UI polls ``mcp_status`` and listens for
+        ``mcp_oauth`` events.
+
+        Args:
+            server_id: The server's config id.
+
+        Returns:
+            ``{"ok": True, "started": True}`` or ``{"ok": False, "error": str}``.
+        """
+        with self._lock:
+            cfg = self._config.get(server_id)
+            if cfg is None:
+                return {"ok": False, "error": f"unknown server: {server_id!r}"}
+            if cfg.transport != "http":
+                return {"ok": False, "error": "auth/start only applies to http transport"}
+            if cfg.auth_type != "oauth":
+                return {"ok": False, "error": f"server {server_id!r} is not oauth"}
+            if server_id in self._workers:
+                self.disconnect(server_id)
+            self.connect(server_id)
+        return {"ok": True, "started": True}
+
     def secret_present(self, server_id: str) -> bool:
         """Whether the Keychain secret referenced by this server's config is set.
 

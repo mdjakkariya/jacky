@@ -514,10 +514,15 @@ def create_app(
         return {"ok": ok} if ok else {"ok": False, "error": f"unknown server: {server_id!r}"}
 
     async def post_mcp_auth_start(server_id: str) -> dict[str, Any]:
-        """OAuth start — stub until Phase 6."""
+        """Initiate the OAuth 2.1 flow for an oauth HTTP server.
+
+        Disconnects any existing worker and reconnects, which triggers the
+        browser-open + loopback callback inside the worker's event loop. Stage
+        events (``mcp_oauth``) are published via the WS event bus. Non-blocking.
+        """
         if mcp is None:
             return _mcp_disabled
-        return {"ok": False, "error": "oauth not yet supported (phase 6)"}
+        return await asyncio.to_thread(mcp.start_oauth, server_id)
 
     # Register routes explicitly (rather than via decorators) so the handlers
     # stay statically typed under mypy strict — FastAPI ships no type info here.

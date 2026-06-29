@@ -432,6 +432,11 @@ class _FakeMcp:
     ) -> bool:
         return server_id in self._servers
 
+    def start_oauth(self, server_id: str) -> dict[str, Any]:
+        if server_id not in self._servers:
+            return {"ok": False, "error": f"unknown server: {server_id!r}"}
+        return {"ok": True, "started": True}
+
 
 def _mcp_client(mcp: _FakeMcp) -> TestClient:
     bus = EventBus()
@@ -542,11 +547,28 @@ def test_mcp_set_tool_override() -> None:
     assert resp["ok"] is True
 
 
-def test_mcp_auth_start_returns_phase6_stub() -> None:
+def test_mcp_auth_start_passthrough() -> None:
+    """Endpoint passes the manager's start_oauth return value through unchanged."""
     client = _mcp_client(_FakeMcp())
     resp = client.post("/mcp/servers/echo/auth/start").json()
+    assert resp == {"ok": True, "started": True}
+
+
+def test_mcp_auth_start_unknown_server_passthrough() -> None:
+    """Endpoint forwards the manager's error for an unknown server id."""
+    client = _mcp_client(_FakeMcp())
+    resp = client.post("/mcp/servers/no-such-srv/auth/start").json()
     assert resp["ok"] is False
-    assert "phase 6" in resp["error"]
+    assert "unknown" in resp["error"]
+
+
+def test_mcp_auth_start_when_disabled() -> None:
+    """When MCP is disabled the endpoint returns the standard mcp-disabled error."""
+    bus = EventBus()
+    client = TestClient(create_app(bus))  # no mcp= → disabled
+    resp = client.post("/mcp/servers/echo/auth/start").json()
+    assert resp["ok"] is False
+    assert "mcp disabled" in resp["error"]
 
 
 def test_mcp_tool_override_accepts_valid_risk() -> None:
