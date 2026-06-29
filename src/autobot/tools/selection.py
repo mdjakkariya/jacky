@@ -295,7 +295,7 @@ class EmbeddingToolSelector:
                 )
             return [s for s, _ in score_tools(query, gated)]
         ranked = sorted(scored, key=lambda p: (-p[1], p[0].name))
-        return [s for s, _ in ranked]
+        return [s for s, sim in ranked if sim > 0.0]
 
     def select(self, query: str, *, pinned: frozenset[str] = frozenset()) -> list[ToolSpec]:
         """Return core | top-K embedding-ranked gated | pinned, deduped and bounded."""

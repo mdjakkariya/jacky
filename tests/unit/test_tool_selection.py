@@ -173,6 +173,19 @@ def test_search_empty_intent_returns_empty() -> None:
     assert AllToolsSelector(_reg()).search("") == []
 
 
+def test_embedding_search_no_match_returns_empty() -> None:
+    # All tool vectors point in the [0, 1] direction; the query is orthogonal [1, 0].
+    # Cosine similarity is 0 for every gated tool → _rank_gated drops all → search returns [].
+    # Locks the protocol contract: EmbeddingToolSelector.search mirrors lexical on no match.
+    table = {
+        "slack__send": [0.0, 1.0],
+        "github__issue": [0.0, 1.0],
+        "orthogonal query": [1.0, 0.0],  # query direction orthogonal to all tool vectors
+    }
+    names = _embedding(_reg(), _fake_embedder(table, default=[0.0, 1.0])).search("orthogonal query")
+    assert names == []
+
+
 def test_cosine_identical_is_one_orthogonal_is_zero() -> None:
     assert cosine([1.0, 0.0], [1.0, 0.0]) == 1.0
     assert cosine([1.0, 0.0], [0.0, 1.0]) == 0.0
@@ -228,17 +241,20 @@ def _embedding(
 
 
 def test_embedding_ranks_gated_by_cosine() -> None:
-    # Query vector points at slack__send; github__issue is orthogonal → excluded by K? No —
-    # K leaves room, but cosine 0 ranks it last; assert slack is chosen and ranked first.
+    # Query vector points at slack__send (cosine=1.0); github__issue has a small positive
+    # component in the same direction (cosine≈0.196) so it passes the >0 filter but ranks
+    # below slack.  This proves both cosine RANKING and that the >0 filter is not overly
+    # aggressive (a tool with even a little overlap is kept).
     table = {
         "slack__send": [1.0, 0.0],
-        "github__issue": [0.0, 1.0],
+        "github__issue": [0.2, 1.0],  # non-zero cosine with [1,0] → present but ranked below
         "send a message via slack": [1.0, 0.0],  # query → slack direction
     }
     names = [
         s.name for s in _embedding(_reg(), _fake_embedder(table)).select("send a message via slack")
     ]
     assert "slack__send" in names
+    assert "github__issue" in names  # small positive cosine → kept
     assert names.index("slack__send") < names.index("github__issue")  # cosine ranks slack first
 
 
