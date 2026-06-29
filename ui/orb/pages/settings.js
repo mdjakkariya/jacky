@@ -14,6 +14,11 @@ import { showAddConnection, hideAddConnection } from "../components/add-connecti
 import { showConnectionDetail, hideConnectionDetail } from "../components/connection-detail/connection-detail.js";
 import { privacyExits, renderPrivacySummary } from "./privacy-summary.js";
 
+// Open the daemon WebSocket so live events (mcp_status / mcp_oauth) reach the
+// Settings window — the connections list, connection detail, and the add-connection
+// wizard all subscribe via daemon.on(...) and otherwise would never update live.
+daemon.connect();
+
 const CHECKS = ["tts_enabled", "barge_in", "aec", "allow_app_control", "allow_system_info", "allow_memory", "allow_file_search", "allow_clipboard", "allow_reminders", "allow_file_io", "allow_web", "allow_mcp"];
 
 // --- status line ------------------------------------------------------------

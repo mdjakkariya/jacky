@@ -507,8 +507,15 @@ function renderOAuthExplainer(wrap, state, callbacks) {
       if (m.server !== id || settled) return;
       if (m.state === "connected") {
         settled = true; cleanup();
-        setStatus("Connected!", "ok");
-        setTimeout(() => callbacks.onDone(), 600);
+        // Success state: animated checkmark + server label (nicer than plain text).
+        statusEl.textContent = "";
+        const ok = div("oauth-success");
+        ok.appendChild(div("oauth-check", "✓"));
+        const lbl = document.createElement("span");
+        lbl.textContent = "Connected to " + (state.catalogEntry ? state.catalogEntry.label : id);
+        ok.appendChild(lbl);
+        statusEl.appendChild(ok);
+        setTimeout(() => callbacks.onDone(), 1100);
       } else if (m.state === "error") {
         settled = true; cleanup();
         setStatus("Sign-in failed — " + (m.error || "check the server URL and try again."), "error");

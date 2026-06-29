@@ -446,8 +446,8 @@ describe("Step 4 — OAuth path", () => {
     await Promise.resolve();
 
     daemon.__emit("mcp_status", { server: "slack", state: "connected" });
-    expect(container.querySelector(".oauth-status").textContent.toLowerCase()).toContain("connected");
-    vi.advanceTimersByTime(700); // the onDone is fired after a short success delay
+    expect(container.querySelector(".oauth-success").textContent.toLowerCase()).toContain("connected");
+    vi.advanceTimersByTime(1200); // onDone fires after the success state lingers briefly
     expect(onDone).toHaveBeenCalled();
     vi.useRealTimers();
   });
