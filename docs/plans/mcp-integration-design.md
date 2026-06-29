@@ -578,3 +578,48 @@ Phase 6 unit coverage lives in:
 5. **`McpManager.set_confirmer()`** is a setter rather than a constructor parameter to keep
    backward compatibility with tests that construct `McpManager` without a confirmer. The
    default (no confirmer) auto-approves spawns (existing behavior), so no existing test breaks.
+
+---
+
+### OAuth with a pre-registered app (servers without dynamic registration)
+
+Some MCP servers — notably **Slack** (`mcp.slack.com`) and **GitHub**
+(`api.githubcopilot.com/mcp`) — do not publish a `registration_endpoint` in their
+authorization server metadata. The SDK's Dynamic Client Registration (DCR) fallback
+returns a 404. These servers require a **pre-registered OAuth app**: a `client_id`
+(and, for Slack, a `client_secret`).
+
+**Why the redirect URI must be fixed.** The registered redirect URI must match
+exactly. Jack therefore uses a fixed loopback port for pre-registered apps:
+
+```
+http://127.0.0.1:8975/callback
+```
+
+Register this URL exactly as-is in your OAuth app's settings.
+
+**Slack setup** (`mcp.slack.com`)
+
+1. Go to [api.slack.com/apps](https://api.slack.com/apps) and create a new app (or use an existing one).
+2. Under **OAuth & Permissions**, add `http://127.0.0.1:8975/callback` to **Redirect URLs**.
+3. Copy the **Client ID** and **Client Secret** from **Basic Information**.
+4. User scopes come from the MCP server's own metadata — you do not need to add them manually.
+5. In the Jack wizard (step 4, OAuth), enter the Client ID and Client Secret, then click **Open browser**.
+
+**GitHub setup** (`api.githubcopilot.com/mcp`)
+
+1. Go to [github.com/settings/developers](https://github.com/settings/developers) → **New OAuth App**.
+2. Set the **Authorization callback URL** to `http://127.0.0.1:8975/callback`.
+3. Copy the **Client ID** and click **Generate a new client secret** — copy the secret immediately.
+4. In the Jack wizard (step 4, OAuth), enter the Client ID and Client Secret, then click **Open browser**.
+
+**What is stored where.** The `client_id` is persisted in `~/.autobot/mcp/servers.json`
+(config, non-secret). The `client_secret` is stored in the macOS Keychain under
+`mcp.<id>.client_secret` — never written to disk. OAuth tokens are stored in the
+Keychain under `mcp.<id>.oauth` as before.
+
+**Live flow.** The live OAuth flow is a manual smoke-test; it cannot be automated
+in unit tests because it requires a real browser and a real authorization server.
+After clicking **Open browser**, Jack opens the provider's authorization URL, waits
+on port 8975 for the redirect callback, exchanges the code for tokens, and marks
+the server connected.

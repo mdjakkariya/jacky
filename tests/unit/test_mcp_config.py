@@ -84,3 +84,22 @@ def test_save_sets_owner_only_perms(tmp_path: Path) -> None:
     p = tmp_path / "servers.json"
     save_mcp_config({}, p)
     assert (p.stat().st_mode & 0o777) == 0o600
+
+
+def test_save_then_load_roundtrips_oauth_client_id(tmp_path: Path) -> None:
+    """client_id round-trips through save_mcp_config / load_mcp_config."""
+    p = tmp_path / "mcp" / "servers.json"
+    cfg = McpServerConfig(
+        id="slack",
+        label="Slack",
+        transport="http",
+        url="https://mcp.slack.com/mcp",
+        auth_type="oauth",
+        client_id="abc123",
+        enabled=False,
+        egress="network",
+    )
+    save_mcp_config({"slack": cfg}, p)
+    reloaded = load_mcp_config(p)
+    assert reloaded == {"slack": cfg}
+    assert reloaded["slack"].client_id == "abc123"

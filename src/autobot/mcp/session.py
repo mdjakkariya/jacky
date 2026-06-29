@@ -330,10 +330,21 @@ class McpServerWorker:
     async def _build_oauth_provider(self) -> Any:
         """Construct an OAuthClientProvider for this server.
 
-        Starts the loopback callback server (OS-assigned port), builds client
-        metadata with the loopback redirect URI, and wires :class:`KeychainTokenStorage`
-        and :func:`open_browser`. The provider is returned to ``_run_http`` which
-        passes it as ``auth=`` to ``streamablehttp_client``.
+        Chooses between two paths:
+
+        - **Pre-registered path** (when ``cfg.client_id`` is set): binds a
+          fixed loopback port (``OAUTH_CALLBACK_PORT``) and builds a
+          :class:`KeychainTokenStorage` pre-populated with the configured
+          ``client_id``, ``client_secret`` (from the Keychain), and
+          ``redirect_uri``. The storage's ``get_client_info()`` returns the
+          pre-registered ``OAuthClientInformationFull`` so the SDK skips Dynamic
+          Client Registration entirely.
+        - **DCR path** (no ``client_id``): binds an ephemeral OS-assigned port
+          and creates a plain :class:`KeychainTokenStorage`. The SDK performs
+          Dynamic Client Registration on first connect.
+
+        The provider is returned to ``_run_http`` which passes it as ``auth=``
+        to ``streamablehttp_client``.
 
         Returns:
             An ``OAuthClientProvider`` instance (an ``httpx.Auth`` subclass).
@@ -343,10 +354,30 @@ class McpServerWorker:
 
         from autobot.mcp.auth import KeychainTokenStorage, LoopbackCallbackServer, open_browser
 
-        cb_server = LoopbackCallbackServer()
-        redirect_uri = await cb_server.start()
+        client_id = self._cfg.client_id
+        client_secret = _get_secret(f"mcp.{self._cfg.id}.client_secret")
 
-        storage: Any = KeychainTokenStorage(self._cfg.id)
+        # token_endpoint_auth_method typed as Any to satisfy OAuthClientMetadata's
+        # Literal constraint without importing the mcp SDK at module level.
+        token_endpoint_auth_method: Any
+        if client_id is not None:
+            from autobot.mcp.auth import OAUTH_CALLBACK_PORT, oauth_redirect_uri  # noqa: F401
+
+            cb_server = LoopbackCallbackServer(port=OAUTH_CALLBACK_PORT)
+            redirect_uri = await cb_server.start()
+            storage: Any = KeychainTokenStorage(
+                self._cfg.id,
+                client_id=client_id,
+                client_secret=client_secret,
+                redirect_uri=redirect_uri,
+            )
+            token_endpoint_auth_method = "client_secret_post" if client_secret else "none"
+        else:
+            cb_server = LoopbackCallbackServer()
+            redirect_uri = await cb_server.start()
+            storage = KeychainTokenStorage(self._cfg.id)
+            token_endpoint_auth_method = "none"
+
         redirect_uri_any: Any = redirect_uri  # OAuthClientMetadata.redirect_uris wants AnyUrl
         # No explicit ``scope`` — the authorization server applies its default scope.
         # MCP servers that require a specific scope are not yet supported here.
@@ -355,7 +386,7 @@ class McpServerWorker:
             grant_types=["authorization_code", "refresh_token"],
             response_types=["code"],
             client_name="Jack",
-            token_endpoint_auth_method="none",  # public client (PKCE, no client_secret)
+            token_endpoint_auth_method=token_endpoint_auth_method,
         )
 
         async def redirect_handler(url: str) -> None:

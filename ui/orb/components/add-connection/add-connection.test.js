@@ -9,6 +9,7 @@ vi.mock("../../lib/daemon.js", () => {
       mcpSetToken: vi.fn().mockResolvedValue({ ok: true }),
       enableMcpServer: vi.fn().mockResolvedValue({ ok: true }),
       mcpAuthStart: vi.fn().mockResolvedValue({ ok: true, started: true }),
+      secret: vi.fn().mockResolvedValue({ ok: true }),
       on: vi.fn((type, fn) => {
         (handlers[type] = handlers[type] || []).push(fn);
         return () => { handlers[type] = (handlers[type] || []).filter((h) => h !== fn); };
@@ -426,6 +427,77 @@ describe("Step 4 — OAuth path", () => {
     const status = container.querySelector(".oauth-status.error");
     expect(status).not.toBeNull();
     expect(onDone).not.toHaveBeenCalled();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Step 4 — OAuth path with pre-registered client credentials
+// ---------------------------------------------------------------------------
+describe("Step 4 — OAuth path with pre-registered credentials", () => {
+  async function goToOAuthStep4(container, onDone = vi.fn()) {
+    showAddConnection(container, { onDone, onCancel: vi.fn() });
+    container.querySelector(".cat-item").click(); // Slack
+    container.querySelector(".btn-next").click();
+    fillUrl(container);
+    container.querySelector(".btn-next").click();
+    // OAuth is first option — click to ensure selected
+    const opts = container.querySelectorAll(".opt-item");
+    const oauthOpt = [...opts].find((o) => o.querySelector(".opt-title").textContent.toLowerCase().includes("oauth"));
+    oauthOpt.click();
+    container.querySelector(".btn-next").click();
+  }
+
+  it("renders client_id and client_secret fields on OAuth step 4", async () => {
+    const container = makeContainer();
+    await goToOAuthStep4(container);
+    expect(container.querySelector("[data-field='client_id']")).not.toBeNull();
+    expect(container.querySelector("[data-field='client_secret']")).not.toBeNull();
+  });
+
+  it("shows the fixed redirect URI to register", async () => {
+    const container = makeContainer();
+    await goToOAuthStep4(container);
+    const uriEl = container.querySelector(".oauth-redirect-uri");
+    expect(uriEl).not.toBeNull();
+    expect(uriEl.textContent).toBe("http://127.0.0.1:8975/callback");
+  });
+
+  it("'Open browser' with client_id sends descriptor with client_id and calls daemon.secret", async () => {
+    const container = makeContainer();
+    await goToOAuthStep4(container);
+
+    // Fill in pre-registered credentials
+    const clientIdInput = container.querySelector("[data-field='client_id']");
+    const clientSecretInput = container.querySelector("[data-field='client_secret']");
+    clientIdInput.value = "my-slack-client-id";
+    clientSecretInput.value = "my-slack-secret";
+
+    container.querySelector(".btn-open-browser").click();
+    await new Promise((r) => setTimeout(r, 0));
+
+    // descriptor must carry client_id
+    const descriptor = daemon.addMcpServer.mock.calls[0][0];
+    expect(descriptor.client_id).toBe("my-slack-client-id");
+
+    // daemon.secret must be called with the correct Keychain account name and secret
+    expect(daemon.secret).toHaveBeenCalledWith("mcp.slack.client_secret", "my-slack-secret");
+
+    // enableMcpServer still called
+    expect(daemon.enableMcpServer).toHaveBeenCalledWith("slack");
+  });
+
+  it("'Open browser' without client_id does NOT call daemon.secret", async () => {
+    const container = makeContainer();
+    await goToOAuthStep4(container);
+
+    // Leave credentials blank
+    container.querySelector(".btn-open-browser").click();
+    await new Promise((r) => setTimeout(r, 0));
+
+    expect(daemon.secret).not.toHaveBeenCalled();
+    // descriptor must not carry client_id
+    const descriptor = daemon.addMcpServer.mock.calls[0][0];
+    expect(descriptor.client_id).toBeUndefined();
   });
 });
 

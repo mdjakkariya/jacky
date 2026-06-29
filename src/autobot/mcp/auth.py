@@ -26,7 +26,7 @@ import asyncio
 import json
 import webbrowser
 from collections.abc import Callable
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING, Any, cast
 
 if TYPE_CHECKING:
     from autobot.mcp.config import McpServerConfig
@@ -84,12 +84,33 @@ class KeychainTokenStorage:
     Args:
         server_id: The MCP server's config id (e.g. ``"github"``).
         runner: Optional Keychain runner for testing (defaults to subprocess).
+        client_id: When set, this storage represents a **pre-registered** OAuth
+            app. ``get_client_info()`` returns a constructed
+            ``OAuthClientInformationFull`` directly (bypassing Keychain) so the
+            SDK skips Dynamic Client Registration entirely. ``set_client_info()``
+            becomes a no-op (the pre-registered identity must not be overwritten).
+        client_secret: The OAuth client secret for the pre-registered app.
+            Stored in the Keychain under ``mcp.<id>.client_secret`` by the caller;
+            passed in here already resolved. **Never logged.**
+        redirect_uri: The fixed redirect URI that was registered with the OAuth
+            app (e.g. ``http://127.0.0.1:8975/callback``).
     """
 
-    def __init__(self, server_id: str, runner: Runner | None = None) -> None:
+    def __init__(
+        self,
+        server_id: str,
+        runner: Runner | None = None,
+        *,
+        client_id: str | None = None,
+        client_secret: str | None = None,
+        redirect_uri: str | None = None,
+    ) -> None:
         self._token_key = f"mcp.{server_id}.oauth"
         self._client_key = f"mcp.{server_id}.client"
         self._runner = runner
+        self._client_id = client_id
+        self._client_secret = client_secret
+        self._redirect_uri = redirect_uri
 
     async def get_tokens(self) -> object | None:
         """Return the stored OAuthToken, or None if absent/unparseable.
@@ -128,10 +149,36 @@ class KeychainTokenStorage:
     async def get_client_info(self) -> object | None:
         """Return the stored OAuthClientInformationFull, or None.
 
+        When this storage was constructed with a ``client_id`` (pre-registered
+        OAuth app), returns a freshly constructed ``OAuthClientInformationFull``
+        directly — no Keychain read required, and the SDK will skip Dynamic
+        Client Registration because ``context.client_info`` is already set.
+
         Returns:
             An ``OAuthClientInformationFull`` instance, or ``None`` when absent
             or unparseable.
         """
+        if self._client_id is not None:
+            from mcp.shared.auth import OAuthClientInformationFull  # lazy
+
+            # OAuthClientInformationFull.redirect_uris expects list[AnyUrl]; cast to Any
+            # so mypy doesn't reject the plain string — pydantic coerces it at runtime.
+            redirect_uris_any: Any = [self._redirect_uri]
+            return cast(
+                object,
+                OAuthClientInformationFull(
+                    redirect_uris=redirect_uris_any,
+                    client_id=self._client_id,
+                    client_secret=self._client_secret,
+                    token_endpoint_auth_method=(
+                        "client_secret_post" if self._client_secret else "none"
+                    ),
+                    grant_types=["authorization_code", "refresh_token"],
+                    response_types=["code"],
+                    client_name="Jack",
+                ),
+            )
+
         from mcp.shared.auth import OAuthClientInformationFull  # lazy
 
         from autobot.secrets import get_secret
@@ -147,6 +194,11 @@ class KeychainTokenStorage:
     async def set_client_info(self, info: object) -> None:
         """Persist OAuthClientInformationFull to the Keychain.
 
+        When this storage was constructed with a ``client_id`` (pre-registered
+        OAuth app), this is a **no-op** — the SDK calls ``set_client_info`` after
+        Dynamic Client Registration, but for a pre-registered app we must not
+        overwrite the configured identity.
+
         The serialized value is written directly to the Keychain and is
         **never** logged or printed.
 
@@ -154,6 +206,9 @@ class KeychainTokenStorage:
             info: An ``OAuthClientInformationFull`` (or any pydantic model with
                 ``model_dump_json``).
         """
+        if self._client_id is not None:
+            return  # pre-registered client — never overwrite with DCR result
+
         from autobot.secrets import set_secret
 
         raw = info.model_dump_json()  # type: ignore[attr-defined]
@@ -184,6 +239,20 @@ def open_browser(url: str) -> None:
 
 _LOOPBACK_TIMEOUT_S = 120.0  # 2 minutes; user must complete the browser flow
 
+# Fixed loopback port for OAuth servers that require a PRE-REGISTERED redirect URI
+# (no dynamic client registration). The user registers this exact URI with their app.
+OAUTH_CALLBACK_PORT = 8975
+
+
+def oauth_redirect_uri() -> str:
+    """The fixed loopback redirect URI to register with a pre-registered OAuth app.
+
+    Returns:
+        The redirect URI string ``http://127.0.0.1:8975/callback`` that must be
+        registered exactly as-is with the OAuth app (e.g. Slack, GitHub).
+    """
+    return f"http://127.0.0.1:{OAUTH_CALLBACK_PORT}/callback"
+
 
 class LoopbackCallbackServer:
     """One-shot loopback HTTP server that captures the OAuth callback.
@@ -202,10 +271,15 @@ class LoopbackCallbackServer:
     Args:
         timeout: Seconds to wait for the OAuth callback before raising
             ``asyncio.TimeoutError``. Defaults to 120 s.
+        port: The TCP port to bind. ``0`` (the default) lets the OS pick a free
+            ephemeral port (suitable for servers that support dynamic client
+            registration). Pass a fixed port (e.g. ``OAUTH_CALLBACK_PORT``) when
+            the server requires a pre-registered redirect URI.
     """
 
-    def __init__(self, timeout: float = _LOOPBACK_TIMEOUT_S) -> None:
+    def __init__(self, timeout: float = _LOOPBACK_TIMEOUT_S, port: int = 0) -> None:
         self._timeout = timeout
+        self._fixed_port = port
         self._port: int | None = None
         self._result: asyncio.Future[tuple[str, str | None]] | None = None
         self._server: asyncio.AbstractServer | None = None
@@ -215,11 +289,14 @@ class LoopbackCallbackServer:
 
         Returns:
             The redirect URI to register: ``http://127.0.0.1:<port>/callback``.
+            When ``port=0`` was passed to the constructor, the OS assigns the
+            actual port; when a fixed port was given it is used directly.
         """
         loop = asyncio.get_running_loop()
         self._result = loop.create_future()
-        self._server = await asyncio.start_server(self._handle, "127.0.0.1", 0)
-        # Retrieve the OS-assigned port from the first socket.
+        self._server = await asyncio.start_server(self._handle, "127.0.0.1", self._fixed_port)
+        # Retrieve the actual bound port from the first socket (always correct,
+        # even when a fixed port was requested and the OS chose the same value).
         sockets = self._server.sockets
         assert sockets, "asyncio.start_server returned no sockets"
         self._port = sockets[0].getsockname()[1]

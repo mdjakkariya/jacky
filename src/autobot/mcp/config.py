@@ -38,6 +38,7 @@ class McpServerConfig:
     env: dict[str, str] = field(default_factory=dict)
     url: str | None = None
     auth_type: str = "none"
+    client_id: str | None = None
     token_env: str | None = None
     secret_ref: str | None = None
     enabled: bool = False
@@ -79,6 +80,7 @@ def _coerce_server(server_id: str, data: dict[str, Any]) -> McpServerConfig | No
         env=_str_map(data.get("env")),
         url=_opt_str(data.get("url")),
         auth_type=auth_type,
+        client_id=_opt_str(data.get("client_id")),
         token_env=_opt_str(data.get("token_env")),
         secret_ref=_opt_str(data.get("secret_ref")),
         enabled=bool(data.get("enabled", False)),
@@ -100,6 +102,7 @@ def _to_json(cfg: McpServerConfig) -> dict[str, Any]:
         "env": dict(cfg.env),
         "url": cfg.url,
         "auth": {"type": cfg.auth_type},
+        "client_id": cfg.client_id,
         "token_env": cfg.token_env,
         "secret_ref": cfg.secret_ref,
         "enabled": cfg.enabled,

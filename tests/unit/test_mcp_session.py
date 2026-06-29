@@ -196,6 +196,43 @@ def test_build_oauth_provider_returns_correct_type_with_keychain_storage(
     assert isinstance(storage, KeychainTokenStorage)
     # KeychainTokenStorage uses "mcp.<server_id>.oauth" as the token key
     assert storage._token_key == "mcp.my-mcp-server.oauth"
+    # DCR path: no pre-registered client_id
+    assert storage._client_id is None
+
+
+def test_build_oauth_provider_pre_registered_client(
+    worker_loop: asyncio.AbstractEventLoop,
+) -> None:
+    """_build_oauth_provider wires client_id + client_secret for pre-registered OAuth apps."""
+    pytest.importorskip("mcp")  # skip if mcp extra absent
+    from mcp.client.auth import OAuthClientProvider
+
+    from autobot.mcp.auth import KeychainTokenStorage, LoopbackCallbackServer
+
+    cfg = McpServerConfig(
+        id="slack",
+        label="Slack",
+        transport="http",
+        auth_type="oauth",
+        client_id="slack-client-id-abc",
+        url="https://mcp.slack.com/mcp",
+    )
+    worker = McpServerWorker(cfg, ToolRegistry(), loop=worker_loop)
+
+    async def _fake_start(self: LoopbackCallbackServer) -> str:
+        return "http://127.0.0.1:8975/callback"
+
+    with (
+        patch.object(LoopbackCallbackServer, "start", _fake_start),
+        patch("autobot.mcp.session._get_secret", return_value="slack-secret-xyz"),
+    ):
+        provider = asyncio.run(worker._build_oauth_provider())
+
+    assert isinstance(provider, OAuthClientProvider)
+    storage = provider.context.storage
+    assert isinstance(storage, KeychainTokenStorage)
+    assert storage._client_id == "slack-client-id-abc"
+    assert storage._client_secret == "slack-secret-xyz"
 
 
 # ---------------------------------------------------------------------------

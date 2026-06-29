@@ -11,8 +11,10 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from autobot.mcp.auth import (
+    OAUTH_CALLBACK_PORT,
     KeychainTokenStorage,
     LoopbackCallbackServer,
+    oauth_redirect_uri,
     open_browser,
     stdio_env_for,
 )
@@ -182,6 +184,42 @@ class _FakeClientInfo:
     def model_validate(cls, data: object) -> _FakeClientInfo:
         assert isinstance(data, dict)
         return cls(data["client_id"])
+
+
+class _FakeClientInfoFull:
+    """Stand-in for OAuthClientInformationFull with full constructor kwargs support.
+
+    Mirrors the kwargs accepted by the real ``OAuthClientInformationFull`` so tests
+    can patch ``mcp.shared.auth.OAuthClientInformationFull`` with this class and
+    verify the arguments passed by ``KeychainTokenStorage.get_client_info()``.
+    """
+
+    def __init__(
+        self,
+        *,
+        redirect_uris: list[object],
+        client_id: str,
+        client_secret: str | None = None,
+        token_endpoint_auth_method: str = "none",
+        grant_types: list[str] | None = None,
+        response_types: list[str] | None = None,
+        client_name: str | None = None,
+    ) -> None:
+        self.redirect_uris = redirect_uris
+        self.client_id = client_id
+        self.client_secret = client_secret
+        self.token_endpoint_auth_method = token_endpoint_auth_method
+        self.grant_types = grant_types
+        self.response_types = response_types
+        self.client_name = client_name
+
+    def model_dump_json(self) -> str:
+        return json.dumps({"client_id": self.client_id})
+
+    @classmethod
+    def model_validate(cls, data: object) -> _FakeClientInfoFull:
+        assert isinstance(data, dict)
+        return cls(redirect_uris=[], client_id=data["client_id"])
 
 
 def test_keychain_get_tokens_returns_none_when_absent() -> None:
@@ -490,3 +528,117 @@ def test_loopback_times_out() -> None:
 
     with pytest.raises(asyncio.TimeoutError):
         asyncio.run(_run())
+
+
+def test_loopback_fixed_port_stored() -> None:
+    """LoopbackCallbackServer(port=N) stores the fixed port in _fixed_port without binding."""
+    server = LoopbackCallbackServer(port=12345)
+    assert server._fixed_port == 12345
+
+
+def test_loopback_default_port_zero() -> None:
+    """LoopbackCallbackServer() stores 0 as the default fixed port."""
+    server = LoopbackCallbackServer()
+    assert server._fixed_port == 0
+
+
+# ---------------------------------------------------------------------------
+# OAUTH_CALLBACK_PORT and oauth_redirect_uri
+# ---------------------------------------------------------------------------
+
+
+def test_oauth_callback_port_constant() -> None:
+    """OAUTH_CALLBACK_PORT is 8975."""
+    assert OAUTH_CALLBACK_PORT == 8975
+
+
+def test_oauth_redirect_uri_format() -> None:
+    """oauth_redirect_uri returns the expected fixed redirect URI."""
+    assert oauth_redirect_uri() == "http://127.0.0.1:8975/callback"
+
+
+# ---------------------------------------------------------------------------
+# KeychainTokenStorage — pre-registered client path
+# ---------------------------------------------------------------------------
+
+
+def test_keychain_get_client_info_returns_preregistered_when_client_id_set() -> None:
+    """get_client_info returns a pre-built client when client_id is configured."""
+    store: dict[str, str] = {}
+    runner = _make_fake_runner(store)
+    storage = KeychainTokenStorage(
+        "slack",
+        runner=runner,
+        client_id="my-client-id",
+        client_secret="my-secret",
+        redirect_uri="http://127.0.0.1:8975/callback",
+    )
+
+    with patch.dict(
+        "sys.modules",
+        {
+            "mcp": MagicMock(),
+            "mcp.shared": MagicMock(),
+            "mcp.shared.auth": MagicMock(OAuthClientInformationFull=_FakeClientInfoFull),
+        },
+    ):
+        result = asyncio.run(storage.get_client_info())
+
+    assert result is not None
+    assert isinstance(result, _FakeClientInfoFull)
+    assert result.client_id == "my-client-id"
+    assert result.client_secret == "my-secret"
+    assert result.token_endpoint_auth_method == "client_secret_post"
+    # No Keychain read should have occurred for the client key
+    assert "mcp.slack.client" not in store
+
+
+def test_keychain_get_client_info_auth_method_none_when_no_secret() -> None:
+    """get_client_info uses token_endpoint_auth_method='none' when no client_secret."""
+    store: dict[str, str] = {}
+    runner = _make_fake_runner(store)
+    storage = KeychainTokenStorage(
+        "github",
+        runner=runner,
+        client_id="gh-client-id",
+        client_secret=None,
+        redirect_uri="http://127.0.0.1:8975/callback",
+    )
+
+    with patch.dict(
+        "sys.modules",
+        {
+            "mcp": MagicMock(),
+            "mcp.shared": MagicMock(),
+            "mcp.shared.auth": MagicMock(OAuthClientInformationFull=_FakeClientInfoFull),
+        },
+    ):
+        result = asyncio.run(storage.get_client_info())
+
+    assert result is not None
+    assert isinstance(result, _FakeClientInfoFull)
+    assert result.client_id == "gh-client-id"
+    assert result.token_endpoint_auth_method == "none"
+
+
+def test_keychain_set_client_info_noop_when_client_id_set() -> None:
+    """set_client_info does NOT write to Keychain when client_id is configured."""
+    store: dict[str, str] = {}
+    runner = _make_fake_runner(store)
+    storage = KeychainTokenStorage(
+        "slack",
+        runner=runner,
+        client_id="my-client-id",
+        client_secret="my-secret",
+        redirect_uri="http://127.0.0.1:8975/callback",
+    )
+    fake_info = _FakeClientInfoFull(
+        redirect_uris=[],
+        client_id="dcr-assigned-id",
+        token_endpoint_auth_method="none",
+    )
+
+    asyncio.run(storage.set_client_info(fake_info))
+
+    # The pre-registered client key must NOT be written
+    assert "mcp.slack.client" not in store
