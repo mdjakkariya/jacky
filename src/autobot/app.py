@@ -294,7 +294,10 @@ def _build_llm(
         except ValueError as exc:
             log.warning("cloud LLM unavailable, falling back to local: %s", exc)
             print(f"[llm] cloud unavailable ({exc}) — using local Ollama.")
-    return OllamaLanguageModel(settings, registry, transcript, memory=memory)
+    from autobot.tools.selection import build_tool_selector
+
+    selector = build_tool_selector(settings, registry)
+    return OllamaLanguageModel(settings, registry, transcript, memory=memory, selector=selector)
 
 
 def build(
