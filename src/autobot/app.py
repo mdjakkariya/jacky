@@ -470,7 +470,6 @@ def build(
         mcp_config = load_mcp_config()
         mcp_manager = McpManager(mcp_config, registry, on_event=on_mcp_event)
         mcp_manager.start()
-        mcp_manager.connect_enabled()
         atexit.register(mcp_manager.shutdown)
         enabled = sum(1 for c in mcp_config.values() if c.enabled)
         log.info("mcp ENABLED servers=%d enabled=%d", len(mcp_config), enabled)
@@ -536,6 +535,11 @@ def build(
     confirmer = _build_confirmer(
         settings, tts, audio, stt, on_confirm, on_confirm_clear, poll_click
     )
+    # Wire the confirmer into MCP BEFORE connecting enabled servers — this ensures
+    # stdio spawn-consent prompts go through the gate rather than auto-approving.
+    if mcp_manager is not None:
+        mcp_manager.set_confirmer(confirmer)
+        mcp_manager.connect_enabled()
     # Permission-aware: refuse a tool whose macOS permission is missing (and open the
     # right Settings pane) instead of letting it fail deep in AppleScript.
     from autobot import permissions

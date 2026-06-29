@@ -432,3 +432,208 @@ def test_sync_tools_mixed_scenario(tmp_path: Path) -> None:
     loaded = load_approvals(approval_path)
     assert loaded.fingerprints["srv"][reg_new] == adapter.fingerprint(tool_new)
     assert loaded.fingerprints["srv"][reg_changed] == "stale_wrong_fingerprint"
+
+
+# ---------------------------------------------------------------------------
+# Fake confirmers for spawn-consent tests
+# ---------------------------------------------------------------------------
+
+
+class _AlwaysAllowConfirmer:
+    """Confirmer that approves every prompt and records the calls it receives."""
+
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, str]] = []
+
+    def confirm(self, prompt: str, kind: str = "danger") -> bool:
+        self.calls.append((prompt, kind))
+        return True
+
+    def choose(
+        self,
+        prompt: str,
+        options: list[dict[str, str]],
+        kind: str = "read",
+        default: str = "read",
+    ) -> str:
+        return default
+
+
+class _AlwaysDenyConfirmer:
+    """Confirmer that rejects every prompt."""
+
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, str]] = []
+
+    def confirm(self, prompt: str, kind: str = "danger") -> bool:
+        self.calls.append((prompt, kind))
+        return False
+
+    def choose(
+        self,
+        prompt: str,
+        options: list[dict[str, str]],
+        kind: str = "read",
+        default: str = "read",
+    ) -> str:
+        return ""
+
+
+class _NeverCallConfirmer:
+    """Confirmer that raises AssertionError if called — proves confirm was NOT invoked."""
+
+    def confirm(self, prompt: str, kind: str = "danger") -> bool:
+        raise AssertionError("confirm() should NOT have been called")
+
+    def choose(
+        self,
+        prompt: str,
+        options: list[dict[str, str]],
+        kind: str = "read",
+        default: str = "read",
+    ) -> str:
+        raise AssertionError("choose() should NOT have been called")
+
+
+def _make_consent_worker(
+    loop: asyncio.AbstractEventLoop,
+    approvals_path: Path,
+    confirmer: Any = None,
+    command: str = "uvx",
+    args: tuple[str, ...] = ("mcp-server-fetch",),
+    server_id: str = "test-server",
+) -> McpServerWorker:
+    """Build a McpServerWorker configured for spawn-consent tests."""
+    cfg = McpServerConfig(
+        id=server_id,
+        label=server_id,
+        transport="stdio",
+        command=command,
+        args=args,
+    )
+    kwargs: dict[str, Any] = {
+        "loop": loop,
+        "approvals_path": approvals_path,
+    }
+    if confirmer is not None:
+        kwargs["confirmer"] = confirmer
+    return McpServerWorker(cfg, ToolRegistry(), **kwargs)
+
+
+# ---------------------------------------------------------------------------
+# _check_spawn_consent tests
+# ---------------------------------------------------------------------------
+
+
+def test_spawn_consent_existing_matching_approval_returns_true_without_calling_confirmer(
+    tmp_path: Path,
+    worker_loop: asyncio.AbstractEventLoop,
+) -> None:
+    """Pre-seeded matching approval → True returned, confirmer never invoked."""
+    approval_path = tmp_path / "approved.json"
+    from autobot.mcp.approvals import record_spawn_approval
+
+    record_spawn_approval("test-server", "uvx", ["mcp-server-fetch"], approval_path)
+
+    never_call = _NeverCallConfirmer()
+    worker = _make_consent_worker(worker_loop, approval_path, confirmer=never_call)
+    result = asyncio.run(worker._check_spawn_consent())
+    assert result is True
+
+
+def test_spawn_consent_no_approval_always_allow_returns_true_and_writes_approval(
+    tmp_path: Path,
+    worker_loop: asyncio.AbstractEventLoop,
+) -> None:
+    """No prior approval + AlwaysAllow confirmer → True; approval persisted."""
+    approval_path = tmp_path / "approved.json"
+    confirmer = _AlwaysAllowConfirmer()
+    worker = _make_consent_worker(worker_loop, approval_path, confirmer=confirmer)
+
+    result = asyncio.run(worker._check_spawn_consent())
+
+    assert result is True
+    assert len(confirmer.calls) == 1  # confirm was called exactly once
+    loaded = load_approvals(approval_path)
+    sa = loaded.spawn_approvals.get("test-server")
+    assert sa is not None
+    assert sa.command == "uvx"
+    assert sa.args == ["mcp-server-fetch"]
+
+
+def test_spawn_consent_no_approval_always_deny_returns_false_and_no_approval_written(
+    tmp_path: Path,
+    worker_loop: asyncio.AbstractEventLoop,
+) -> None:
+    """No prior approval + AlwaysDeny confirmer → False; no approval written."""
+    approval_path = tmp_path / "approved.json"
+    confirmer = _AlwaysDenyConfirmer()
+    worker = _make_consent_worker(worker_loop, approval_path, confirmer=confirmer)
+
+    result = asyncio.run(worker._check_spawn_consent())
+
+    assert result is False
+    assert len(confirmer.calls) == 1
+    loaded = load_approvals(approval_path)
+    assert loaded.spawn_approvals.get("test-server") is None
+
+
+def test_spawn_consent_changed_args_re_prompts_and_updates_approval(
+    tmp_path: Path,
+    worker_loop: asyncio.AbstractEventLoop,
+) -> None:
+    """Existing approval with DIFFERENT args → re-prompts; approval updated on allow."""
+    approval_path = tmp_path / "approved.json"
+    from autobot.mcp.approvals import record_spawn_approval
+
+    # Pre-seed with old args
+    record_spawn_approval("test-server", "uvx", ["old-server-arg"], approval_path)
+
+    confirmer = _AlwaysAllowConfirmer()
+    # Worker has NEW args (different from seeded)
+    worker = _make_consent_worker(
+        worker_loop, approval_path, confirmer=confirmer, args=("mcp-server-fetch",)
+    )
+
+    result = asyncio.run(worker._check_spawn_consent())
+
+    assert result is True
+    assert len(confirmer.calls) == 1  # re-prompted because args changed
+    loaded = load_approvals(approval_path)
+    sa = loaded.spawn_approvals.get("test-server")
+    assert sa is not None
+    assert sa.args == ["mcp-server-fetch"]  # updated to new args
+
+
+def test_spawn_consent_no_confirmer_headless_auto_approves_and_writes(
+    tmp_path: Path,
+    worker_loop: asyncio.AbstractEventLoop,
+) -> None:
+    """confirmer=None with no prior approval → auto-approves and writes approval."""
+    approval_path = tmp_path / "approved.json"
+    # Pass no confirmer (headless path)
+    worker = _make_consent_worker(worker_loop, approval_path, confirmer=None)
+
+    result = asyncio.run(worker._check_spawn_consent())
+
+    assert result is True
+    loaded = load_approvals(approval_path)
+    sa = loaded.spawn_approvals.get("test-server")
+    assert sa is not None
+    assert sa.command == "uvx"
+    assert sa.args == ["mcp-server-fetch"]
+
+
+# ---------------------------------------------------------------------------
+# McpManager.set_confirmer test
+# ---------------------------------------------------------------------------
+
+
+def test_mcp_manager_set_confirmer_stores_confirmer() -> None:
+    """set_confirmer() wires the confirmer into _confirmer attribute."""
+    from autobot.mcp.manager import McpManager
+
+    manager = McpManager({}, ToolRegistry())
+    confirmer = _AlwaysAllowConfirmer()
+    manager.set_confirmer(confirmer)
+    assert manager._confirmer is confirmer

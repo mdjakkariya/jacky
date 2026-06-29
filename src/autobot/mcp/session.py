@@ -31,6 +31,7 @@ if TYPE_CHECKING:
     from collections.abc import Callable
 
     from autobot.mcp.config import McpServerConfig
+    from autobot.tools.permission import Confirmer
     from autobot.tools.registry import ToolRegistry
 
 _log = get_logger("mcp")
@@ -73,12 +74,14 @@ class McpServerWorker:
         loop: asyncio.AbstractEventLoop,
         on_event: Callable[[dict[str, Any]], None] | None = None,
         approvals_path: str | Path = DEFAULT_APPROVALS_PATH,
+        confirmer: Confirmer | None = None,
     ) -> None:
         self._cfg = config
         self._registry = registry
         self._loop = loop
         self._on_event = on_event
         self._approvals_path = approvals_path
+        self._confirmer = confirmer
         self._queue: asyncio.Queue[_Call | str] | None = None
         self._registered: list[str] = []
         self._state = "disconnected"
@@ -90,7 +93,7 @@ class McpServerWorker:
 
     @property
     def state(self) -> str:
-        """One of ``"disconnected"``, ``"connected"``, ``"error"``."""
+        """One of ``"disconnected"``, ``"connected"``, ``"error"``, ``"denied"``."""
         return self._state
 
     @property
@@ -157,6 +160,11 @@ class McpServerWorker:
             if self._cfg.transport == "http":
                 await self._run_http()
             else:
+                if not await self._check_spawn_consent():
+                    self._state = "denied"
+                    _log.info("mcp spawn denied by user server=%s", self._cfg.id)
+                    self._emit_status(error="spawn denied by user")
+                    return
                 await self._run_stdio()
         except Exception as exc:  # never let the worker crash the loop
             self._state = "error"
@@ -174,6 +182,49 @@ class McpServerWorker:
             self._all_tools = []  # don't serve a stale tool snapshot after disconnect
             self._emit_status()
             _log.info("mcp disconnected server=%s", self._cfg.id)
+
+    async def _check_spawn_consent(self) -> bool:
+        """Return True if spawn is approved; False if denied.
+
+        Checks approved.json first; if not approved, asks via confirmer (if wired).
+        Falls back to True (auto-allow) when no confirmer is provided (non-interactive
+        use, tests, or when consent was already granted).
+
+        IMPORTANT: ``confirmer.confirm`` is a BLOCKING call (it waits for the user via
+        the card/voice). This method runs on the manager's event loop, so the confirm
+        MUST run via ``run_in_executor`` — calling it inline would freeze the loop
+        (and every other server's worker + the message handler) until the user answers.
+
+        Returns:
+            ``True`` if the spawn is permitted, ``False`` if denied by the user.
+        """
+        from autobot.mcp.approvals import load_approvals, record_spawn_approval
+
+        af = load_approvals(self._approvals_path)
+        existing = af.spawn_approvals.get(self._cfg.id)
+        command = self._cfg.command or ""
+        args = list(self._cfg.args)
+
+        if existing is not None and existing.command == command and existing.args == args:
+            return True  # previously approved — skip the prompt
+
+        if self._confirmer is None:
+            # No UI confirmer: auto-approve (headless / non-interactive).
+            record_spawn_approval(self._cfg.id, command, args, self._approvals_path)
+            return True
+
+        args_display = " ".join(args)
+        prompt = (
+            f"Allow Jack to launch this process?\n\n"
+            f"  {command} {args_display}\n\n"
+            f"This will run as your user account."
+        )
+        # Run the blocking confirm OFF the loop thread so the loop stays responsive.
+        loop = asyncio.get_running_loop()
+        approved = await loop.run_in_executor(None, self._confirmer.confirm, prompt, "write")
+        if approved:
+            record_spawn_approval(self._cfg.id, command, args, self._approvals_path)
+        return approved
 
     async def _run_stdio(self) -> None:
         """Stdio transport branch (extracted from the original run() for clarity)."""

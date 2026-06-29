@@ -24,6 +24,7 @@ if TYPE_CHECKING:
     from collections.abc import Callable
 
     from autobot.mcp.config import McpServerConfig
+    from autobot.tools.permission import Confirmer
     from autobot.tools.registry import ToolRegistry
 
 _log = get_logger("mcp")
@@ -51,6 +52,16 @@ class McpManager:
         # RLock (not Lock) because CRUD methods call connect()/disconnect() internally,
         # so the same thread re-acquires the lock — a plain Lock would self-deadlock.
         self._lock = threading.RLock()
+        self._confirmer: Confirmer | None = None
+
+    def set_confirmer(self, confirmer: Confirmer) -> None:
+        """Wire a Confirmer used for stdio spawn-consent prompts.
+
+        Args:
+            confirmer: The confirmer to use for spawn-consent prompts on stdio servers.
+        """
+        with self._lock:
+            self._confirmer = confirmer
 
     def start(self) -> None:
         """Start the background event loop thread (idempotent)."""
@@ -82,7 +93,13 @@ class McpManager:
             cfg = self._config.get(server_id)
             if cfg is None or server_id in self._workers:
                 return
-            worker = McpServerWorker(cfg, self._registry, loop=self._loop, on_event=self._on_event)
+            worker = McpServerWorker(
+                cfg,
+                self._registry,
+                loop=self._loop,
+                on_event=self._on_event,
+                confirmer=self._confirmer,
+            )
             self._workers[server_id] = worker
             self._futures[server_id] = asyncio.run_coroutine_threadsafe(worker.run(), self._loop)
             _log.info("mcp connecting server=%s", server_id)
