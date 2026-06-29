@@ -3,15 +3,14 @@
  *  Exports showAddConnection(container, {onDone, onCancel}) and hideAddConnection(container). */
 import { daemon } from "../../lib/daemon.js";
 
-/** Static catalog of known MCP servers.
- *  Only GitHub's endpoint is a verified MCP URL; Slack/Notion ship blank so the
- *  user pastes the server URL from that provider's MCP docs (the transport step's
- *  URL field is editable for catalog entries too). */
+/** Static catalog of known MCP servers. URLs are the providers' official hosted
+ *  MCP endpoints (verified June 2026); the wizard's URL field stays editable so a
+ *  user can change one if a provider moves theirs. */
 const CATALOG = [
-  { id: "slack",  label: "Slack",       icon: "💬", transport: "http",  url: "",                                   auth: "oauth", egress: true,  desc: "OAuth · paste your Slack MCP URL" },
+  { id: "slack",  label: "Slack",       icon: "💬", transport: "http",  url: "https://mcp.slack.com/mcp",          auth: "oauth", egress: true,  desc: "OAuth" },
   { id: "github", label: "GitHub",      icon: "🐙", transport: "http",  url: "https://api.githubcopilot.com/mcp/", auth: "oauth", egress: true,  desc: "OAuth" },
   { id: "files",  label: "Local Files", icon: "📁", transport: "stdio", command: "npx @mcp/server-files",          auth: "none",  egress: false, desc: "on-device" },
-  { id: "notion", label: "Notion",      icon: "🗒️", transport: "http",  url: "",                                   auth: "oauth", egress: true,  desc: "OAuth · paste your Notion MCP URL" },
+  { id: "notion", label: "Notion",      icon: "🗒️", transport: "http",  url: "https://mcp.notion.com/mcp",         auth: "oauth", egress: true,  desc: "OAuth" },
 ];
 
 const CUSTOM_ENTRY = {
@@ -252,8 +251,8 @@ function renderTransportFields(container, state, editable) {
     input.dataset.field = "url";
     input.value = state.url || "";
     input.placeholder = "https://…/mcp";
-    // URL is always editable (even for catalog) so a flagged/blank catalog URL
-    // can be corrected before connecting.
+    // URL is always editable (even for catalog) so a prefilled official endpoint
+    // can be corrected if a provider changes theirs.
     container.appendChild(input);
   } else {
     // stdio

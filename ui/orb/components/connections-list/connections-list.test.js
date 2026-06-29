@@ -65,6 +65,16 @@ describe("ConnectionsList — rendering", () => {
     expect(list.querySelectorAll(".srv-card").length).toBe(2);
   });
 
+  it("shows an enable+restart message (no cards) when MCP is disabled", async () => {
+    daemon.mcpServers.mockResolvedValue({ ok: false, error: "mcp disabled" });
+    const list = document.getElementById("connList");
+    await list.load();
+    expect(list.querySelectorAll(".srv-card").length).toBe(0);
+    expect(list.querySelector(".add-conn-btn")).toBeNull();
+    expect(list.textContent.toLowerCase()).toContain("enable mcp connections");
+    expect(list.textContent.toLowerCase()).toContain("restart");
+  });
+
   it("renders server label in each card", async () => {
     daemon.mcpServers.mockResolvedValue({ ok: true, servers: [NET_SRV] });
     const list = document.getElementById("connList");

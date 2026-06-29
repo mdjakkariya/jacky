@@ -14,7 +14,7 @@ import { showAddConnection, hideAddConnection } from "../components/add-connecti
 import { showConnectionDetail, hideConnectionDetail } from "../components/connection-detail/connection-detail.js";
 import { privacyExits, renderPrivacySummary } from "./privacy-summary.js";
 
-const CHECKS = ["tts_enabled", "barge_in", "aec", "allow_app_control", "allow_system_info", "allow_memory", "allow_file_search", "allow_clipboard", "allow_reminders", "allow_file_io", "allow_web"];
+const CHECKS = ["tts_enabled", "barge_in", "aec", "allow_app_control", "allow_system_info", "allow_memory", "allow_file_search", "allow_clipboard", "allow_reminders", "allow_file_io", "allow_web", "allow_mcp"];
 
 // --- status line ------------------------------------------------------------
 let _statusTimer = null;
@@ -50,6 +50,16 @@ const connList = $("connList");
 if (connList) {
   connList.addEventListener("add-connection", () => openAddConnection());
   connList.addEventListener("server-select", (e) => openConnectionDetail(e.detail));
+}
+
+// The "Enable MCP connections" master toggle takes effect only on daemon restart
+// (the MCP manager is built at startup), so surface a restart hint when it changes.
+const allowMcpToggle = $("allow_mcp");
+if (allowMcpToggle) {
+  allowMcpToggle.addEventListener("change", () => {
+    const hint = $("mcpRestartHint");
+    if (hint) hint.classList.remove("hidden");
+  });
 }
 
 /** Show or hide the connections list + intro banner (so the wizard / detail

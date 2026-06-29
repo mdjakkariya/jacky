@@ -151,6 +151,11 @@
 
     <!-- CONNECTIONS -->
     <section class="panel" id="tab-connections">
+      <div class="card">
+        <div class="row"><span class="grow"><span class="label">Enable MCP connections</span><div class="desc">Let Jack use external MCP servers (off by default). Save, then restart Jack to apply.</div></span>
+          <label class="switch"><input type="checkbox" id="allow_mcp"><span class="slider"></span></label></div>
+      </div>
+      <div id="mcpRestartHint" class="note hidden">Restart Jack for this change to take effect.</div>
       <div class="mcp-banner">
         <div><strong>MCP is off by default.</strong> Connections let Jack use outside services. Servers that reach the network send data off your Mac — each is opt-in and listed below.</div>
       </div>

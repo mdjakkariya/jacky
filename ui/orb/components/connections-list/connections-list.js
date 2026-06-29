@@ -42,6 +42,18 @@ export class ConnectionsList extends HTMLElement {
     let servers = [];
     try {
       const res = await daemon.mcpServers();
+      if (res && res.ok === false) {
+        // MCP not enabled (or daemon not restarted since enabling) — guide the user.
+        this.textContent = "";
+        const msg = document.createElement("div");
+        msg.className = "srv-desc";
+        msg.style.padding = "12px 14px";
+        msg.textContent = (res.error || "").toLowerCase().includes("disabled")
+          ? "MCP is off. Turn on “Enable MCP connections” above, click Save, then restart Jack."
+          : (res.error || "Couldn’t load connections.");
+        this.appendChild(msg);
+        return;
+      }
       servers = res.servers || [];
     } catch (_) {
       const err = document.createElement("div");

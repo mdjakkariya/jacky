@@ -27,12 +27,12 @@ function makeContainer() {
   return el;
 }
 
-/** Slack/Notion catalog URLs ship blank (flagged for the user to verify). Fill the
- *  URL field on step 2 so HTTP navigation isn't blocked by the "URL required" gate.
- *  No-op for stdio entries (no URL field). */
+/** Ensure the step-2 URL field is non-empty so HTTP navigation isn't blocked by the
+ *  "URL required" gate. Catalog entries now ship official URLs, so this only fills a
+ *  truly empty field (custom servers); no-op for stdio entries (no URL field). */
 function fillUrl(container, url = "https://slack.test/mcp") {
   const u = container.querySelector("[data-field='url']");
-  if (u) u.value = url;
+  if (u && !u.value) u.value = url;
 }
 
 beforeEach(() => {
@@ -134,16 +134,16 @@ describe("Step 2 — Transport", () => {
     container.querySelector(".btn-next").click();
   }
 
-  it("catalog pick (Slack, HTTP) shows an editable URL field (blank, flagged)", () => {
+  it("catalog pick (Slack, HTTP) pre-fills its official URL (editable)", () => {
     const container = makeContainer();
-    goToStep2(container, 0); // Slack — ships blank so the user pastes a verified URL
+    goToStep2(container, 0); // Slack
     const urlField = container.querySelector("[data-field='url']");
     expect(urlField).not.toBeNull();
-    expect(urlField.value).toBe("");
+    expect(urlField.value).toBe("https://mcp.slack.com/mcp");
     expect(urlField.readOnly).toBe(false);
   });
 
-  it("catalog pick (GitHub, HTTP) pre-fills its verified URL", () => {
+  it("catalog pick (GitHub, HTTP) pre-fills its official URL", () => {
     const container = makeContainer();
     goToStep2(container, 1); // GitHub
     const urlField = container.querySelector("[data-field='url']");
