@@ -2,15 +2,15 @@
  *  and reconnect-churn tolerance (1500 ms debounce on mcp_status events). */
 import { daemon } from "../../lib/daemon.js";
 
-/** Extract hostname from an egress value like "network" or a URL string.
- *  Falls back to the raw egress value if no host can be parsed. */
+/** Extract a display hostname for a network-egress server.
+ *  Prefers srv.url (parsed via URL), falls back to the bare server id. */
 function egressHost(srv) {
   // The server object may have a `url` field; use it to get a clean hostname.
   if (srv.url) {
     try { return new URL(srv.url).hostname; } catch (_) {}
   }
-  // Fall back: use the server id to form a plausible host label
-  return srv.server + ".com";
+  // Fall back: use the bare server id (no synthetic ".com" suffix).
+  return srv.server;
 }
 
 /** Build the description text for a card given current state / tool_count. */
@@ -96,7 +96,7 @@ export class ConnectionsList extends HTMLElement {
     nameRow.appendChild(nameSpan);
 
     const pill = document.createElement("span");
-    if (srv.egress) {
+    if (srv.egress === "network") {
       pill.className = "pill net";
       pill.textContent = "↗ sends to " + egressHost(srv);
     } else {
@@ -143,9 +143,9 @@ export class ConnectionsList extends HTMLElement {
     card.appendChild(meta);
     card.appendChild(label);
 
-    // Clicking the meta column (not the toggle) emits server-select
+    // Clicking the meta column (not the toggle) emits server-select with the full row.
     meta.addEventListener("click", () => {
-      this.dispatchEvent(new CustomEvent("server-select", { bubbles: true, detail: srv.server }));
+      this.dispatchEvent(new CustomEvent("server-select", { bubbles: true, detail: srv }));
     });
 
     return card;

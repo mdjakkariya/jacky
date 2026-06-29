@@ -27,7 +27,7 @@ const LOCAL_SRV = {
   server: "localfiles",
   label: "Local Files",
   enabled: true,
-  egress: null,
+  egress: "local",
   auth_type: "stdio",
   state: "connected",
   tool_count: 4,
@@ -72,22 +72,38 @@ describe("ConnectionsList — rendering", () => {
     expect(list.querySelector(".srv-name").textContent).toContain("Slack");
   });
 
-  it("shows .pill.net badge when egress is truthy", async () => {
+  it("shows .pill.net badge and host when egress === 'network'", async () => {
+    // Provide a url so egressHost() can extract a real hostname.
+    const srvWithUrl = { ...NET_SRV, url: "https://api.slack.com" };
+    daemon.mcpServers.mockResolvedValue({ ok: true, servers: [srvWithUrl] });
+    const list = document.getElementById("connList");
+    await list.load();
+    const pill = list.querySelector(".pill.net");
+    expect(pill).not.toBeNull();
+    expect(pill.textContent).toContain("api.slack.com");
+  });
+
+  it("shows .pill.net badge using server id fallback when no url", async () => {
     daemon.mcpServers.mockResolvedValue({ ok: true, servers: [NET_SRV] });
     const list = document.getElementById("connList");
     await list.load();
     const pill = list.querySelector(".pill.net");
     expect(pill).not.toBeNull();
-    expect(pill.textContent).toContain("slack.com");
+    // Falls back to bare server id, not server.com
+    expect(pill.textContent).toContain("slack");
+    expect(pill.textContent).not.toContain(".com");
   });
 
-  it("shows .pill.local badge when egress is falsy", async () => {
+  it("shows .pill.local badge when egress === 'local' (not .pill.net)", async () => {
     daemon.mcpServers.mockResolvedValue({ ok: true, servers: [LOCAL_SRV] });
     const list = document.getElementById("connList");
     await list.load();
-    const pill = list.querySelector(".pill.local");
-    expect(pill).not.toBeNull();
-    expect(pill.textContent).toContain("on-device");
+    // egress="local" must render the on-device pill, not the network pill
+    const localPill = list.querySelector(".pill.local");
+    const netPill = list.querySelector(".pill.net");
+    expect(localPill).not.toBeNull();
+    expect(localPill.textContent).toContain("on-device");
+    expect(netPill).toBeNull();
   });
 
   it("status dot has class 'connected' when state === 'connected'", async () => {
@@ -163,7 +179,7 @@ describe("ConnectionsList — toggle interactions", () => {
 });
 
 describe("ConnectionsList — events", () => {
-  it("clicking the card body (not toggle) dispatches 'server-select' with server id", async () => {
+  it("clicking the card body (not toggle) dispatches 'server-select' with full server row", async () => {
     daemon.mcpServers.mockResolvedValue({ ok: true, servers: [NET_SRV] });
     const list = document.getElementById("connList");
     await list.load();
@@ -171,7 +187,8 @@ describe("ConnectionsList — events", () => {
     let received = null;
     list.addEventListener("server-select", (e) => { received = e.detail; });
     card.querySelector(".srv-meta").click();
-    expect(received).toBe("slack");
+    // detail is now the full server row, not just the id
+    expect(received).toEqual(expect.objectContaining({ server: "slack", label: "Slack", egress: "network" }));
   });
 
   it("'+ Add connection' button dispatches 'add-connection' event", async () => {

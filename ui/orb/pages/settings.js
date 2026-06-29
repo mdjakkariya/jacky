@@ -68,20 +68,19 @@ function openAddConnection() {
   });
 }
 
-/** Open the connection-detail panel for the given server id. */
-function openConnectionDetail(id) {
+/** Open the connection-detail panel for the given server row (the full object from
+ *  connections-list's server-select event detail). Builds meta directly from the row —
+ *  no DOM scraping required. */
+function openConnectionDetail(srv) {
   const panel = document.getElementById("tab-connections");
   if (!panel) return;
-  // Resolve server meta from the connList cards that are already rendered.
-  // We read from the DOM data attributes set by connections-list.js (#renderCard).
-  const card = document.querySelector(`.srv-card[data-server-id="${id}"]`);
   const meta = {
-    label: card ? (card.querySelector(".srv-name span")?.textContent || id) : id,
-    egress: card ? card.querySelector(".pill.net") !== null : false,
-    state: card ? (card.querySelector(".status-dot")?.classList[1] || "disconnected") : "disconnected",
-    auth_type: card ? (card.dataset.authType || "") : "",
+    label: srv.label || srv.server,
+    egress: srv.egress === "network",
+    state: srv.state || "disconnected",
+    auth_type: srv.auth_type || "",
   };
-  showConnectionDetail(panel, id, meta, {
+  showConnectionDetail(panel, srv.server, meta, {
     onClose: () => {
       hideConnectionDetail(panel);
       const connList = $("connList");

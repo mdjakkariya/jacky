@@ -226,8 +226,8 @@ function init() {
     if (m.status === "running" && info && info.egress) {
       activateEgressRing(info.label);
     } else if ((m.status === "done" || m.status === "failed") && info && info.egress) {
-      // Fade out: CSS transition handles the 800ms, then remove active class
-      _ringFadeTimeout = setTimeout(() => deactivateEgressRing(), 800);
+      // Remove active class immediately; CSS transition handles the visual fade-out.
+      deactivateEgressRing();
     }
   });
   daemon.on("mcp_status", () => refreshServerMap());
