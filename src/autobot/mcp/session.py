@@ -147,24 +147,10 @@ class McpServerWorker:
         """
         self._queue = asyncio.Queue()
         try:
-            from mcp import ClientSession, StdioServerParameters
-            from mcp.client.stdio import stdio_client
-
-            params = StdioServerParameters(
-                command=self._cfg.command or "",
-                args=list(self._cfg.args),
-                env=stdio_env_for(self._cfg, _get_secret),
-            )
-            async with (
-                stdio_client(params) as (read, write),
-                ClientSession(read, write, message_handler=self._on_message) as session,
-            ):
-                await session.initialize()
-                await self._sync_tools(session)
-                self._state = "connected"
-                self._emit_status()
-                _log.info("mcp connected server=%s tools=%d", self._cfg.id, self._tool_count)
-                await self._serve(session)
+            if self._cfg.transport == "http":
+                await self._run_http()
+            else:
+                await self._run_stdio()
         except Exception as exc:  # never let the worker crash the loop
             self._state = "error"
             _log.exception("mcp worker failed server=%s", self._cfg.id)
@@ -181,6 +167,151 @@ class McpServerWorker:
             self._all_tools = []  # don't serve a stale tool snapshot after disconnect
             self._emit_status()
             _log.info("mcp disconnected server=%s", self._cfg.id)
+
+    async def _run_stdio(self) -> None:
+        """Stdio transport branch (extracted from the original run() for clarity)."""
+        from mcp import ClientSession, StdioServerParameters
+        from mcp.client.stdio import stdio_client
+
+        params = StdioServerParameters(
+            command=self._cfg.command or "",
+            args=list(self._cfg.args),
+            env=stdio_env_for(self._cfg, _get_secret),
+        )
+        async with (
+            stdio_client(params) as (read, write),
+            ClientSession(read, write, message_handler=self._on_message) as session,
+        ):
+            await session.initialize()
+            await self._sync_tools(session)
+            self._state = "connected"
+            self._emit_status()
+            _log.info("mcp connected server=%s tools=%d", self._cfg.id, self._tool_count)
+            await self._serve(session)
+
+    async def _run_http(self) -> None:
+        """HTTP transport branch: OAuth, static bearer token, or unauthenticated."""
+        from mcp import ClientSession
+        from mcp.client.streamable_http import streamablehttp_client
+
+        url = self._cfg.url or ""
+        auth_type = self._cfg.auth_type
+
+        if auth_type == "oauth":
+            auth = await self._build_oauth_provider()
+            cm = streamablehttp_client(url, auth=auth)
+        elif auth_type == "token":
+            headers = self._http_headers()
+            cm = streamablehttp_client(url, headers=headers)
+        else:
+            cm = streamablehttp_client(url)
+
+        async with (
+            cm as (read, write, _get_session_id),
+            ClientSession(read, write, message_handler=self._on_message) as session,
+        ):
+            await session.initialize()
+            await self._sync_tools(session)
+            self._state = "connected"
+            self._emit_status()
+            _log.info(
+                "mcp connected server=%s transport=http tools=%d",
+                self._cfg.id,
+                self._tool_count,
+            )
+            await self._serve(session)
+
+    def _http_headers(self) -> dict[str, str]:
+        """Return HTTP Authorization headers for token-based auth, or empty dict.
+
+        Reads the bearer token from the Keychain via ``secret_ref``. Returns
+        ``{"Authorization": "Bearer <token>"}`` when ``auth_type == "token"`` and
+        the secret is present; otherwise returns ``{}``.
+
+        Returns:
+            A dict suitable for passing as ``headers=`` to ``streamablehttp_client``.
+        """
+        if self._cfg.auth_type != "token" or not self._cfg.secret_ref:
+            return {}
+        token = _get_secret(self._cfg.secret_ref)
+        if token is None:
+            return {}
+        return {"Authorization": f"Bearer {token}"}
+
+    async def _build_oauth_provider(self) -> Any:
+        """Construct an OAuthClientProvider for this server.
+
+        Starts the loopback callback server (OS-assigned port), builds client
+        metadata with the loopback redirect URI, and wires :class:`KeychainTokenStorage`
+        and :func:`open_browser`. The provider is returned to ``_run_http`` which
+        passes it as ``auth=`` to ``streamablehttp_client``.
+
+        Returns:
+            An ``OAuthClientProvider`` instance (an ``httpx.Auth`` subclass).
+        """
+        from mcp.client.auth import OAuthClientProvider
+        from mcp.shared.auth import OAuthClientMetadata
+
+        from autobot.mcp.auth import KeychainTokenStorage, LoopbackCallbackServer, open_browser
+
+        cb_server = LoopbackCallbackServer()
+        redirect_uri = await cb_server.start()
+
+        storage: Any = KeychainTokenStorage(self._cfg.id)
+        redirect_uri_any: Any = redirect_uri  # OAuthClientMetadata.redirect_uris wants AnyUrl
+        metadata = OAuthClientMetadata(
+            redirect_uris=[redirect_uri_any],
+            grant_types=["authorization_code", "refresh_token"],
+            response_types=["code"],
+            client_name="Jack",
+            token_endpoint_auth_method="none",  # public client (PKCE, no client_secret)
+        )
+
+        async def redirect_handler(url: str) -> None:
+            _log.info("mcp oauth redirect server=%s", self._cfg.id)
+            self._emit_oauth_stage("browser_open")
+            open_browser(url)
+
+        async def callback_handler() -> tuple[str, str | None]:
+            self._emit_oauth_stage("waiting_callback")
+            result = await cb_server.wait()
+            self._emit_oauth_stage("callback_received")
+            return result
+
+        return OAuthClientProvider(
+            server_url=self._cfg.url or "",
+            client_metadata=metadata,
+            storage=storage,
+            redirect_handler=redirect_handler,
+            callback_handler=callback_handler,
+        )
+
+    def _emit_oauth_stage(self, stage: str) -> None:
+        """Publish an mcp_oauth event for the UI (never raises).
+
+        Args:
+            stage: A string identifying the OAuth flow stage (e.g. ``"browser_open"``).
+        """
+        self._emit_event(
+            {
+                "type": "mcp_oauth",
+                "server": self._cfg.id,
+                "stage": stage,
+            }
+        )
+
+    def _emit_event(self, payload: dict[str, Any]) -> None:
+        """Publish any structured event to the sink (never raises).
+
+        Args:
+            payload: The event dict to pass to the on_event sink.
+        """
+        if self._on_event is None:
+            return
+        try:
+            self._on_event(payload)
+        except Exception:  # a UI hiccup must never break the worker
+            _log.debug("mcp on_event sink failed", exc_info=True)
 
     async def _serve(self, session: Any) -> None:
         """Process queued commands until a shutdown sentinel arrives."""
@@ -293,9 +424,12 @@ class McpServerWorker:
         self._registered = []
 
     def _emit_status(self, error: str | None = None) -> None:
-        """Publish a status event if a sink is wired (never raises)."""
-        if self._on_event is None:
-            return
+        """Publish an mcp_status event (never raises).
+
+        Args:
+            error: Optional error string to include when the server entered an
+                error state. Omit for normal connect/disconnect transitions.
+        """
         payload: dict[str, Any] = {
             "type": "mcp_status",
             "server": self._cfg.id,
@@ -304,7 +438,4 @@ class McpServerWorker:
         }
         if error:
             payload["error"] = error
-        try:
-            self._on_event(payload)
-        except Exception:  # a UI hiccup must never break the worker
-            _log.debug("mcp on_event sink failed", exc_info=True)
+        self._emit_event(payload)
