@@ -236,8 +236,8 @@ class EmbeddingToolSelector:
     without a live model). Each tool's vector is embedded once and cached by
     :func:`_doc_key`, so an unchanged tool is never re-embedded; the query is embedded
     once per call. On **any** embedding failure (model not pulled, host down, bad
-    vector) the selector logs once and delegates to a :class:`LexicalToolSelector`
-    fallback, so it can never crash a turn.
+    vector) the selector logs once and falls back to inline lexical ranking via
+    :func:`score_tools`, so it can never crash a turn.
     """
 
     def __init__(
@@ -245,14 +245,12 @@ class EmbeddingToolSelector:
         registry: ToolRegistry,
         *,
         embedder: Embedder,
-        fallback: LexicalToolSelector,
         budget: int,
         core_extra: frozenset[str],
         core_remove: frozenset[str],
     ) -> None:
         self._registry = registry
         self._embedder = embedder
-        self._fallback = fallback
         self._budget = budget
         self._core_extra = core_extra
         self._core_remove = core_remove
@@ -354,7 +352,7 @@ def build_tool_selector(settings: Settings, registry: ToolRegistry) -> ToolSelec
 
     - ``"all"`` -> :class:`AllToolsSelector` (advertise everything; debugging escape hatch).
     - ``"embedding"`` -> :class:`EmbeddingToolSelector` ranking gated tools by local
-      embeddings, with a :class:`LexicalToolSelector` fallback for any embedding failure.
+      embeddings, with inline lexical fallback on any embedding failure.
     - anything else (incl. the default ``"lexical"``) -> :class:`LexicalToolSelector`.
     """
     if settings.tool_selection == "all":
@@ -369,7 +367,6 @@ def build_tool_selector(settings: Settings, registry: ToolRegistry) -> ToolSelec
         return EmbeddingToolSelector(
             registry,
             embedder=_ollama_embedder(settings),
-            fallback=fallback,
             budget=settings.tool_budget,
             core_extra=frozenset(settings.tool_core_extra),
             core_remove=frozenset(settings.tool_core_remove),

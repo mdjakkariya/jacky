@@ -227,13 +227,9 @@ def _fake_embedder(
 def _embedding(
     reg: ToolRegistry, embedder: Callable[[str], list[float]], *, budget: int = 20
 ) -> EmbeddingToolSelector:
-    fallback = LexicalToolSelector(
-        reg, budget=budget, core_extra=frozenset(), core_remove=frozenset()
-    )
     return EmbeddingToolSelector(
         reg,
         embedder=embedder,
-        fallback=fallback,
         budget=budget,
         core_extra=frozenset(),
         core_remove=frozenset(),
@@ -329,9 +325,3 @@ def test_embedding_falls_back_to_lexical_on_embedder_error() -> None:
 def test_build_tool_selector_picks_embedding() -> None:
     sel = build_tool_selector(Settings(tool_selection="embedding"), _reg())
     assert isinstance(sel, EmbeddingToolSelector)
-
-
-def test_build_tool_selector_embedding_has_lexical_fallback() -> None:
-    sel = build_tool_selector(Settings(tool_selection="embedding"), _reg())
-    assert isinstance(sel, EmbeddingToolSelector)
-    assert isinstance(sel._fallback, LexicalToolSelector)
