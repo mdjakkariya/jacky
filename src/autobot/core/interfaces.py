@@ -124,3 +124,24 @@ class ToolSelector(Protocol):
             A bounded, deduplicated list of specs: core U pinned U top relevant.
         """
         ...
+
+    def search(self, intent: str, *, limit: int = 5) -> list[str]:
+        """Return the names of the best gated tools for an explicit intent.
+
+        The model's escape hatch: when the relevance-gated set advertised by
+        :meth:`select` lacks the tool a request needs, the model calls
+        ``find_tools(intent)`` and the turn loop forwards ``intent`` here. The
+        returned names are then pinned (force-advertised via ``select(..., pinned)``)
+        for the rest of the turn, so the model can call the real tool next round.
+
+        Args:
+            intent: A short natural-language description of what the model wants to
+                do (e.g. ``"send a message on slack"``).
+            limit: Maximum number of tool names to return.
+
+        Returns:
+            Up to ``limit`` bare tool names, most relevant first. Never includes
+            always-on core tools (the model already sees those). Empty when nothing
+            matches.
+        """
+        ...

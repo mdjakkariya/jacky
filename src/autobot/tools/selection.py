@@ -109,6 +109,15 @@ class AllToolsSelector:
         """Return every registered spec, ignoring ``query``/``pinned``."""
         return self._registry.specs()
 
+    def search(self, intent: str, *, limit: int = 5) -> list[str]:
+        """Top ``limit`` tool names by relevance to ``intent`` (all tools ranked).
+
+        The "all" mode draws no core/gated line, so every registered tool is a
+        candidate. Used only as the ``find_tools`` backend when gating is disabled.
+        """
+        ranked = score_tools(intent, self._registry.specs())
+        return [spec.name for spec, _ in ranked[:limit]]
+
 
 class LexicalToolSelector:
     """Relevance-gated tool advertising via on-device keyword ranking.
@@ -152,6 +161,20 @@ class LexicalToolSelector:
                 seen.add(s.name)
                 chosen.append(s)
         return chosen
+
+    def search(self, intent: str, *, limit: int = 5) -> list[str]:
+        """Top ``limit`` *gated* tool names by relevance to ``intent``.
+
+        Core tools are excluded — the model already sees them every round, so a
+        discovery query should only surface the gated tools it can't currently
+        reach. ``core_extra``/``core_remove`` shift the core boundary the same way
+        they do in :meth:`select`.
+        """
+        specs = self._registry.specs()
+        core_names = ({s.name for s in specs if s.core} | self._core_extra) - self._core_remove
+        gated = [s for s in specs if s.name not in core_names]
+        ranked = score_tools(intent, gated)
+        return [spec.name for spec, _ in ranked[:limit]]
 
 
 def build_tool_selector(settings: Settings, registry: ToolRegistry) -> ToolSelector:

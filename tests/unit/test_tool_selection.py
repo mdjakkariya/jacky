@@ -109,3 +109,59 @@ def test_build_tool_selector_picks_impl() -> None:
     assert isinstance(
         build_tool_selector(Settings(tool_selection="lexical"), reg), LexicalToolSelector
     )
+
+
+# Phase 2 tests: ToolSelector.search
+
+
+def test_all_tools_search_ranks_by_relevance() -> None:
+    reg = ToolRegistry()
+    reg.register(_spec("slack__send", "Send a message to a Slack channel."))
+    reg.register(_spec("github__issue", "Create a GitHub issue."))
+    names = AllToolsSelector(reg).search("send a slack message")
+    assert names[0] == "slack__send"
+    assert "github__issue" not in names  # scored 0 → excluded by score_tools
+
+
+def test_lexical_search_returns_gated_names_excluding_core() -> None:
+    # battery_status is core (always advertised) so search must never surface it,
+    # even when the intent matches it.
+    reg = ToolRegistry()
+    reg.register(_spec("battery_status", "Check the Mac's battery level.", core=True))
+    reg.register(_spec("slack__send", "Send a message to a Slack channel."))
+    names = _lexical(reg).search("send a slack message")
+    assert names == ["slack__send"]
+
+
+def test_lexical_search_excludes_core_even_when_intent_matches_core() -> None:
+    reg = ToolRegistry()
+    reg.register(_spec("battery_status", "Check the Mac's battery level.", core=True))
+    reg.register(_spec("slack__send", "Send a message to a Slack channel."))
+    assert _lexical(reg).search("what's my battery level") == []  # only core matched → no gated
+
+
+def test_lexical_search_respects_core_extra_remove() -> None:
+    reg = _reg()  # battery_status + set_volume core; slack__send + github__issue gated
+    # Promote slack__send to core (so search hides it) and demote set_volume to gated.
+    selector = LexicalToolSelector(
+        reg,
+        budget=20,
+        core_extra=frozenset({"slack__send"}),
+        core_remove=frozenset({"set_volume"}),
+    )
+    names = selector.search("send a slack message and set the volume")
+    assert "slack__send" not in names  # promoted to core → excluded from search
+    assert "set_volume" in names  # demoted to gated → now eligible
+
+
+def test_search_honors_limit() -> None:
+    reg = ToolRegistry()
+    for i in range(5):
+        reg.register(_spec(f"slack__send_{i}", "Send a message to a Slack channel."))
+    names = _lexical(reg).search("send a slack message", limit=2)
+    assert len(names) == 2
+
+
+def test_search_empty_intent_returns_empty() -> None:
+    assert _lexical(_reg()).search("") == []
+    assert AllToolsSelector(_reg()).search("") == []
