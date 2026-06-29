@@ -18,6 +18,8 @@ from collections.abc import Sequence
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
+    from autobot.config import Settings
+    from autobot.core.interfaces import ToolSelector
     from autobot.tools.registry import ToolRegistry, ToolSpec
 
 # Words too common to carry intent; dropped before scoring so they don't inflate
@@ -106,3 +108,63 @@ class AllToolsSelector:
     def select(self, query: str, *, pinned: frozenset[str] = frozenset()) -> list[ToolSpec]:
         """Return every registered spec, ignoring ``query``/``pinned``."""
         return self._registry.specs()
+
+
+class LexicalToolSelector:
+    """Relevance-gated tool advertising via on-device keyword ranking.
+
+    Always advertises the core set; fills the remaining budget with the gated tools
+    most relevant to the user's message (per :func:`score_tools`); force-includes any
+    pinned tools. ``core_extra``/``core_remove`` adjust the core set from settings
+    without code edits. Reads the live registry each call, so MCP tools that connect
+    or disconnect are picked up automatically.
+    """
+
+    def __init__(
+        self,
+        registry: ToolRegistry,
+        *,
+        budget: int,
+        core_extra: frozenset[str],
+        core_remove: frozenset[str],
+    ) -> None:
+        self._registry = registry
+        self._budget = budget
+        self._core_extra = core_extra
+        self._core_remove = core_remove
+
+    def select(self, query: str, *, pinned: frozenset[str] = frozenset()) -> list[ToolSpec]:
+        """Return core U top-K relevant gated U pinned, deduped and budget-bounded."""
+        specs = self._registry.specs()
+        core_names = ({s.name for s in specs if s.core} | self._core_extra) - self._core_remove
+        core = [s for s in specs if s.name in core_names]
+        gated = [s for s in specs if s.name not in core_names]
+
+        k = max(0, self._budget - len(core))
+        ranked = [s for s, _ in score_tools(query, gated)][:k]
+
+        pinned_specs = [s for s in specs if s.name in pinned and s.name not in core_names]
+
+        chosen: list[ToolSpec] = []
+        seen: set[str] = set()
+        for s in (*core, *ranked, *pinned_specs):
+            if s.name not in seen:
+                seen.add(s.name)
+                chosen.append(s)
+        return chosen
+
+
+def build_tool_selector(settings: Settings, registry: ToolRegistry) -> ToolSelector:
+    """Construct the configured selector. ``"all"`` → advertise everything.
+
+    Any value other than ``"all"`` (including the default ``"lexical"`` and the
+    Phase-4 ``"embedding"`` placeholder) currently builds the lexical selector.
+    """
+    if settings.tool_selection == "all":
+        return AllToolsSelector(registry)
+    return LexicalToolSelector(
+        registry,
+        budget=settings.tool_budget,
+        core_extra=frozenset(settings.tool_core_extra),
+        core_remove=frozenset(settings.tool_core_remove),
+    )

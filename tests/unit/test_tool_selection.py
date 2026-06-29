@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+from autobot.config import Settings
 from autobot.tools.registry import ToolRegistry, ToolSpec
 from autobot.tools.selection import (
     AllToolsSelector,
+    LexicalToolSelector,
+    build_tool_selector,
     score_tools,
     tokenize,
 )
@@ -45,3 +48,64 @@ def test_all_tools_selector_returns_everything() -> None:
     selector = AllToolsSelector(reg)
     names = {s.name for s in selector.select("anything")}
     assert names == {"a", "b"}
+
+
+# Task 4 tests: LexicalToolSelector + build_tool_selector
+
+
+def _reg() -> ToolRegistry:
+    reg = ToolRegistry()
+    reg.register(_spec("battery_status", "Check the Mac's battery level.", core=True))
+    reg.register(_spec("set_volume", "Set the system output volume.", core=True))
+    reg.register(_spec("slack__send", "Send a message to a Slack channel."))
+    reg.register(_spec("github__issue", "Create a GitHub issue."))
+    return reg
+
+
+def _lexical(reg: ToolRegistry, *, budget: int = 20) -> LexicalToolSelector:
+    return LexicalToolSelector(reg, budget=budget, core_extra=frozenset(), core_remove=frozenset())
+
+
+def test_core_tools_always_advertised() -> None:
+    names = {s.name for s in _lexical(_reg()).select("what's my battery")}
+    assert {"battery_status", "set_volume"} <= names
+
+
+def test_gated_tool_appears_only_when_relevant() -> None:
+    names = {s.name for s in _lexical(_reg()).select("send a slack message")}
+    assert "slack__send" in names
+    assert "github__issue" not in names  # irrelevant gated tool excluded
+
+
+def test_irrelevant_query_advertises_core_only() -> None:
+    names = {s.name for s in _lexical(_reg()).select("what's my battery")}
+    assert names == {"battery_status", "set_volume"}  # no gated tool matched
+
+
+def test_budget_caps_gated_additions_core_always_kept() -> None:
+    # budget 2 == the 2 core tools → K=0, so a matching gated tool is still dropped.
+    names = {s.name for s in _lexical(_reg(), budget=2).select("send a slack message")}
+    assert names == {"battery_status", "set_volume"}
+
+
+def test_pinned_tools_are_force_included() -> None:
+    names = {s.name for s in _lexical(_reg()).select("hi", pinned=frozenset({"github__issue"}))}
+    assert "github__issue" in names  # forced in despite zero relevance
+
+
+def test_core_extra_and_remove_apply() -> None:
+    reg = _reg()
+    selector = LexicalToolSelector(
+        reg, budget=20, core_extra=frozenset({"slack__send"}), core_remove=frozenset({"set_volume"})
+    )
+    names = {s.name for s in selector.select("hi")}
+    assert "slack__send" in names  # promoted to core
+    assert "set_volume" not in names  # demoted out of core
+
+
+def test_build_tool_selector_picks_impl() -> None:
+    reg = _reg()
+    assert isinstance(build_tool_selector(Settings(tool_selection="all"), reg), AllToolsSelector)
+    assert isinstance(
+        build_tool_selector(Settings(tool_selection="lexical"), reg), LexicalToolSelector
+    )
