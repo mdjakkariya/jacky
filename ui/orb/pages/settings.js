@@ -52,9 +52,9 @@ if (connList) {
   connList.addEventListener("server-select", (e) => openConnectionDetail(e.detail));
 }
 
-// The "Enable MCP connections" master toggle takes effect only on daemon restart
-// (the MCP manager is built at startup), so surface a restart hint when it changes.
-// The "off by default" info banner is hidden once MCP is enabled (it would otherwise
+// The "Enable MCP connections" master toggle applies immediately: it saves on
+// change and the daemon turns the MCP subsystem on/off live (no restart). The
+// "off by default" info banner is hidden once MCP is enabled (it would otherwise
 // contradict the on state).
 function updateMcpUI() {
   const on = !!($("allow_mcp") && $("allow_mcp").checked);
@@ -63,10 +63,16 @@ function updateMcpUI() {
 }
 const allowMcpToggle = $("allow_mcp");
 if (allowMcpToggle) {
-  allowMcpToggle.addEventListener("change", () => {
-    const hint = $("mcpRestartHint");
-    if (hint) hint.classList.remove("hidden");
+  allowMcpToggle.addEventListener("change", async () => {
+    try {
+      await daemon.setSettings({ allow_mcp: allowMcpToggle.checked });
+      setStatus(allowMcpToggle.checked ? "MCP enabled." : "MCP disabled.");
+    } catch (_) {
+      setStatus("Couldn’t update — is Jack running?", true);
+    }
     updateMcpUI();
+    const cl = $("connList");
+    if (cl) cl.load(); // reflect the new state (servers list vs. disabled message)
   });
 }
 

@@ -35,6 +35,7 @@ if TYPE_CHECKING:
 
     from autobot.config import Settings
     from autobot.mcp.manager import McpManager
+    from autobot.mcp.provider import McpProvider
 
 _log = get_logger("daemon")
 
@@ -84,7 +85,7 @@ def create_app(
     on_chat: Any | None = None,
     on_new_session: Any | None = None,
     on_action: Any | None = None,
-    mcp: McpManager | None = None,
+    mcp_provider: McpProvider | None = None,
 ) -> Any:
     """Build the FastAPI app: the event stream plus the Settings-view API.
 
@@ -103,8 +104,9 @@ def create_app(
         on_action: Optional callback (tool: str, args: dict -> str) that runs one tool
             through the permission gate for a clicked action card; wired to the
             orchestrator's ``run_tool``.
-        mcp: Optional McpManager handle (wired by the daemon when MCP is enabled);
-            reserved for future Task 5 endpoints.
+        mcp_provider: Optional MCP provider (wired by the daemon). The /mcp/* routes
+            resolve the live manager through it, and /settings flips it on/off when
+            ``allow_mcp`` changes — so MCP can be enabled at runtime with no restart.
 
     Returns:
         A FastAPI app: ``/healthz``, WebSocket ``/ws``, the settings API, and
@@ -183,6 +185,10 @@ def create_app(
         write_settings(merged, path)
         if on_change:
             on_change()  # let the engine pick up the change live (next turn)
+        # Turn the MCP subsystem on/off at runtime when allow_mcp changes — no restart.
+        # (set_enabled is idempotent; shutdown can block briefly, so run off the loop.)
+        if mcp_provider is not None and "allow_mcp" in updates:
+            await asyncio.to_thread(mcp_provider.set_enabled, bool(merged.get("allow_mcp")))
         return {"ok": True, "applied": sorted(updates)}
 
     async def get_models() -> dict[str, Any]:
@@ -426,9 +432,16 @@ def create_app(
 
     _mcp_disabled: dict[str, object] = {"ok": False, "error": "mcp disabled"}
 
+    def _mcp() -> McpManager | None:
+        """Resolve the live MCP manager, or None when disabled.
+
+        Per-request resolution lets a runtime ``allow_mcp`` toggle apply with no restart.
+        """
+        return mcp_provider.manager if mcp_provider is not None else None
+
     async def get_mcp_servers() -> dict[str, Any]:
         """List all configured MCP servers with status + auth metadata."""
-        if mcp is None:
+        if (mcp := _mcp()) is None:
             return _mcp_disabled
         rows = await asyncio.to_thread(mcp.status)
         # status() rows already carry auth_type; enrich each with secret_present
@@ -444,7 +457,7 @@ def create_app(
 
     async def post_mcp_servers(request: Request) -> dict[str, Any]:
         """Add or update an MCP server (validated via _coerce_server)."""
-        if mcp is None:
+        if (mcp := _mcp()) is None:
             return _mcp_disabled
         body = await request.json()
         if not isinstance(body, dict):
@@ -453,7 +466,7 @@ def create_app(
 
     async def delete_mcp_server(server_id: str) -> dict[str, Any]:
         """Remove a configured MCP server."""
-        if mcp is None:
+        if (mcp := _mcp()) is None:
             return _mcp_disabled
         removed = await asyncio.to_thread(mcp.remove_server, server_id)
         if not removed:
@@ -462,28 +475,28 @@ def create_app(
 
     async def post_mcp_enable(server_id: str) -> dict[str, Any]:
         """Enable an MCP server (persist + connect)."""
-        if mcp is None:
+        if (mcp := _mcp()) is None:
             return _mcp_disabled
         ok = await asyncio.to_thread(mcp.set_enabled, server_id, True)
         return {"ok": ok} if ok else {"ok": False, "error": f"unknown server: {server_id!r}"}
 
     async def post_mcp_disable(server_id: str) -> dict[str, Any]:
         """Disable an MCP server (persist + disconnect)."""
-        if mcp is None:
+        if (mcp := _mcp()) is None:
             return _mcp_disabled
         ok = await asyncio.to_thread(mcp.set_enabled, server_id, False)
         return {"ok": ok} if ok else {"ok": False, "error": f"unknown server: {server_id!r}"}
 
     async def post_mcp_connect(server_id: str) -> dict[str, Any]:
         """Connect to an MCP server (start worker if not running)."""
-        if mcp is None:
+        if (mcp := _mcp()) is None:
             return _mcp_disabled
         await asyncio.to_thread(mcp.connect, server_id)
         return {"ok": True}
 
     async def post_mcp_test(server_id: str) -> dict[str, Any]:
         """Connect to an MCP server and return its current status row."""
-        if mcp is None:
+        if (mcp := _mcp()) is None:
             return _mcp_disabled
         await asyncio.to_thread(mcp.connect, server_id)
         rows = await asyncio.to_thread(mcp.status)
@@ -494,14 +507,14 @@ def create_app(
 
     async def get_mcp_tools(server_id: str) -> dict[str, Any]:
         """Return the cached all-tools list for a server."""
-        if mcp is None:
+        if (mcp := _mcp()) is None:
             return _mcp_disabled
         tools = await asyncio.to_thread(mcp.tools_for, server_id)
         return {"ok": True, "tools": tools}
 
     async def post_mcp_tool_override(server_id: str, tool: str, request: Request) -> dict[str, Any]:
         """Adjust a tool's risk classification or enable/disable it."""
-        if mcp is None:
+        if (mcp := _mcp()) is None:
             return _mcp_disabled
         body = await request.json()
         risk: str | None = body.get("risk") if isinstance(body, dict) else None
@@ -520,7 +533,7 @@ def create_app(
         browser-open + loopback callback inside the worker's event loop. Stage
         events (``mcp_oauth``) are published via the WS event bus. Non-blocking.
         """
-        if mcp is None:
+        if (mcp := _mcp()) is None:
             return _mcp_disabled
         return await asyncio.to_thread(mcp.start_oauth, server_id)
 
@@ -573,7 +586,7 @@ def run_daemon(
     on_chat: Any | None = None,
     on_new_session: Any | None = None,
     on_action: Any | None = None,
-    mcp: McpManager | None = None,
+    mcp_provider: McpProvider | None = None,
 ) -> None:
     """Run the daemon server (blocking) on ``host:port``.
 
@@ -597,14 +610,14 @@ def run_daemon(
         on_chat=on_chat,
         on_new_session=on_new_session,
         on_action=on_action,
-        mcp=mcp,
+        mcp_provider=mcp_provider,
     )
     try:
         with contextlib.suppress(KeyboardInterrupt):
             uvicorn.run(app, host=host, port=port, log_level="warning", lifespan="off")
     finally:
-        if mcp is not None:
-            mcp.shutdown()
+        if mcp_provider is not None:
+            mcp_provider.shutdown()
     print("\n[daemon] stopped.")
 
 

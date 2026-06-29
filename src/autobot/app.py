@@ -455,26 +455,6 @@ def build(
         log.info("web search ENABLED provider=%s (queries leave the device)", provider)
         print(f"[web] web search ENABLED via {provider} — queries leave the device.")
 
-    mcp_manager: McpManager | None = None
-
-    if settings.allow_mcp:
-        # MCP integration (opt-in, the third disclosed exception). Adds each enabled
-        # server's tools to the same registry, gated like any other tool. Network-egress
-        # servers send data off-device; that is disclosed per-connection and confirmed
-        # by the gate (see PermissionGate). Local stdio servers stay on-device.
-        import atexit
-
-        from autobot.mcp.config import load_mcp_config
-        from autobot.mcp.manager import McpManager
-
-        mcp_config = load_mcp_config()
-        mcp_manager = McpManager(mcp_config, registry, on_event=on_mcp_event)
-        mcp_manager.start()
-        atexit.register(mcp_manager.shutdown)
-        enabled = sum(1 for c in mcp_config.values() if c.enabled)
-        log.info("mcp ENABLED servers=%d enabled=%d", len(mcp_config), enabled)
-        print(f"[mcp] MCP enabled — {enabled} of {len(mcp_config)} server(s) connecting.")
-
     if on_visibility is not None:
         # A UI is attached: let the user dismiss the orb by voice ("go away").
         from autobot.tools.orb import register_orb_tools
@@ -535,11 +515,34 @@ def build(
     confirmer = _build_confirmer(
         settings, tts, audio, stt, on_confirm, on_confirm_clear, poll_click
     )
-    # Wire the confirmer into MCP BEFORE connecting enabled servers — this ensures
-    # stdio spawn-consent prompts go through the gate rather than auto-approving.
-    if mcp_manager is not None:
-        mcp_manager.set_confirmer(confirmer)
-        mcp_manager.connect_enabled()
+
+    # MCP integration (opt-in, the third disclosed exception). Built behind a provider
+    # so "Enable MCP connections" (allow_mcp) can turn the whole subsystem on or off at
+    # runtime with no restart: the daemon reads the live manager through the provider and
+    # the Settings endpoint flips it. Each enabled server's tools join the same registry,
+    # gated like any other tool; network-egress servers send data off-device (disclosed
+    # per-connection, confirmed by the gate), local stdio servers stay on-device.
+    import atexit
+
+    from autobot.mcp.provider import McpProvider
+
+    def _make_mcp() -> McpManager:
+        from autobot.mcp.config import load_mcp_config
+        from autobot.mcp.manager import McpManager
+
+        mgr = McpManager(load_mcp_config(), registry, on_event=on_mcp_event)
+        mgr.start()
+        # Confirmer wired BEFORE connecting so stdio spawn-consent goes through the
+        # gate rather than auto-approving.
+        mgr.set_confirmer(confirmer)
+        mgr.connect_enabled()
+        return mgr
+
+    mcp_provider = McpProvider(_make_mcp)
+    if settings.allow_mcp:
+        mcp_provider.set_enabled(True)
+        log.info("mcp ENABLED")
+    atexit.register(mcp_provider.shutdown)
     # Permission-aware: refuse a tool whose macOS permission is missing (and open the
     # right Settings pane) instead of letting it fail deep in AppleScript.
     from autobot import permissions
@@ -600,8 +603,7 @@ def build(
         # the voice I/O rebuilds lazily on the next switch back to voice.
         release_voice_io=_voice_io.release,
     )
-    if mcp_manager is not None:
-        orch.mcp = mcp_manager
+    orch.mcp_provider = mcp_provider
     return orch
 
 

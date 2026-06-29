@@ -437,10 +437,22 @@ class _FakeMcp:
             return {"ok": False, "error": f"unknown server: {server_id!r}"}
         return {"ok": True, "started": True}
 
+    def shutdown(self) -> None:
+        return None
+
+
+def _provider_for(mcp: _FakeMcp) -> Any:
+    """Wrap a fake manager in a real (already-enabled) McpProvider."""
+    from autobot.mcp.provider import McpProvider
+
+    provider = McpProvider(lambda: cast("McpManager", mcp))
+    provider.set_enabled(True)
+    return provider
+
 
 def _mcp_client(mcp: _FakeMcp) -> TestClient:
     bus = EventBus()
-    return TestClient(create_app(bus, mcp=cast("McpManager", mcp)))
+    return TestClient(create_app(bus, mcp_provider=_provider_for(mcp)))
 
 
 def test_mcp_list_returns_servers() -> None:
@@ -456,10 +468,37 @@ def test_mcp_list_returns_servers() -> None:
 
 def test_mcp_list_when_disabled_returns_error() -> None:
     bus = EventBus()
-    client = TestClient(create_app(bus))  # no mcp= → disabled
+    client = TestClient(create_app(bus))  # no mcp_provider → disabled
     resp = client.get("/mcp/servers").json()
     assert resp["ok"] is False
     assert "mcp disabled" in resp["error"]
+
+
+def test_post_settings_toggles_mcp_at_runtime(tmp_path: object) -> None:
+    """Flipping allow_mcp via /settings enables/disables MCP with no restart."""
+    from pathlib import Path
+
+    from autobot.mcp.provider import McpProvider
+
+    fake = _FakeMcp()
+    provider = McpProvider(lambda: cast("McpManager", fake))  # starts disabled
+    path = Path(str(tmp_path)) / "settings.json"
+    path.write_text("{}", encoding="utf-8")
+    client = TestClient(create_app(EventBus(), settings_path=path, mcp_provider=provider))
+
+    # Disabled until allow_mcp is set: /mcp/* returns the disabled error.
+    assert client.get("/mcp/servers").json()["ok"] is False
+    assert provider.manager is None
+
+    # Enabling via settings spins the manager up live.
+    assert client.post("/settings", json={"allow_mcp": True}).json()["ok"] is True
+    assert provider.manager is fake
+    assert client.get("/mcp/servers").json()["ok"] is True
+
+    # Disabling tears it down again.
+    assert client.post("/settings", json={"allow_mcp": False}).json()["ok"] is True
+    assert provider.manager is None
+    assert client.get("/mcp/servers").json()["ok"] is False
 
 
 def test_mcp_add_valid_server() -> None:

@@ -148,7 +148,7 @@ def serve(settings: Settings | None = None) -> None:
         on_chat=orchestrator.run_text_turn,
         on_new_session=orchestrator.new_chat_session,
         on_action=orchestrator.run_tool,
-        mcp=orchestrator.mcp,
+        mcp_provider=orchestrator.mcp_provider,
     )
 
 

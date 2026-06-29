@@ -49,7 +49,7 @@ export class ConnectionsList extends HTMLElement {
         msg.className = "srv-desc";
         msg.style.padding = "12px 14px";
         msg.textContent = (res.error || "").toLowerCase().includes("disabled")
-          ? "MCP is off. Turn on “Enable MCP connections” above, click Save, then restart Jack."
+          ? "MCP is off. Turn on “Enable MCP connections” above to use connections."
           : (res.error || "Couldn’t load connections.");
         this.appendChild(msg);
         return;

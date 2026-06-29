@@ -72,7 +72,7 @@ describe("ConnectionsList — rendering", () => {
     expect(list.querySelectorAll(".srv-card").length).toBe(0);
     expect(list.querySelector(".add-conn-btn")).toBeNull();
     expect(list.textContent.toLowerCase()).toContain("enable mcp connections");
-    expect(list.textContent.toLowerCase()).toContain("restart");
+    expect(list.textContent.toLowerCase()).toContain("to use connections");
   });
 
   it("renders server label in each card", async () => {
