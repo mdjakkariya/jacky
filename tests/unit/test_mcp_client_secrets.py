@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 from collections.abc import Generator
 from pathlib import Path
 
@@ -17,6 +18,25 @@ def _clear_cache() -> Generator[None, None, None]:
     _cs._load.cache_clear()
     yield
     _cs._load.cache_clear()
+
+
+@pytest.fixture(autouse=True)
+def _only_env_candidate(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Consult ONLY the JACK_OAUTH_SECRETS_FILE path, isolating these tests.
+
+    ``_candidate_paths`` also probes the PyInstaller bundle and the repo-root
+    ``secrets/oauth_clients.json``. The latter is a real, gitignored developer file
+    that — when present — leaks into the "no file / malformed / non-dict" cases (the
+    loader falls through to it and returns its baked-in placeholder). Restricting the
+    candidates to the env path each test sets makes the file under test the only
+    source, so the suite is hermetic regardless of a developer's local secrets file.
+    """
+
+    def _only_env() -> list[Path]:
+        env = os.environ.get("JACK_OAUTH_SECRETS_FILE")
+        return [Path(env).expanduser()] if env else []
+
+    monkeypatch.setattr(_cs, "_candidate_paths", _only_env)
 
 
 # ---------------------------------------------------------------------------
