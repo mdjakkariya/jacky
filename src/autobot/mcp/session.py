@@ -26,6 +26,7 @@ from autobot.mcp.approvals import DEFAULT_APPROVALS_PATH, load_approvals, record
 from autobot.mcp.auth import stdio_env_for
 from autobot.secrets import get_secret as _get_secret
 from autobot.tools.registry import ToolSpec
+from autobot.tools.schema_min import minify_schema
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -583,7 +584,7 @@ class McpServerWorker:
             desired[reg_name] = ToolSpec(
                 name=reg_name,
                 description=tool.description or "",
-                parameters=adapter.params_from_input_schema(tool.inputSchema),
+                parameters=minify_schema(adapter.params_from_input_schema(tool.inputSchema)),
                 handler=self._make_handler(tool.name),
                 risk=adapter.risk_for(tool, floor=floor, overrides=overrides),
                 network=network,
