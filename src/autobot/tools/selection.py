@@ -12,15 +12,25 @@ The ``mcp`` SDK is irrelevant here; this operates only on registered ``ToolSpec`
 
 from __future__ import annotations
 
+import hashlib
 import math
 import re
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from typing import TYPE_CHECKING
+
+from autobot.logging_setup import get_logger
 
 if TYPE_CHECKING:
     from autobot.config import Settings
     from autobot.core.interfaces import ToolSelector
     from autobot.tools.registry import ToolRegistry, ToolSpec
+
+_log = get_logger("tools")
+
+# Type of an injected embedder: maps one text to its embedding vector. The real one
+# calls Ollama locally; tests pass a deterministic fake so ranking is unit-testable
+# without a live model.
+Embedder = Callable[[str], list[float]]
 
 # Words too common to carry intent; dropped before scoring so they don't inflate
 # overlap. Deliberately small — the IDF weighting already down-weights frequent terms.
@@ -94,6 +104,41 @@ def score_tools(query: str, specs: Sequence[ToolSpec]) -> list[tuple[ToolSpec, f
             scored.append((s, score))
     scored.sort(key=lambda pair: (-pair[1], pair[0].name))
     return scored
+
+
+def cosine(a: Sequence[float], b: Sequence[float]) -> float:
+    """Cosine similarity of two vectors; ``0.0`` on a zero vector or length mismatch.
+
+    Never raises — a mismatched or zero vector (e.g. an embedder returned ``[]``)
+    yields ``0.0`` so a single bad embedding ranks a tool last instead of crashing
+    the turn.
+    """
+    if len(a) != len(b):
+        return 0.0
+    dot = sum(x * y for x, y in zip(a, b, strict=True))
+    na = math.sqrt(sum(x * x for x in a))
+    nb = math.sqrt(sum(y * y for y in b))
+    if na == 0.0 or nb == 0.0:
+        return 0.0
+    return dot / (na * nb)
+
+
+def embed_doc(spec: ToolSpec) -> str:
+    """Return the text embedded to represent ``spec``: its name plus description."""
+    return f"{spec.name} {spec.description}".strip()
+
+
+def _doc_key(spec: ToolSpec) -> str:
+    """Stable cache key for ``spec``'s embedding vector.
+
+    Keys on a SHA-256 of :func:`embed_doc` — the exact text we embed. Identical for an
+    unchanged tool (so its vector is reused, never re-embedded) and different the moment
+    the name or description changes (so it is re-embedded). We hash the doc text rather
+    than call :func:`autobot.mcp.adapter.fingerprint` because the registry holds
+    :class:`ToolSpec`s, not MCP ``Tool`` objects (no ``inputSchema``/``annotations`` to
+    fingerprint), and the doc text is the only embedding-relevant identity here.
+    """
+    return hashlib.sha256(embed_doc(spec).encode("utf-8")).hexdigest()
 
 
 class AllToolsSelector:

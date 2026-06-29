@@ -7,7 +7,10 @@ from autobot.tools.registry import ToolRegistry, ToolSpec
 from autobot.tools.selection import (
     AllToolsSelector,
     LexicalToolSelector,
+    _doc_key,
     build_tool_selector,
+    cosine,
+    embed_doc,
     score_tools,
     tokenize,
 )
@@ -165,3 +168,25 @@ def test_search_honors_limit() -> None:
 def test_search_empty_intent_returns_empty() -> None:
     assert _lexical(_reg()).search("") == []
     assert AllToolsSelector(_reg()).search("") == []
+
+
+def test_cosine_identical_is_one_orthogonal_is_zero() -> None:
+    assert cosine([1.0, 0.0], [1.0, 0.0]) == 1.0
+    assert cosine([1.0, 0.0], [0.0, 1.0]) == 0.0
+
+
+def test_cosine_handles_zero_vector_and_length_mismatch() -> None:
+    assert cosine([0.0, 0.0], [1.0, 1.0]) == 0.0  # zero vector → no direction
+    assert cosine([1.0], [1.0, 0.0]) == 0.0  # length mismatch → 0, never raises
+
+
+def test_embed_doc_is_name_plus_description() -> None:
+    assert embed_doc(_spec("battery_status", "Check the battery.")) == (
+        "battery_status Check the battery."
+    )
+
+
+def test_doc_key_stable_for_same_text_changes_with_description() -> None:
+    a = _doc_key(_spec("t", "one"))
+    assert a == _doc_key(_spec("t", "one"))  # same name+desc → same key
+    assert a != _doc_key(_spec("t", "two"))  # changed description → new key
