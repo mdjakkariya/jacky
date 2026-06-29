@@ -7,7 +7,7 @@ import { daemon } from "../../lib/daemon.js";
  *  MCP endpoints (verified June 2026); the wizard's URL field stays editable so a
  *  user can change one if a provider moves theirs. */
 const CATALOG = [
-  { id: "slack",  label: "Slack",       icon: "💬", transport: "http",  url: "https://mcp.slack.com/mcp",          auth: "oauth", egress: true,  desc: "OAuth", client_id: "11464582898883.11464592777859" },
+  { id: "slack",  label: "Slack",       icon: "💬", transport: "http",  url: "https://mcp.slack.com/mcp",          auth: "token", egress: true,  desc: "User OAuth token (Slack requires HTTPS redirects — no loopback OAuth)" },
   { id: "github", label: "GitHub",      icon: "🐙", transport: "http",  url: "https://api.githubcopilot.com/mcp/", auth: "oauth", egress: true,  desc: "OAuth", client_id: "Ov23livdLJSZe2WjUMrp" },
   { id: "files",  label: "Local Files", icon: "📁", transport: "stdio", command: "npx @mcp/server-files",          auth: "none",  egress: false, desc: "on-device" },
   { id: "notion", label: "Notion",      icon: "🗒️", transport: "http",  url: "https://mcp.notion.com/mcp",         auth: "oauth", egress: true,  desc: "OAuth" },

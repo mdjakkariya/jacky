@@ -605,9 +605,9 @@ describe("Descriptor contract", () => {
   it("catalog pick seeds authType from catalog entry auth field", () => {
     const container = makeContainer();
     showAddConnection(container, { onDone: vi.fn(), onCancel: vi.fn() });
-    // Click Slack (auth: "oauth")
+    // Click Notion (auth: "oauth") — Slack is now "token" (HTTPS-redirect limitation).
     const items = container.querySelectorAll(".cat-item");
-    items[0].click();
+    items[3].click();
     // Advance to step 3
     container.querySelector(".btn-next").click(); // step 2
     fillUrl(container);
