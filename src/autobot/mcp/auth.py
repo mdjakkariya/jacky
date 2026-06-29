@@ -216,7 +216,7 @@ class LoopbackCallbackServer:
         Returns:
             The redirect URI to register: ``http://127.0.0.1:<port>/callback``.
         """
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         self._result = loop.create_future()
         self._server = await asyncio.start_server(self._handle, "127.0.0.1", 0)
         # Retrieve the OS-assigned port from the first socket.
@@ -265,6 +265,7 @@ class LoopbackCallbackServer:
             await writer.drain()
         finally:
             writer.close()
+            await writer.wait_closed()
 
         if self._result is not None and not self._result.done():
             if code:

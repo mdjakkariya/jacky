@@ -340,6 +340,36 @@ def test_keychain_token_value_never_logged(caplog: pytest.LogCaptureFixture) -> 
         )
 
 
+def test_keychain_token_value_never_logged_on_read(caplog: pytest.LogCaptureFixture) -> None:
+    """get_tokens must not emit the stored token value into any log record."""
+    store: dict[str, str] = {
+        "mcp.github.oauth": json.dumps(
+            {"access_token": "super-secret-tok-read-7777", "token_type": "Bearer"}
+        )
+    }
+    runner = _make_fake_runner(store)
+    storage = KeychainTokenStorage("github", runner=runner)
+
+    with (
+        caplog.at_level(logging.DEBUG),
+        patch.dict(
+            "sys.modules",
+            {
+                "mcp": MagicMock(),
+                "mcp.shared": MagicMock(),
+                "mcp.shared.auth": MagicMock(OAuthToken=_FakeOAuthToken),
+            },
+        ),
+    ):
+        result = asyncio.run(storage.get_tokens())
+
+    assert result is not None
+    for record in caplog.records:
+        assert "super-secret-tok-read-7777" not in record.getMessage(), (
+            f"Token value leaked in log record: {record.getMessage()}"
+        )
+
+
 # ---------------------------------------------------------------------------
 # Phase 6: open_browser tests
 # ---------------------------------------------------------------------------
@@ -361,6 +391,12 @@ def test_open_browser_raises_for_custom_scheme() -> None:
     """open_browser raises ValueError for custom URI schemes."""
     with pytest.raises(ValueError, match="myapp"):
         open_browser("myapp://oauth/callback")
+
+
+def test_open_browser_raises_for_data_scheme() -> None:
+    """open_browser raises ValueError for data: URLs (XSS/exfil vector)."""
+    with pytest.raises(ValueError, match="data"):
+        open_browser("data:text/html,<script>alert(1)</script>")
 
 
 def test_open_browser_calls_webbrowser_for_https(monkeypatch: pytest.MonkeyPatch) -> None:
