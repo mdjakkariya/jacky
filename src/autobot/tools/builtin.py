@@ -24,6 +24,7 @@ GET_TIME = ToolSpec(
     parameters={"type": "object", "properties": {}, "required": []},
     handler=get_time,
     risk=Risk.READ_ONLY,
+    core=True,
 )
 
 

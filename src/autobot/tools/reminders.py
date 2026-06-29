@@ -579,6 +579,7 @@ class RemindersTools:
                 risk=Risk.WRITE,
                 requires=AUTOMATION,
                 ack="Setting that reminder.",
+                core=True,
             ),
             ToolSpec(
                 name="update_reminder",

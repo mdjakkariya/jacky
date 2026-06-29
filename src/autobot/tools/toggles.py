@@ -174,6 +174,7 @@ class SystemToggles:
                 handler=self.set_volume,
                 risk=Risk.WRITE,
                 ack="Adjusting the volume.",
+                core=True,
             ),
             ToolSpec(
                 name="set_brightness",
@@ -197,6 +198,7 @@ class SystemToggles:
                 handler=self.set_brightness,
                 risk=Risk.WRITE,
                 ack="Adjusting the brightness.",
+                core=True,
             ),
             ToolSpec(
                 name="install_brightness_tool",

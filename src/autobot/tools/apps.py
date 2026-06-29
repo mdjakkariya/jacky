@@ -350,6 +350,7 @@ class AppTools:
                 handler=self.open_app,
                 risk=Risk.WRITE,
                 ack="Opening {target}.",
+                core=True,
             ),
             ToolSpec(
                 name="open_website",
@@ -373,6 +374,7 @@ class AppTools:
                 handler=self.open_website,
                 risk=Risk.WRITE,
                 ack="Opening {target}.",
+                core=True,
             ),
             ToolSpec(
                 name="close_website",
@@ -409,6 +411,7 @@ class AppTools:
                 handler=self.focus_app,
                 risk=Risk.WRITE,
                 ack="Switching to {target}.",
+                core=True,
             ),
             ToolSpec(
                 name="hide_app",
@@ -450,6 +453,7 @@ class AppTools:
                 risk=Risk.WRITE,
                 requires=AUTOMATION,
                 ack="Closing {target}.",
+                core=True,
             ),
             ToolSpec(
                 name="list_apps",

@@ -177,6 +177,7 @@ class WebSearchTool:
                 },
                 handler=self.search,
                 risk=Risk.READ_ONLY,
+                core=True,
             )
         ]
 

@@ -192,3 +192,13 @@ def test_registry_specs_returns_all_registered_specs() -> None:
     assert set(by_name) == {"a", "b"}
     assert by_name["b"].core is True
     assert by_name["a"].core is False
+
+
+def test_get_time_is_core() -> None:
+    from autobot.tools.builtin import register_builtins
+
+    reg = ToolRegistry()
+    register_builtins(reg)
+    spec = reg.get("get_time")
+    assert spec is not None
+    assert spec.core is True
