@@ -371,6 +371,18 @@ describe("Step 4 — OAuth path", () => {
     expect(container.querySelector(".oauth-explainer")).not.toBeNull();
   });
 
+  it("pre-fills the Client ID for a catalog server with a baked-in client_id (GitHub)", () => {
+    const container = makeContainer();
+    showAddConnection(container, { onDone: vi.fn(), onCancel: vi.fn() });
+    container.querySelectorAll(".cat-item")[1].click(); // GitHub (auth: oauth, baked-in client_id)
+    container.querySelector(".btn-next").click(); // step 2 (URL prefilled)
+    container.querySelector(".btn-next").click(); // step 3 (oauth preselected)
+    container.querySelector(".btn-next").click(); // step 4 (OAuth explainer)
+    const clientIdField = container.querySelector("[data-field='client_id']");
+    expect(clientIdField).not.toBeNull();
+    expect(clientIdField.value).toBe("Ov23livdLJSZe2WjUMrp");
+  });
+
   it("'Open browser' registers + enables the server and shows progress (not coming-soon)", async () => {
     const container = makeContainer();
     await goToOAuthStep4(container);

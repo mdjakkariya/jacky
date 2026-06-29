@@ -8,7 +8,7 @@ import { daemon } from "../../lib/daemon.js";
  *  user can change one if a provider moves theirs. */
 const CATALOG = [
   { id: "slack",  label: "Slack",       icon: "💬", transport: "http",  url: "https://mcp.slack.com/mcp",          auth: "oauth", egress: true,  desc: "OAuth" },
-  { id: "github", label: "GitHub",      icon: "🐙", transport: "http",  url: "https://api.githubcopilot.com/mcp/", auth: "token", egress: true,  desc: "Personal Access Token" },
+  { id: "github", label: "GitHub",      icon: "🐙", transport: "http",  url: "https://api.githubcopilot.com/mcp/", auth: "oauth", egress: true,  desc: "OAuth", client_id: "Ov23livdLJSZe2WjUMrp" },
   { id: "files",  label: "Local Files", icon: "📁", transport: "stdio", command: "npx @mcp/server-files",          auth: "none",  egress: false, desc: "on-device" },
   { id: "notion", label: "Notion",      icon: "🗒️", transport: "http",  url: "https://mcp.notion.com/mcp",         auth: "oauth", egress: true,  desc: "OAuth" },
 ];
@@ -142,11 +142,13 @@ function buildCatItem(entry, state) {
       state.url = entry.url || "";
       state.command = entry.command || "";
       state.authType = entry.auth;
+      state.clientId = entry.client_id || ""; // baked-in OAuth app client_id (public)
     } else {
       // Reset transport for custom to allow user choice
       state.transport = "http";
       state.url = "";
       state.command = "";
+      state.clientId = "";
     }
   });
 
@@ -422,6 +424,7 @@ function renderOAuthExplainer(wrap, state, callbacks) {
   clientIdInput.type = "text";
   clientIdInput.dataset.field = "client_id";
   clientIdInput.placeholder = "Your OAuth app's Client ID (optional)";
+  clientIdInput.value = state.clientId || ""; // pre-filled for catalog servers with a baked-in client_id
   credsBlock.appendChild(clientIdInput);
 
   const clientSecretLabel = div("field-label", "Client secret");
