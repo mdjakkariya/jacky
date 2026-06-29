@@ -472,7 +472,9 @@ describe("Step 4 — OAuth path", () => {
 describe("Step 4 — OAuth path with pre-registered credentials", () => {
   async function goToOAuthStep4(container, onDone = vi.fn()) {
     showAddConnection(container, { onDone, onCancel: vi.fn() });
-    container.querySelector(".cat-item").click(); // Slack
+    // Notion: OAuth with NO baked-in client_id → the wizard shows the credential
+    // fields (Slack/GitHub now ship a built-in client_id and hide them).
+    container.querySelectorAll(".cat-item")[3].click(); // Notion
     container.querySelector(".btn-next").click();
     fillUrl(container);
     container.querySelector(".btn-next").click();
@@ -505,21 +507,21 @@ describe("Step 4 — OAuth path with pre-registered credentials", () => {
     // Fill in pre-registered credentials
     const clientIdInput = container.querySelector("[data-field='client_id']");
     const clientSecretInput = container.querySelector("[data-field='client_secret']");
-    clientIdInput.value = "my-slack-client-id";
-    clientSecretInput.value = "my-slack-secret";
+    clientIdInput.value = "my-notion-client-id";
+    clientSecretInput.value = "my-notion-secret";
 
     container.querySelector(".btn-open-browser").click();
     await new Promise((r) => setTimeout(r, 0));
 
     // descriptor must carry client_id
     const descriptor = daemon.addMcpServer.mock.calls[0][0];
-    expect(descriptor.client_id).toBe("my-slack-client-id");
+    expect(descriptor.client_id).toBe("my-notion-client-id");
 
     // daemon.secret must be called with the correct Keychain account name and secret
-    expect(daemon.secret).toHaveBeenCalledWith("mcp.slack.client_secret", "my-slack-secret");
+    expect(daemon.secret).toHaveBeenCalledWith("mcp.notion.client_secret", "my-notion-secret");
 
     // enableMcpServer still called
-    expect(daemon.enableMcpServer).toHaveBeenCalledWith("slack");
+    expect(daemon.enableMcpServer).toHaveBeenCalledWith("notion");
   });
 
   it("'Open browser' without client_id does NOT call daemon.secret", async () => {
