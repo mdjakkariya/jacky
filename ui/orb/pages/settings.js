@@ -54,11 +54,19 @@ if (connList) {
 
 // The "Enable MCP connections" master toggle takes effect only on daemon restart
 // (the MCP manager is built at startup), so surface a restart hint when it changes.
+// The "off by default" info banner is hidden once MCP is enabled (it would otherwise
+// contradict the on state).
+function updateMcpUI() {
+  const on = !!($("allow_mcp") && $("allow_mcp").checked);
+  const banner = $("mcpOffBanner");
+  if (banner) banner.classList.toggle("hidden", on);
+}
 const allowMcpToggle = $("allow_mcp");
 if (allowMcpToggle) {
   allowMcpToggle.addEventListener("change", () => {
     const hint = $("mcpRestartHint");
     if (hint) hint.classList.remove("hidden");
+    updateMcpUI();
   });
 }
 
@@ -229,6 +237,7 @@ async function load() {
   CHECKS.forEach((k) => { $(k).checked = !!s[k]; });
   $("web_provider").value = s.web_provider || "auto";
   updateWebUI();
+  updateMcpUI();
   const sec = s._secrets || {};
   $("keyState").textContent = sec.anthropic_api_key ? "— saved (leave blank to keep)" : "— not set";
   $("webKeyState").textContent = sec.web_api_key ? "— saved (leave blank to keep)" : "— not set";

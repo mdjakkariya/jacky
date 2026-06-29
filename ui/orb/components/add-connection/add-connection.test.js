@@ -475,6 +475,12 @@ describe("Descriptor contract", () => {
     expect(descriptor.transport).toBe("http");
   });
 
+  it("token-auth descriptor wires secret_ref to the Keychain account", async () => {
+    const container = makeContainer();
+    const descriptor = await buildDescriptorViaConnect(container, 0); // Slack via token
+    expect(descriptor.secret_ref).toBe("mcp.slack.token");
+  });
+
   it("Local Files (catalog, local/stdio) descriptor has egress=local", async () => {
     const container = makeContainer();
     const descriptor = await buildDescriptorViaConnect(container, 2);

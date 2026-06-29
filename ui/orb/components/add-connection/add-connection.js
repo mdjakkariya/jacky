@@ -8,7 +8,7 @@ import { daemon } from "../../lib/daemon.js";
  *  user can change one if a provider moves theirs. */
 const CATALOG = [
   { id: "slack",  label: "Slack",       icon: "💬", transport: "http",  url: "https://mcp.slack.com/mcp",          auth: "oauth", egress: true,  desc: "OAuth" },
-  { id: "github", label: "GitHub",      icon: "🐙", transport: "http",  url: "https://api.githubcopilot.com/mcp/", auth: "oauth", egress: true,  desc: "OAuth" },
+  { id: "github", label: "GitHub",      icon: "🐙", transport: "http",  url: "https://api.githubcopilot.com/mcp/", auth: "token", egress: true,  desc: "Personal Access Token" },
   { id: "files",  label: "Local Files", icon: "📁", transport: "stdio", command: "npx @mcp/server-files",          auth: "none",  egress: false, desc: "on-device" },
   { id: "notion", label: "Notion",      icon: "🗒️", transport: "http",  url: "https://mcp.notion.com/mcp",         auth: "oauth", egress: true,  desc: "OAuth" },
 ];
@@ -478,11 +478,11 @@ function renderOAuthExplainer(wrap, state, callbacks) {
 }
 
 function renderTokenForm(wrap, state, callbacks) {
-  const label = div("field-label", "Bot token");
+  const label = div("field-label", "Access token");
   const tokenInput = el("input", "field-input");
   tokenInput.type = "password";
   tokenInput.dataset.field = "token";
-  tokenInput.placeholder = "xoxb-…";
+  tokenInput.placeholder = "Paste your token (e.g. GitHub PAT, Slack bot token)";
 
   wrap.appendChild(label);
   wrap.appendChild(tokenInput);
@@ -539,6 +539,13 @@ function buildDescriptor(state) {
     auth: { type: state.authType },
     egress,
   };
+
+  // For token auth, point the descriptor at the Keychain account the wizard writes
+  // (mcpSetToken stores under "mcp.<id>.token"). Without this the worker has no
+  // secret_ref and never sends the bearer header / env token.
+  if (state.authType === "token") {
+    descriptor.secret_ref = "mcp." + id + ".token";
+  }
 
   if (state.transport === "http") {
     descriptor.url = state.url;

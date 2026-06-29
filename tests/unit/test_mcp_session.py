@@ -15,7 +15,7 @@ import pytest
 from autobot.mcp import adapter
 from autobot.mcp.approvals import load_approvals, record_fingerprints
 from autobot.mcp.config import McpServerConfig
-from autobot.mcp.session import McpServerWorker, _Call, tool_allowed
+from autobot.mcp.session import McpServerWorker, _Call, friendly_error, tool_allowed
 from autobot.tools.registry import ToolRegistry
 
 
@@ -70,6 +70,23 @@ def test_tool_allowed_deny_glob_wins_over_allow() -> None:
 def test_tool_allowed_deny_without_allow() -> None:
     assert tool_allowed("dangerous", (), ("dang*",)) is False
     assert tool_allowed("safe", (), ("dang*",)) is True
+
+
+def test_friendly_error_plain_exception_passthrough() -> None:
+    assert friendly_error(RuntimeError("boom")) == "boom"
+
+
+def test_friendly_error_unwraps_exception_group() -> None:
+    grp = BaseExceptionGroup("g", [ValueError("real cause")])
+    assert friendly_error(grp) == "real cause"
+
+
+def test_friendly_error_translates_oauth_registration_failure() -> None:
+    # GitHub-style: anyio wraps an OAuthRegistrationError in a TaskGroup group.
+    grp = BaseExceptionGroup("tg", [RuntimeError("Registration failed: 404 page not found")])
+    msg = friendly_error(grp).lower()
+    assert "personal access token" in msg
+    assert "registration failed" not in msg  # raw text replaced with guidance
 
 
 def test_fail_pending_resolves_queued_calls_fast() -> None:

@@ -41,6 +41,37 @@ _log = get_logger("mcp")
 CALL_TIMEOUT_S = 30.0
 
 
+def friendly_error(exc: BaseException) -> str:
+    """Best-effort human-readable message from a worker failure.
+
+    anyio wraps transport/auth failures in a TaskGroup ``ExceptionGroup``; unwrap it
+    to the root cause and translate the common "server has no OAuth dynamic client
+    registration" case (e.g. GitHub) into actionable guidance, since the raw message
+    ("unhandled errors in a TaskGroup") is useless in the UI.
+
+    Args:
+        exc: The exception caught by the worker's run loop.
+
+    Returns:
+        A concise, user-facing error string.
+    """
+    inner: BaseException = exc
+    for _ in range(6):  # bounded unwrap of nested ExceptionGroups
+        if isinstance(inner, BaseExceptionGroup) and inner.exceptions:
+            inner = inner.exceptions[0]
+        else:
+            break
+    msg = str(inner).strip() or inner.__class__.__name__
+    low = msg.lower()
+    _dcr_markers = ("registration failed", "registrationerror", "dynamic client registration")
+    if any(m in low for m in _dcr_markers):
+        return (
+            "This server doesn't support automatic OAuth sign-in (dynamic client "
+            "registration). Use a personal access token instead."
+        )
+    return msg
+
+
 def tool_allowed(name: str, allow: tuple[str, ...], deny: tuple[str, ...]) -> bool:
     """Whether a tool name passes the server's allow/deny globs.
 
@@ -169,7 +200,7 @@ class McpServerWorker:
         except Exception as exc:  # never let the worker crash the loop
             self._state = "error"
             _log.exception("mcp worker failed server=%s", self._cfg.id)
-            self._emit_status(error=str(exc))
+            self._emit_status(error=friendly_error(exc))
         finally:
             # Flip off "connected" first so new submit_call()s are rejected fast,
             # then fail any calls still queued/in-flight so their callers don't have
