@@ -12,15 +12,20 @@ from typing import Any
 from autobot.config import Settings
 from autobot.core.types import ToolCall, ToolResult
 from autobot.llm.anthropic_llm import (
+    TOOL_SEARCH_NAME,
+    TOOL_SEARCH_TYPE,
     AnthropicLanguageModel,
     _first_pairing_problem,
+    assemble_anthropic_tools,
     cloud_error_reply,
     estimate_cost_usd,
     is_too_long_error,
     parse_tool_uses,
+    partition_tools,
     text_from_content,
     to_anthropic_tools,
     too_long_reply,
+    tool_search_supported,
     trim_history,
     with_cache_breakpoint,
 )
@@ -550,3 +555,64 @@ def test_run_turn_forces_final_answer_at_round_cap() -> None:
     assert reply == "Here's what I managed."  # forced final answer, not the canned line
     # The 9th (final) create was made with no tools.
     assert "tools" not in model._client.messages.calls[-1]
+
+
+def _spec(name: str, *, core: bool = False) -> ToolSpec:
+    return ToolSpec(
+        name=name,
+        description=f"desc for {name}",
+        parameters={"type": "object", "properties": {}},
+        handler=lambda **k: name,
+        core=core,
+    )
+
+
+def test_tool_search_supported_resolves_mode_and_model() -> None:
+    # "off" always disables; "on" always enables; "auto" follows the model table.
+    assert tool_search_supported("claude-opus-4-8", "off") is False
+    assert tool_search_supported("some-unknown-model", "on") is True
+    assert tool_search_supported("claude-opus-4-8", "auto") is True
+    assert tool_search_supported("claude-haiku-4-5", "auto") is False  # not in the table
+
+
+def test_partition_tools_splits_core_from_gated() -> None:
+    core, gated = partition_tools([_spec("battery", core=True), _spec("slack__send")])
+    assert [s.name for s in core] == ["battery"]
+    assert [s.name for s in gated] == ["slack__send"]
+
+
+def test_assemble_marks_gated_defer_and_keeps_core_undeferred() -> None:
+    tools = assemble_anthropic_tools(
+        [_spec("battery", core=True), _spec("slack__send")], tool_search=True
+    )
+    by_name = {t["name"]: t for t in tools}
+    assert "defer_loading" not in by_name["battery"]  # core advertised normally
+    assert by_name["slack__send"]["defer_loading"] is True  # gated -> deferred
+
+
+def test_assemble_adds_search_tool_not_deferred() -> None:
+    tools = assemble_anthropic_tools([_spec("slack__send")], tool_search=True)
+    search = next(t for t in tools if t.get("type") == TOOL_SEARCH_TYPE)
+    assert search["name"] == TOOL_SEARCH_NAME
+    assert "defer_loading" not in search  # the search tool must never be deferred
+    # At least one non-deferred tool always exists (the search tool), as required.
+    assert any("defer_loading" not in t for t in tools)
+
+
+def test_assemble_puts_cache_control_on_last_tool_only() -> None:
+    tools = assemble_anthropic_tools(
+        [_spec("battery", core=True), _spec("slack__send")], tool_search=True
+    )
+    assert tools[-1]["cache_control"] == {"type": "ephemeral"}
+    assert all("cache_control" not in t for t in tools[:-1])
+
+
+def test_assemble_fallback_advertises_all_without_defer_or_search() -> None:
+    tools = assemble_anthropic_tools(
+        [_spec("battery", core=True), _spec("slack__send")], tool_search=False
+    )
+    names = {t["name"] for t in tools}
+    assert names == {"battery", "slack__send"}  # every tool, none dropped
+    assert all("defer_loading" not in t for t in tools)  # legacy: no deferral
+    assert all(t.get("type") != TOOL_SEARCH_TYPE for t in tools)  # no search tool
+    assert all("cache_control" not in t for t in tools)  # legacy request unchanged
