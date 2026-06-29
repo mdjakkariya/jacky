@@ -2,6 +2,7 @@
  *  Module pattern (not a custom element), created imperatively like confirm-card.
  *  Exports showAddConnection(container, {onDone, onCancel}) and hideAddConnection(container). */
 import { daemon } from "../../lib/daemon.js";
+import { serverIconEl } from "../../lib/server-icons.js";
 
 /** Static catalog of known MCP servers. URLs are the providers' official hosted
  *  MCP endpoints (verified June 2026); the wizard's URL field stays editable so a
@@ -122,7 +123,9 @@ function renderStep1(state, callbacks) {
 /** Build a single catalog item div. */
 function buildCatItem(entry, state) {
   const item = div("cat-item");
-  const iconEl = div("cat-icon", entry.icon);
+  // Brand logo for known servers; the Custom entry keeps its ➕ glyph.
+  const iconEl = div("cat-icon");
+  iconEl.appendChild(entry.custom ? document.createTextNode(entry.icon) : serverIconEl(entry.id));
   const meta = div("");
   const name = div("cat-name", entry.label);
   const desc = div("cat-desc", entry.desc);

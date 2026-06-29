@@ -109,7 +109,8 @@
   .srv-card:first-child { border-top:none; }
   .srv-icon { width:36px; height:36px; border-radius:9px; flex:0 0 auto;
     display:flex; align-items:center; justify-content:center; font-size:18px;
-    background:var(--seg-bg); border:.5px solid var(--line); }
+    background:var(--seg-bg); border:.5px solid var(--line); color:var(--text); }
+  .srv-icon svg { width:20px; height:20px; display:block; }
   .srv-meta { flex:1; min-width:0; }
   .srv-name { font-weight:600; display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
   .srv-desc { color:var(--muted); font-size:12px; margin-top:2px; display:flex; gap:6px; align-items:center; flex-wrap:wrap; }
@@ -139,7 +140,8 @@
   .cat-item:hover { border-color:var(--accent); }
   .cat-item.selected { border-color:var(--accent); background:var(--accent-bg); }
   .cat-icon { width:28px; height:28px; border-radius:7px; display:flex; align-items:center;
-    justify-content:center; font-size:15px; background:var(--seg-bg); flex:none; }
+    justify-content:center; font-size:15px; background:var(--seg-bg); flex:none; color:var(--text); }
+  .cat-icon svg { width:18px; height:18px; display:block; }
   .cat-name { font-weight:600; font-size:12.5px; }
   .cat-desc { color:var(--muted); font-size:11px; margin-top:1px; }
   /* Wizard radio option */

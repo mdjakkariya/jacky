@@ -3,6 +3,7 @@
  *  Exports showConnectionDetail(container, serverId, serverMeta, {onClose}) and
  *  hideConnectionDetail(container). */
 import { daemon } from "../../lib/daemon.js";
+import { serverIconEl } from "../../lib/server-icons.js";
 
 // ---------------------------------------------------------------------------
 // Risk cycle
@@ -196,7 +197,8 @@ export function showConnectionDetail(container, serverId, serverMeta, { onClose 
   // -------------------------------------------------------------------------
   const header = div("detail-header");
 
-  const iconEl = div("srv-icon", serverMeta.icon || "🔌");
+  const iconEl = div("srv-icon");
+  iconEl.appendChild(serverIconEl(serverId)); // brand logo by id
   header.appendChild(iconEl);
 
   const headerMeta = div("srv-meta");

@@ -1,6 +1,7 @@
 /** MCP connections list: a card per server with status dot, egress badge, toggle,
  *  and reconnect-churn tolerance (1500 ms debounce on mcp_status events). */
 import { daemon } from "../../lib/daemon.js";
+import { serverIconEl } from "../../lib/server-icons.js";
 
 /** Extract a display hostname for a network-egress server.
  *  Prefers srv.url (parsed via URL), falls back to the bare server id. */
@@ -91,10 +92,10 @@ export class ConnectionsList extends HTMLElement {
     // overwrite the description with "reconnecting…") can restore it without scraping text.
     card.dataset.authType = srv.auth_type || "";
 
-    // Icon
+    // Icon — brand logo by server id (daemon status has no icon field).
     const icon = document.createElement("div");
     icon.className = "srv-icon";
-    icon.textContent = srv.icon || "?";
+    icon.appendChild(serverIconEl(srv.server));
 
     // Meta column
     const meta = document.createElement("div");
