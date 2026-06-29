@@ -207,7 +207,7 @@ def test_build_oauth_provider_pre_registered_client(
     pytest.importorskip("mcp")  # skip if mcp extra absent
     from mcp.client.auth import OAuthClientProvider
 
-    from autobot.mcp.auth import KeychainTokenStorage, LoopbackCallbackServer
+    from autobot.mcp.auth import OAUTH_CALLBACK_PORT, KeychainTokenStorage, LoopbackCallbackServer
 
     cfg = McpServerConfig(
         id="slack",
@@ -219,7 +219,10 @@ def test_build_oauth_provider_pre_registered_client(
     )
     worker = McpServerWorker(cfg, ToolRegistry(), loop=worker_loop)
 
+    captured: list[LoopbackCallbackServer] = []
+
     async def _fake_start(self: LoopbackCallbackServer) -> str:
+        captured.append(self)  # capture the server to verify it was given the fixed port
         return "http://127.0.0.1:8975/callback"
 
     with (
@@ -233,6 +236,10 @@ def test_build_oauth_provider_pre_registered_client(
     assert isinstance(storage, KeychainTokenStorage)
     assert storage._client_id == "slack-client-id-abc"
     assert storage._client_secret == "slack-secret-xyz"
+    # The redirect URI flows into storage, and the callback server uses the fixed port
+    # the user registers (so the pre-registered redirect_uri matches).
+    assert storage._redirect_uri == "http://127.0.0.1:8975/callback"
+    assert captured[0]._fixed_port == OAUTH_CALLBACK_PORT
 
 
 # ---------------------------------------------------------------------------

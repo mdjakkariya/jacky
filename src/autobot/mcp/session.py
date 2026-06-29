@@ -355,14 +355,15 @@ class McpServerWorker:
         from autobot.mcp.auth import KeychainTokenStorage, LoopbackCallbackServer, open_browser
 
         client_id = self._cfg.client_id
-        client_secret = _get_secret(f"mcp.{self._cfg.id}.client_secret")
 
         # token_endpoint_auth_method typed as Any to satisfy OAuthClientMetadata's
         # Literal constraint without importing the mcp SDK at module level.
         token_endpoint_auth_method: Any
         if client_id is not None:
-            from autobot.mcp.auth import OAUTH_CALLBACK_PORT, oauth_redirect_uri  # noqa: F401
+            from autobot.mcp.auth import OAUTH_CALLBACK_PORT
 
+            # client_secret only exists for pre-registered apps (Keychain-only).
+            client_secret = _get_secret(f"mcp.{self._cfg.id}.client_secret")
             cb_server = LoopbackCallbackServer(port=OAUTH_CALLBACK_PORT)
             redirect_uri = await cb_server.start()
             storage: Any = KeychainTokenStorage(
