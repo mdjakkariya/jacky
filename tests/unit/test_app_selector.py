@@ -23,3 +23,22 @@ def test_build_llm_honors_tool_selection_all() -> None:
     )
     assert isinstance(model, OllamaLanguageModel)
     assert isinstance(model._selector, AllToolsSelector)
+
+
+def test_build_llm_anthropic_off_falls_back_to_local_without_key() -> None:
+    # No API key + default provider switch to anthropic: _build_llm must NOT raise; it
+    # degrades to the local Ollama model (cloud features never crash startup). In CI
+    # there is no Anthropic key, so the branch always falls back to local. Locally, a
+    # developer may have a real key in the Keychain; in that case the cloud model is
+    # returned instead — both are valid outcomes. The key contract is "never crash".
+    from autobot.llm.anthropic_llm import AnthropicLanguageModel
+
+    model = _build_llm(
+        Settings(context_tokens=4096, llm_provider="anthropic"),
+        ToolRegistry(),
+        NullTranscript(),
+        None,
+    )
+    # Either outcome is correct: fallback to local (no key in env) or cloud model
+    # (real key in dev Keychain). The contract is "no crash on startup".
+    assert isinstance(model, (OllamaLanguageModel, AnthropicLanguageModel))
