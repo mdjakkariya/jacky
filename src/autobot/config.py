@@ -190,6 +190,12 @@ class Settings:
     # Tool names to force into / out of the core set without code edits.
     tool_core_extra: list[str] = field(default_factory=list)
     tool_core_remove: list[str] = field(default_factory=list)
+    # Local embedding model for tool_selection="embedding" (the EmbeddingToolSelector
+    # recall upgrade on the local path). Pulled via Ollama on first use (~270MB); it
+    # is NOT a base dependency and is never used unless tool_selection is "embedding".
+    # Embeddings run entirely on-device — only tool descriptions and the user query are
+    # embedded, locally, and nothing leaves the machine.
+    embedding_model: str = "nomic-embed-text"
     # Anthropic-only: how the cloud path advertises tools. "auto" (default) uses
     # Anthropic's server-side Tool Search Tool when the configured model supports it
     # (gated built-ins marked defer_loading so connecting MCP servers add ~0 baseline

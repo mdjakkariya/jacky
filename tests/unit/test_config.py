@@ -128,3 +128,13 @@ def test_anthropic_tool_search_overlays_from_file(tmp_path: Path) -> None:
     path = tmp_path / "settings.json"
     write_settings({"anthropic_tool_search": "off"}, path)
     assert Settings.load(path).anthropic_tool_search == "off"
+
+
+def test_embedding_model_default() -> None:
+    assert Settings().embedding_model == "nomic-embed-text"
+
+
+def test_embedding_model_overlays_from_file(tmp_path: Path) -> None:
+    path = tmp_path / "settings.json"
+    write_settings({"embedding_model": "mxbai-embed-large"}, path)
+    assert Settings.load(path).embedding_model == "mxbai-embed-large"
