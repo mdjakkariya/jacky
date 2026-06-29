@@ -169,3 +169,26 @@ def test_dispatch_runs_handler_outside_lock() -> None:
         result = dispatch_future.result(timeout=2.0)
     assert result.ok is True
     assert result.content == "done"
+
+
+def test_toolspec_core_defaults_false() -> None:
+    spec = ToolSpec(name="t", description="", parameters={}, handler=lambda: "")
+    assert spec.core is False
+
+
+def test_toolspec_core_can_be_set() -> None:
+    spec = ToolSpec(name="t", description="", parameters={}, handler=lambda: "", core=True)
+    assert spec.core is True
+
+
+def test_registry_specs_returns_all_registered_specs() -> None:
+    registry = ToolRegistry()
+    registry.register(ToolSpec(name="a", description="", parameters={}, handler=lambda: "a"))
+    registry.register(
+        ToolSpec(name="b", description="", parameters={}, handler=lambda: "b", core=True)
+    )
+    specs = registry.specs()
+    by_name = {s.name: s for s in specs}
+    assert set(by_name) == {"a", "b"}
+    assert by_name["b"].core is True
+    assert by_name["a"].core is False

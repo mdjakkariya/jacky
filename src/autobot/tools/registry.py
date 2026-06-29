@@ -47,6 +47,12 @@ class ToolSpec:
     # note, and — for WRITE-or-higher tools — makes the gate confirm even below the
     # destructive threshold (see PermissionGate, phase 2). False for all local tools.
     network: bool = False
+    # True when this tool is part of the always-on "core" set advertised on every
+    # turn (the frequent, everyday built-ins). False tools are "gated": advertised
+    # only when the ToolSelector judges them relevant to the user's message, which
+    # is what keeps per-turn tool context bounded (see autobot.tools.selection). MCP
+    # tools are always gated (the adapter never sets this).
+    core: bool = False
 
     def to_schema(self) -> dict[str, Any]:
         """Render the OpenAI/Ollama-style ``function`` schema for this tool."""
@@ -108,6 +114,16 @@ class ToolRegistry:
         with self._lock:
             specs = list(self._tools.values())
         return [spec.to_schema() for spec in specs]
+
+    def specs(self) -> list[ToolSpec]:
+        """Return a snapshot of every registered spec (for relevance selection).
+
+        Unlike :meth:`schemas`, this preserves the full :class:`ToolSpec` objects
+        (including ``core``/``risk``/``network``), which the :class:`ToolSelector`
+        needs to partition core vs. gated and to rank gated tools.
+        """
+        with self._lock:
+            return list(self._tools.values())
 
     def dispatch(self, name: str, arguments: dict[str, Any] | None = None) -> ToolResult:
         """Execute a registered tool by name.
