@@ -17,10 +17,12 @@ import asyncio
 import concurrent.futures
 from dataclasses import dataclass
 from fnmatch import fnmatch
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from autobot.logging_setup import get_logger
 from autobot.mcp import adapter
+from autobot.mcp.approvals import DEFAULT_APPROVALS_PATH, load_approvals, record_fingerprints
 from autobot.mcp.auth import stdio_env_for
 from autobot.secrets import get_secret as _get_secret
 from autobot.tools.registry import ToolSpec
@@ -70,11 +72,13 @@ class McpServerWorker:
         *,
         loop: asyncio.AbstractEventLoop,
         on_event: Callable[[dict[str, Any]], None] | None = None,
+        approvals_path: str | Path = DEFAULT_APPROVALS_PATH,
     ) -> None:
         self._cfg = config
         self._registry = registry
         self._loop = loop
         self._on_event = on_event
+        self._approvals_path = approvals_path
         self._queue: asyncio.Queue[_Call | str] | None = None
         self._registered: list[str] = []
         self._state = "disconnected"
@@ -102,7 +106,10 @@ class McpServerWorker:
         on every ``_sync_tools`` call (connect and ``tools/list_changed`` resync).
 
         Returns:
-            A copy of ``_all_tools``; each item is ``{name, description, risk, network, enabled}``.
+            A copy of ``_all_tools``; each item has keys
+            ``{name, description, risk, network, enabled, pending_reconsent}``.
+            ``pending_reconsent`` is ``True`` only for tools blocked due to a
+            fingerprint change (rug-pull), ``False`` otherwise.
         """
         return list(self._all_tools)
 
@@ -361,7 +368,18 @@ class McpServerWorker:
                 call.future.set_exception(exc)
 
     async def _sync_tools(self, session: Any) -> None:
-        """List the server's tools and reconcile the registry (add/replace/remove)."""
+        """List the server's tools and reconcile the registry (add/replace/remove).
+
+        Fingerprint gating runs for every allowed tool:
+
+        - Fingerprint unchanged vs approved.json → register normally.
+        - Fingerprint changed (rug-pull) → block (do not register); mark
+          ``pending_reconsent=True`` in ``_all_tools``; emit ``mcp_tool_changed``.
+        - New tool (not in approved.json) → auto-register and baseline its
+          fingerprint in approved.json.
+
+        Denied tools are skipped before fingerprinting, exactly as before.
+        """
         listed = await session.list_tools()
         floor = adapter.risk_from_name(self._cfg.default_risk)
         overrides = {
@@ -369,22 +387,38 @@ class McpServerWorker:
             for name, value in self._cfg.tool_risk_overrides.items()
         }
         network = self._cfg.egress == "network"
-        # Build the full snapshot (all tools, pre-filter) for the UI.
-        self._all_tools = [
-            {
-                "name": t.name,
-                "description": t.description or "",
-                "risk": adapter.risk_for(t, floor=floor, overrides=overrides).name.lower(),
-                "network": network,
-                "enabled": tool_allowed(t.name, self._cfg.tool_allow, self._cfg.tool_deny),
-            }
-            for t in listed.tools
-        ]
+
+        # Load approved fingerprints for this server.
+        approvals = load_approvals(self._approvals_path)
+        approved_fps = approvals.fingerprints.get(self._cfg.id, {})
+        new_fps: dict[str, str] = {}
+        reconsent_names: list[str] = []
+        reconsent_bare: set[str] = set()  # bare tool names for _all_tools lookup
+
+        # Build desired dict AND collect fingerprint decisions in one pass.
         desired: dict[str, ToolSpec] = {}
         for tool in listed.tools:
             if not tool_allowed(tool.name, self._cfg.tool_allow, self._cfg.tool_deny):
                 continue
             reg_name = adapter.namespaced(self._cfg.id, tool.name)
+            fp = adapter.fingerprint(tool)
+            if reg_name in approved_fps:
+                if approved_fps[reg_name] != fp:
+                    # Rug-pull detected: fingerprint changed since approval.
+                    reconsent_names.append(reg_name)
+                    reconsent_bare.add(tool.name)
+                    _log.warning(
+                        "mcp tool fingerprint changed server=%s tool=%s"
+                        " — blocking pending re-consent",
+                        self._cfg.id,
+                        reg_name,
+                    )
+                    continue  # do NOT add to desired
+                # Fingerprint unchanged — allow through (fall through to desired insert)
+            else:
+                # New tool: auto-approve; baseline its fingerprint.
+                new_fps[reg_name] = fp
+
             desired[reg_name] = ToolSpec(
                 name=reg_name,
                 description=tool.description or "",
@@ -393,6 +427,22 @@ class McpServerWorker:
                 risk=adapter.risk_for(tool, floor=floor, overrides=overrides),
                 network=network,
             )
+
+        # Build the full snapshot (all tools, pre-filter) for the UI — AFTER fingerprint
+        # decisions so pending_reconsent can be set correctly.
+        self._all_tools = [
+            {
+                "name": t.name,
+                "description": t.description or "",
+                "risk": adapter.risk_for(t, floor=floor, overrides=overrides).name.lower(),
+                "network": network,
+                "enabled": tool_allowed(t.name, self._cfg.tool_allow, self._cfg.tool_deny),
+                "pending_reconsent": t.name in reconsent_bare,
+            }
+            for t in listed.tools
+        ]
+
+        # Reconcile registry.
         for name in list(self._registered):
             if name not in desired:
                 self._registry.unregister(name)
@@ -400,6 +450,19 @@ class McpServerWorker:
             self._registry.register(spec, replace=True)
         self._registered = list(desired)
         self._tool_count = len(desired)
+
+        # Persist new-tool fingerprints and emit events.
+        if new_fps:
+            record_fingerprints(self._cfg.id, new_fps, self._approvals_path)
+        if reconsent_names:
+            self._emit_event(
+                {
+                    "type": "mcp_tool_changed",
+                    "server": self._cfg.id,
+                    "tools": reconsent_names,
+                }
+            )
+
         _log.info("mcp tools synced server=%s count=%d", self._cfg.id, self._tool_count)
 
     def _make_handler(self, bare_tool: str) -> Callable[..., str]:
