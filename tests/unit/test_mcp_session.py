@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import concurrent.futures
+from collections.abc import Iterator
 from unittest.mock import patch
 
 import pytest
@@ -13,7 +14,23 @@ from autobot.mcp.session import McpServerWorker, _Call, tool_allowed
 from autobot.tools.registry import ToolRegistry
 
 
+@pytest.fixture
+def worker_loop() -> Iterator[asyncio.AbstractEventLoop]:
+    """A fresh event loop for worker construction, closed on teardown.
+
+    These tests never *run* the loop (``_http_headers`` is pure; ``_build_oauth_provider``
+    runs under its own ``asyncio.run``), but ``McpServerWorker`` requires one — so we
+    hand it a real loop and close it here to avoid leaking a ``ResourceWarning``.
+    """
+    lp = asyncio.new_event_loop()
+    try:
+        yield lp
+    finally:
+        lp.close()
+
+
 def _make_worker(
+    loop: asyncio.AbstractEventLoop,
     transport: str = "stdio",
     auth_type: str = "none",
     secret_ref: str | None = None,
@@ -21,7 +38,6 @@ def _make_worker(
     server_id: str = "test-server",
 ) -> McpServerWorker:
     """Construct a McpServerWorker with minimal config for unit tests."""
-    loop = asyncio.new_event_loop()
     cfg = McpServerConfig(
         id=server_id,
         label=server_id,
@@ -73,40 +89,50 @@ def test_fail_pending_resolves_queued_calls_fast() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_http_headers_returns_bearer_when_token_present() -> None:
+def test_http_headers_returns_bearer_when_token_present(
+    worker_loop: asyncio.AbstractEventLoop,
+) -> None:
     """_http_headers returns Authorization header when auth_type=='token' and secret present."""
-    worker = _make_worker(auth_type="token", secret_ref="my-secret-ref")
+    worker = _make_worker(worker_loop, auth_type="token", secret_ref="my-secret-ref")
     with patch("autobot.mcp.session._get_secret", return_value="my-token") as mock_gs:
         headers = worker._http_headers()
     mock_gs.assert_called_once_with("my-secret-ref")
     assert headers == {"Authorization": "Bearer my-token"}
 
 
-def test_http_headers_returns_empty_when_token_missing() -> None:
+def test_http_headers_returns_empty_when_token_missing(
+    worker_loop: asyncio.AbstractEventLoop,
+) -> None:
     """_http_headers returns {} when auth_type=='token' but secret lookup returns None."""
-    worker = _make_worker(auth_type="token", secret_ref="my-secret-ref")
+    worker = _make_worker(worker_loop, auth_type="token", secret_ref="my-secret-ref")
     with patch("autobot.mcp.session._get_secret", return_value=None):
         headers = worker._http_headers()
     assert headers == {}
 
 
-def test_http_headers_returns_empty_when_no_secret_ref() -> None:
+def test_http_headers_returns_empty_when_no_secret_ref(
+    worker_loop: asyncio.AbstractEventLoop,
+) -> None:
     """_http_headers returns {} when auth_type=='token' but no secret_ref configured."""
-    worker = _make_worker(auth_type="token", secret_ref=None)
+    worker = _make_worker(worker_loop, auth_type="token", secret_ref=None)
     headers = worker._http_headers()
     assert headers == {}
 
 
-def test_http_headers_returns_empty_for_auth_type_none() -> None:
+def test_http_headers_returns_empty_for_auth_type_none(
+    worker_loop: asyncio.AbstractEventLoop,
+) -> None:
     """_http_headers returns {} when auth_type=='none'."""
-    worker = _make_worker(auth_type="none")
+    worker = _make_worker(worker_loop, auth_type="none")
     headers = worker._http_headers()
     assert headers == {}
 
 
-def test_http_headers_returns_empty_for_auth_type_oauth() -> None:
+def test_http_headers_returns_empty_for_auth_type_oauth(
+    worker_loop: asyncio.AbstractEventLoop,
+) -> None:
     """_http_headers returns {} when auth_type=='oauth' (bearer headers not used for OAuth)."""
-    worker = _make_worker(auth_type="oauth", url="https://example.com")
+    worker = _make_worker(worker_loop, auth_type="oauth", url="https://example.com")
     headers = worker._http_headers()
     assert headers == {}
 
@@ -116,20 +142,32 @@ def test_http_headers_returns_empty_for_auth_type_oauth() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_build_oauth_provider_returns_correct_type_with_keychain_storage() -> None:
+def test_build_oauth_provider_returns_correct_type_with_keychain_storage(
+    worker_loop: asyncio.AbstractEventLoop,
+) -> None:
     """_build_oauth_provider returns OAuthClientProvider wired to KeychainTokenStorage."""
     mcp = pytest.importorskip("mcp")  # noqa: F841 — skip if mcp extra absent
     from mcp.client.auth import OAuthClientProvider
 
-    from autobot.mcp.auth import KeychainTokenStorage
+    from autobot.mcp.auth import KeychainTokenStorage, LoopbackCallbackServer
 
     worker = _make_worker(
+        worker_loop,
         transport="http",
         auth_type="oauth",
         url="https://example.com/mcp",
         server_id="my-mcp-server",
     )
-    provider = asyncio.run(worker._build_oauth_provider())
+
+    # Stub start() so the test doesn't bind a real loopback socket (it's never awaited
+    # to completion here, so the dangling server would leak). The real bind path is
+    # covered by test_mcp_auth.py's LoopbackCallbackServer tests.
+    async def _fake_start(self: LoopbackCallbackServer) -> str:
+        return "http://127.0.0.1:0/callback"
+
+    with patch.object(LoopbackCallbackServer, "start", _fake_start):
+        provider = asyncio.run(worker._build_oauth_provider())
+
     assert isinstance(provider, OAuthClientProvider)
     # OAuthClientProvider stores its args in provider.context (OAuthContext dataclass)
     storage = provider.context.storage

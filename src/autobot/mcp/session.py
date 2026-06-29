@@ -259,6 +259,8 @@ class McpServerWorker:
 
         storage: Any = KeychainTokenStorage(self._cfg.id)
         redirect_uri_any: Any = redirect_uri  # OAuthClientMetadata.redirect_uris wants AnyUrl
+        # No explicit ``scope`` — the authorization server applies its default scope.
+        # MCP servers that require a specific scope are not yet supported here.
         metadata = OAuthClientMetadata(
             redirect_uris=[redirect_uri_any],
             grant_types=["authorization_code", "refresh_token"],
