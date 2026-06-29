@@ -308,3 +308,14 @@ def test_embedding_falls_back_to_lexical_on_embedder_error() -> None:
     names = {s.name for s in _embedding(_reg(), boom).select("send a slack message")}
     assert "slack__send" in names  # lexical fallback found it despite the embedder failing
     assert "battery_status" in names  # core still advertised via the fallback path
+
+
+def test_build_tool_selector_picks_embedding() -> None:
+    sel = build_tool_selector(Settings(tool_selection="embedding"), _reg())
+    assert isinstance(sel, EmbeddingToolSelector)
+
+
+def test_build_tool_selector_embedding_has_lexical_fallback() -> None:
+    sel = build_tool_selector(Settings(tool_selection="embedding"), _reg())
+    assert isinstance(sel, EmbeddingToolSelector)
+    assert isinstance(sel._fallback, LexicalToolSelector)

@@ -330,17 +330,48 @@ class EmbeddingToolSelector:
         return [s.name for s in self._rank_gated(intent, gated)[:limit]]
 
 
-def build_tool_selector(settings: Settings, registry: ToolRegistry) -> ToolSelector:
-    """Construct the configured selector. ``"all"`` → advertise everything.
+def _ollama_embedder(settings: Settings) -> Embedder:
+    """Build a local Ollama-backed embedder closing over one client.
 
-    Any value other than ``"all"`` (including the default ``"lexical"`` and the
-    Phase-4 ``"embedding"`` placeholder) currently builds the lexical selector.
+    Lazy-imports the ``ollama`` client (kept out of the import path for the lexical/all
+    selectors and the test suite) and embeds via the LOCAL embeddings endpoint, so
+    nothing leaves the machine. Any error propagates to the caller's fallback handler.
+    """
+    from ollama import Client
+
+    client = Client(host=settings.ollama_host)
+    model = settings.embedding_model
+
+    def embed(text: str) -> list[float]:
+        resp = client.embed(model=model, input=text)
+        return list(resp.embeddings[0])
+
+    return embed
+
+
+def build_tool_selector(settings: Settings, registry: ToolRegistry) -> ToolSelector:
+    """Construct the configured selector.
+
+    - ``"all"`` -> :class:`AllToolsSelector` (advertise everything; debugging escape hatch).
+    - ``"embedding"`` -> :class:`EmbeddingToolSelector` ranking gated tools by local
+      embeddings, with a :class:`LexicalToolSelector` fallback for any embedding failure.
+    - anything else (incl. the default ``"lexical"``) -> :class:`LexicalToolSelector`.
     """
     if settings.tool_selection == "all":
         return AllToolsSelector(registry)
-    return LexicalToolSelector(
+    fallback = LexicalToolSelector(
         registry,
         budget=settings.tool_budget,
         core_extra=frozenset(settings.tool_core_extra),
         core_remove=frozenset(settings.tool_core_remove),
     )
+    if settings.tool_selection == "embedding":
+        return EmbeddingToolSelector(
+            registry,
+            embedder=_ollama_embedder(settings),
+            fallback=fallback,
+            budget=settings.tool_budget,
+            core_extra=frozenset(settings.tool_core_extra),
+            core_remove=frozenset(settings.tool_core_remove),
+        )
+    return fallback
