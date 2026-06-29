@@ -167,7 +167,7 @@ Python. `~/.autobot/mcp/servers.json` (config only — **never secrets**):
       "args": ["-y", "@modelcontextprotocol/server-slack"],
       "env": { "SLACK_TEAM_ID": "T0123" },   // non-secret env only
       "url": null,                           // http only (Streamable HTTP)
-      "auth": { "type": "token" },           // "none" | "token" | "oauth2"
+      "auth": { "type": "token" },           // "none" | "token" | "oauth"
       "token_env": "SLACK_BOT_TOKEN",        // stdio: env var the token is injected as
       "secret_ref": "mcp.slack.token",       // Keychain account name, not the value
       "enabled": false,                      // off by default
@@ -227,7 +227,7 @@ Three auth types, selected by `auth.type`:
    spec's sanctioned path for stdio). For **HTTP** it is sent as
    `headers={"Authorization": f"Bearer <token>"}`. Entered once in the UI, never written to
    `servers.json`.
-3. **`oauth2`** — the SDK's `OAuthClientProvider` does the full OAuth 2.1 + PKCE flow (§3.2).
+3. **`oauth`** — the SDK's `OAuthClientProvider` does the full OAuth 2.1 + PKCE flow (§3.2).
    We supply:
    - `KeychainTokenStorage(id)` — persists the token bundle (`mcp.<id>.oauth`) and client
      info (`mcp.<id>.client`) as JSON blobs in the Keychain.
@@ -359,3 +359,222 @@ Per the repo pattern, pure logic is unit-tested without a live server or the SDK
 - registry: `unregister` + idempotent re-register.
 - The async bridge (`manager`/`session`) is integration-tested against a tiny in-repo stdio
   echo MCP server, kept out of the fast unit suite.
+
+## Phase 6 — OAuth 2.1, HTTP Transport, Rug-Pull & Spawn Consent
+
+### What was built
+
+| Deliverable | File(s) |
+|---|---|
+| `KeychainTokenStorage` (async `TokenStorage`) | `src/autobot/mcp/auth.py` |
+| `open_browser` (scheme-validated, no shell) | `src/autobot/mcp/auth.py` |
+| `LoopbackCallbackServer` (`127.0.0.1:0`, 120 s timeout) | `src/autobot/mcp/auth.py` |
+| HTTP transport branch (OAuth 2.1 / token / unauthenticated) | `src/autobot/mcp/session.py` |
+| Fingerprint rug-pull detection + `mcp_tool_changed` event | `src/autobot/mcp/session.py` + `src/autobot/mcp/approvals.py` |
+| Local-spawn consent (via `Confirmer`) | `src/autobot/mcp/session.py` + `src/autobot/mcp/approvals.py` |
+| `approved.json` persistence (mode 0600) | `src/autobot/mcp/approvals.py` |
+| `POST /mcp/servers/{id}/auth/start` endpoint (wired) | `src/autobot/daemon/server.py` |
+
+### OAuth setup (`servers.json`)
+
+To add a remote MCP server that uses OAuth 2.1, set `"auth": {"type": "oauth"}` — the
+config token is `"oauth"` (the protocol is OAuth 2.1, but the literal config value is `oauth`):
+
+```json
+{
+  "servers": {
+    "github": {
+      "label": "GitHub MCP",
+      "transport": "http",
+      "url": "https://api.githubcopilot.com/mcp/",
+      "auth": {"type": "oauth"},
+      "egress": "network",
+      "enabled": false,
+      "default_risk": "write"
+    }
+  }
+}
+```
+
+Then:
+
+1. Enable the server: `POST /mcp/servers/github/enable`
+2. Start OAuth: `POST /mcp/servers/github/auth/start`
+3. Jack opens your browser → complete the login → the callback is captured on
+   `http://127.0.0.1:<ephemeral-port>/callback` → tokens stored in Keychain as
+   `mcp.github.oauth` (token bundle) and `mcp.github.client` (DCR client info).
+4. Watch `mcp_oauth` WS events for the three stages:
+   `browser_open` → `waiting_callback` → `callback_received`
+   followed by an `mcp_status` event with `state=connected`.
+
+#### `auth/start` endpoint behaviour
+
+`POST /mcp/servers/{id}/auth/start` calls `McpManager.start_oauth(id)`, which:
+
+- Returns `{"ok": false, "error": "..."}` if the server's transport is not `http` or
+  `auth.type` is not `"oauth"`.
+- Disconnects any existing worker for that server, then reconnects — which triggers the
+  browser flow via `OAuthClientProvider`.
+- Returns `{"ok": true, "started": true}` once the reconnect has been initiated
+  (the browser may still be waiting; monitor `mcp_oauth` events for progress).
+
+### HTTP transport: three auth branches
+
+`session.py` opens HTTP connections via `streamablehttp_client` (3-tuple unpacked as
+`read, write, _`). Auth is selected by `auth.type`:
+
+| `auth.type` | Behaviour |
+|---|---|
+| `"oauth"` | `OAuthClientProvider` (SDK) performs discovery, PKCE S256, DCR/refresh, and `Authorization: Bearer` injection automatically |
+| `"token"` | Static bearer injected as `Authorization: Bearer <token>` header |
+| anything else / omitted | Unauthenticated connection |
+
+### Fingerprint rug-pull detection (R3 — actual behavior)
+
+On every `list_tools` (connect + `tools/list_changed` resync) the worker computes a
+`sha256` fingerprint over each tool's `(name, description, inputSchema, annotations)`.
+
+**New tools on first connect** are auto-baselined: their fingerprints are written to
+`~/.autobot/mcp/approved.json` and the tools are registered with the `ToolRegistry`.
+
+**Changed tools** (fingerprint in `approved.json` no longer matches) are handled as
+follows:
+
+- The tool is **NOT registered** with the `ToolRegistry` — it is simply absent.
+  There is no special "re-consent" gate message; the registry returns its normal
+  "unknown tool" response if the model tries to call it.
+- The worker emits a WS event: `{"type": "mcp_tool_changed", "server": "<id>",
+  "tools": ["<namespaced-name>", ...]}`.
+- The tool appears in the worker's `all_tools()` snapshot with
+  `"pending_reconsent": true`, so the UI can surface a "tool changed — review" indicator.
+
+**Re-approval**: delete the tool's entry from `~/.autobot/mcp/approved.json` and
+reconnect. The reconnect calls `list_tools` again, sees the new fingerprint, baselines
+it, and registers the tool.
+
+Future: a `POST /mcp/servers/{id}/tools/{tool}/reconsent` endpoint can automate this
+without a manual file edit.
+
+### Spawn consent
+
+On the first `stdio` connect for an un-approved `(command, args)` pair:
+
+1. Jack prompts via the `Confirmer` (kind `"write"`) with the exact, untruncated command
+   and args: *"Allow Jack to launch this process? npx -y @mcp/fs /path"*.
+2. The confirmation runs **off the event loop** via `run_in_executor` so it does not
+   block the async worker.
+3. **Approval**: written to `~/.autobot/mcp/approved.json` (`spawn_approvals` section,
+   keyed by `(command, args)`, with an `approved_at` timestamp). Not re-asked unless
+   the command or args change.
+4. **Denial**: worker sets server state to `"denied"` and does **not** enter the stdio
+   context manager — the process is never spawned.
+
+The confirmer is wired in `app.py::build()` via `McpManager.set_confirmer(...)` **before**
+`connect_enabled()` is called.
+
+### `approved.json` persistence
+
+`~/.autobot/mcp/approved.json` (mode 0600) is written and read by pure stdlib — no SDK
+dependency, no tokens. Schema:
+
+```json
+{
+  "fingerprints": {
+    "<server-id>": {
+      "<server-id>__<tool-name>": "<sha256-hex>"
+    }
+  },
+  "spawn_approvals": {
+    "<command> <args-joined>": {
+      "command": "npx",
+      "args": ["-y", "@mcp/fs", "/path"],
+      "approved_at": "2026-06-29T10:00:00Z"
+    }
+  }
+}
+```
+
+The fingerprints are hashes of public tool schemas (not sensitive). Spawn records
+contain `command + args` (which may include local paths). The file is mode 0600.
+
+### Manual smoke-test (live OAuth) — user steps
+
+Requirements: a real remote MCP server that supports OAuth 2.1 (e.g. GitHub Copilot MCP,
+Slack hosted MCP, or a local test authorisation server such as `oauth2-proxy` / `dex`).
+These steps are performed **by the user** — they require a real OAuth server and a browser.
+
+```bash
+# Start daemon
+make run &
+
+# Add server via curl (daemon default port 8765)
+curl -s -X POST http://127.0.0.1:8765/mcp/servers \
+  -H 'Content-Type: application/json' \
+  -d '{"id":"github","label":"GitHub MCP","transport":"http",
+       "url":"https://api.githubcopilot.com/mcp/",
+       "auth":{"type":"oauth"},"egress":"network","enabled":false}'
+
+# Enable
+curl -s -X POST http://127.0.0.1:8765/mcp/servers/github/enable
+
+# Start auth flow (browser will open)
+curl -s -X POST http://127.0.0.1:8765/mcp/servers/github/auth/start
+
+# Observe: browser opens, complete login, terminal shows:
+#   [mcp] mcp_oauth stage=callback_received server=github
+#   [mcp] mcp connected server=github transport=http tools=N
+
+# Verify tools registered
+curl -s http://127.0.0.1:8765/mcp/servers/github/tools | python3 -m json.tool
+```
+
+### Test coverage
+
+Phase 6 unit coverage lives in:
+
+- `tests/unit/test_mcp_auth.py` — 25 tests covering `KeychainTokenStorage`,
+  `LoopbackCallbackServer` (happy path + timeout), and `open_browser` (scheme validation).
+- `tests/unit/test_mcp_approvals.py` — fingerprint read/write, spawn-approval persistence.
+- `tests/unit/test_mcp_session.py` — HTTP transport branch selection, rug-pull detection,
+  spawn consent logic.
+- `tests/unit/test_daemon_server.py` — `auth/start` endpoint validation and routing.
+
+### Self-review checklist
+
+- [x] `make check` green (ruff + ruff-format + mypy strict + pytest)
+- [x] No token value appears in any log line
+- [x] `approved.json` mode 0600
+- [x] `open_browser` rejects `file://`, `custom://`, bare strings without `http`/`https` scheme
+- [x] `LoopbackCallbackServer` binds to `127.0.0.1`, not `0.0.0.0`
+- [x] Stdio path byte-for-byte unchanged (existing `test_mcp_session.py` suite green)
+- [x] `streamablehttp_client` 3-tuple correctly unpacked
+- [x] Changed-fingerprint tools absent from `ToolRegistry` (not registered, not a gate message)
+- [x] Spawn-denied servers set `state = "denied"` and do not enter the stdio context manager
+- [x] Design doc updated with OAuth setup steps, rug-pull behavior, spawn consent, and curl examples using correct port 8765
+- [x] Conventional Commits, no Co-Authored-By trailer, explicit `git add` paths only
+- [ ] Manual smoke-test performed with at least one real remote OAuth server *(user to perform during smoke-testing)*
+
+### Assumptions & open questions carried forward
+
+1. **`token_endpoint_auth_method="none"`** — assumes all OAuth 2.1 MCP servers registered
+   by Jack are public clients (PKCE, no `client_secret`). If a server requires
+   `client_secret_basic`, add it as a config field (`auth.client_auth_method`) and thread it
+   into `OAuthClientMetadata`. Deferred to a follow-up issue.
+
+2. **`client_metadata_url`** — left as `None` (dynamic client registration via DCR).
+   If a server supports `client_id_metadata_document_supported=true`, the user can configure
+   `auth.client_metadata_url` in `servers.json`; `_build_oauth_provider` would pass it
+   through. Not implemented in Phase 6 to keep scope bounded.
+
+3. **Re-consent UX (rug-pull) is one-sided in Phase 6.** The Python side marks the tool
+   absent and emits `mcp_tool_changed`; the UI can surface a "tool changed — review"
+   indicator. A full diff card (old description vs new) requires the worker to persist the old
+   tool description alongside the fingerprint — deferred to a follow-up issue.
+
+4. **`approved.json` is mode 0600.** The fingerprints contain hashes of public tool schemas
+   (not sensitive). Spawn records contain `command + args` (which may include local paths).
+   Mode 0600 is set; acceptable for the threat model.
+
+5. **`McpManager.set_confirmer()`** is a setter rather than a constructor parameter to keep
+   backward compatibility with tests that construct `McpManager` without a confirmer. The
+   default (no confirmer) auto-approves spawns (existing behavior), so no existing test breaks.
