@@ -400,8 +400,17 @@ class AnthropicLanguageModel:
         # an over-long prompt. So 200k, 1M, or a smaller model all just work. Needs
         # self._client, so resolve after it's set.
         self._window = self._resolve_window()
+        # Gate on model support (auto), or honor an explicit on/off. Pure decision —
+        # never raises — so a misconfigured flag degrades to advertise-all, never a
+        # startup crash. Logged as a bool only (no tokens/secrets).
+        self._tool_search = tool_search_supported(
+            settings.anthropic_model, settings.anthropic_tool_search
+        )
         _log.info(
-            "cloud LLM ready model=%s context_window=%d", settings.anthropic_model, self._window
+            "cloud LLM ready model=%s context_window=%d tool_search=%s",
+            settings.anthropic_model,
+            self._window,
+            self._tool_search,
         )
 
     def _resolve_window(self) -> int:

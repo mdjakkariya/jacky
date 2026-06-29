@@ -607,6 +607,32 @@ def test_assemble_puts_cache_control_on_last_tool_only() -> None:
     assert all("cache_control" not in t for t in tools[:-1])
 
 
+def test_tool_search_capability_on_for_supported_model() -> None:
+    model = AnthropicLanguageModel(
+        Settings(llm_provider="anthropic", anthropic_model="claude-opus-4-8"),
+        _registry(),
+        client=FakeClient([]),
+    )
+    assert model._tool_search is True
+
+
+def test_tool_search_capability_off_for_default_model_in_auto() -> None:
+    # Default model (claude-haiku-4-5) is not in the support table -> auto disables it.
+    model = AnthropicLanguageModel(
+        Settings(llm_provider="anthropic"), _registry(), client=FakeClient([])
+    )
+    assert model._tool_search is False
+
+
+def test_tool_search_capability_forced_on_by_setting() -> None:
+    model = AnthropicLanguageModel(
+        Settings(llm_provider="anthropic", anthropic_tool_search="on"),
+        _registry(),
+        client=FakeClient([]),
+    )
+    assert model._tool_search is True
+
+
 def test_assemble_fallback_advertises_all_without_defer_or_search() -> None:
     tools = assemble_anthropic_tools(
         [_spec("battery", core=True), _spec("slack__send")], tool_search=False
