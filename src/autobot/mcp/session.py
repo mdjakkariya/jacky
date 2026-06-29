@@ -72,6 +72,45 @@ def friendly_error(exc: BaseException) -> str:
     return msg
 
 
+async def _accept_json_on_token_request(request: Any) -> None:
+    """Force ``Accept: application/json`` on OAuth token-exchange requests.
+
+    Some authorization servers (notably GitHub's ``/login/oauth/access_token``) return
+    ``application/x-www-form-urlencoded`` by default, which the MCP SDK can't parse — it
+    expects JSON. OAuth token requests are POSTs whose form body carries ``grant_type=``;
+    tagging only those leaves MCP protocol requests (JSON-RPC) untouched.
+
+    Args:
+        request: The outgoing ``httpx.Request`` (typed ``Any`` — httpx is lazy-imported).
+    """
+    if request.method != "POST":
+        return
+    try:
+        body = request.content
+    except Exception:  # streaming/unread body — never an OAuth token request
+        return
+    if b"grant_type=" in body:
+        request.headers["accept"] = "application/json"
+
+
+def _oauth_http_client_factory(
+    headers: dict[str, str] | None = None,
+    timeout: Any = None,
+    auth: Any = None,
+) -> Any:
+    """MCP httpx client factory that adds the Accept-JSON token-request hook.
+
+    Mirrors the SDK's default factory (so all MCP client defaults are preserved) and
+    appends :func:`_accept_json_on_token_request` so GitHub-style form-encoded token
+    responses are turned into JSON the SDK can parse.
+    """
+    from mcp.shared._httpx_utils import create_mcp_http_client
+
+    client = create_mcp_http_client(headers=headers, timeout=timeout, auth=auth)
+    client.event_hooks.setdefault("request", []).append(_accept_json_on_token_request)
+    return client
+
+
 def tool_allowed(name: str, allow: tuple[str, ...], deny: tuple[str, ...]) -> bool:
     """Whether a tool name passes the server's allow/deny globs.
 
@@ -288,7 +327,11 @@ class McpServerWorker:
 
         if auth_type == "oauth":
             auth = await self._build_oauth_provider()
-            cm = streamablehttp_client(url, auth=auth)
+            # Custom client factory forces Accept: application/json on the token
+            # exchange so GitHub's form-encoded token response parses (see the hook).
+            cm = streamablehttp_client(
+                url, auth=auth, httpx_client_factory=_oauth_http_client_factory
+            )
         elif auth_type == "token":
             headers = self._http_headers()
             cm = streamablehttp_client(url, headers=headers)

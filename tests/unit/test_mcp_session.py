@@ -15,7 +15,13 @@ import pytest
 from autobot.mcp import adapter
 from autobot.mcp.approvals import load_approvals, record_fingerprints
 from autobot.mcp.config import McpServerConfig
-from autobot.mcp.session import McpServerWorker, _Call, friendly_error, tool_allowed
+from autobot.mcp.session import (
+    McpServerWorker,
+    _accept_json_on_token_request,
+    _Call,
+    friendly_error,
+    tool_allowed,
+)
 from autobot.tools.registry import ToolRegistry
 
 
@@ -87,6 +93,40 @@ def test_friendly_error_translates_oauth_registration_failure() -> None:
     msg = friendly_error(grp).lower()
     assert "personal access token" in msg
     assert "registration failed" not in msg  # raw text replaced with guidance
+
+
+@dataclass
+class _FakeReq:
+    """Minimal stand-in for httpx.Request (the hook only reads method/content/headers)."""
+
+    method: str
+    content: bytes
+    headers: dict[str, str] = field(default_factory=dict)
+
+
+def test_accept_json_hook_sets_json_on_oauth_token_post() -> None:
+    """An OAuth token POST (grant_type in body) gets Accept: application/json (GitHub fix)."""
+    req = _FakeReq("POST", b"grant_type=authorization_code&code=abc&client_id=x")
+    asyncio.run(_accept_json_on_token_request(req))
+    assert req.headers["accept"] == "application/json"
+
+
+def test_accept_json_hook_leaves_mcp_jsonrpc_post_untouched() -> None:
+    """A normal MCP JSON-RPC POST is not an OAuth token request, so it's left alone."""
+    req = _FakeReq(
+        "POST",
+        b'{"jsonrpc":"2.0","method":"initialize"}',
+        headers={"accept": "application/json, text/event-stream"},
+    )
+    asyncio.run(_accept_json_on_token_request(req))
+    assert req.headers["accept"] == "application/json, text/event-stream"
+
+
+def test_accept_json_hook_ignores_get() -> None:
+    """GET requests (e.g. SSE / discovery) are never token exchanges."""
+    req = _FakeReq("GET", b"")
+    asyncio.run(_accept_json_on_token_request(req))
+    assert req.headers.get("accept") != "application/json"
 
 
 def test_fail_pending_resolves_queued_calls_fast() -> None:
