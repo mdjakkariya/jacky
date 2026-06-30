@@ -94,6 +94,32 @@ async def _accept_json_on_token_request(request: Any) -> None:
         request.headers["accept"] = "application/json"
 
 
+async def _log_token_endpoint_response(response: Any) -> None:
+    """Log OAuth token-endpoint responses (URL + grant + status) — never secret values.
+
+    Surfaces what the SDK keeps to its own (unwired) logger: whether a token refresh is
+    actually attempted, to which endpoint, and its HTTP status. Only requests carrying
+    ``grant_type=`` are token requests; a non-200 here explains a fallback to browser
+    re-auth.
+    """
+    request = response.request
+    if request.method != "POST":
+        return
+    try:
+        body = request.content
+    except Exception:  # streaming/unread body — never an OAuth token request
+        return
+    if b"grant_type=" not in body:
+        return
+    grant = "refresh_token" if b"grant_type=refresh_token" in body else "authorization_code"
+    _log.info(
+        "oauth token endpoint url=%s grant=%s status=%s",
+        request.url,
+        grant,
+        response.status_code,
+    )
+
+
 def _oauth_http_client_factory(
     headers: dict[str, str] | None = None,
     timeout: Any = None,
@@ -102,13 +128,15 @@ def _oauth_http_client_factory(
     """MCP httpx client factory that adds the Accept-JSON token-request hook.
 
     Mirrors the SDK's default factory (so all MCP client defaults are preserved) and
-    appends :func:`_accept_json_on_token_request` so GitHub-style form-encoded token
-    responses are turned into JSON the SDK can parse.
+    appends :func:`_accept_json_on_token_request` (so GitHub-style form-encoded token
+    responses parse) plus :func:`_log_token_endpoint_response` (so token refresh/exchange
+    attempts and their status are visible for debugging).
     """
     from mcp.shared._httpx_utils import create_mcp_http_client
 
     client = create_mcp_http_client(headers=headers, timeout=timeout, auth=auth)
     client.event_hooks.setdefault("request", []).append(_accept_json_on_token_request)
+    client.event_hooks.setdefault("response", []).append(_log_token_endpoint_response)
     return client
 
 
@@ -482,6 +510,11 @@ class McpServerWorker:
         async def _initialize_then_expire() -> None:
             await _orig_initialize()
             _expire_loaded_token(provider.context)
+            _log.info(
+                "oauth reload-init server=%s token_expiry=%s",
+                self._cfg.id,
+                getattr(provider.context, "token_expiry_time", "?"),
+            )
 
         provider._initialize = _initialize_then_expire
         return provider
