@@ -88,7 +88,28 @@ def test_render_html_preserves_line_breaks_as_divs() -> None:
 
 
 def test_render_html_blank_line_closes_list() -> None:
-    assert _render_html("- a\n\ntext") == "<ul><li>a</li></ul><div>text</div>"
+    assert _render_html("- a\n\ntext") == "<ul><li>a</li></ul><div><br></div><div>text</div>"
+
+
+def test_render_html_blank_line_becomes_spacer_between_sections() -> None:
+    assert _render_html("## A\n\n## B") == "<h2>A</h2><div><br></div><h2>B</h2>"
+
+
+def test_render_html_no_leading_spacer() -> None:
+    assert _render_html("\n\n# Title") == "<h1>Title</h1>"
+
+
+def test_render_html_no_trailing_spacer() -> None:
+    assert _render_html("text\n\n") == "<div>text</div>"
+
+
+def test_render_html_collapses_consecutive_blanks() -> None:
+    assert _render_html("a\n\n\n\nb") == "<div>a</div><div><br></div><div>b</div>"
+
+
+def test_render_html_heading_and_its_body_stay_together() -> None:
+    # No blank line between a heading and the line under it -> no spacer between them.
+    assert _render_html("## Overview\nbody") == "<h2>Overview</h2><div>body</div>"
 
 
 def test_note_append_branch_reports_append() -> None:

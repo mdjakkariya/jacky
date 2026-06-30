@@ -58,34 +58,51 @@ def _render_html(text: str) -> str:
     ``###``), dash/asterisk bullet lists, ``**bold**``, and blank-line paragraph
     breaks — into ``<h1>``/``<ul>``/``<b>``/``<div>`` tags, and HTML-escapes the rest
     so plain text keeps its line breaks.
+
+    Blank lines between blocks are preserved as a single empty spacer line
+    (``<div><br></div>``) so sections breathe instead of stacking tightly; leading,
+    trailing, and repeated blanks collapse so spacing never runs away.
     """
     out: list[str] = []
     in_list = False
+    pending_blank = False
+
+    def close_list() -> None:
+        nonlocal in_list
+        if in_list:
+            out.append("</ul>")
+            in_list = False
+
+    def flush_spacer() -> None:
+        # One spacer, only between real content (never leading/trailing).
+        nonlocal pending_blank
+        if pending_blank and out:
+            out.append("<div><br></div>")
+        pending_blank = False
+
     for raw in text.split("\n"):
         stripped = raw.strip()
         if not stripped:
-            if in_list:
-                out.append("</ul>")
-                in_list = False
+            close_list()
+            pending_blank = True
             continue
         bullet = _BULLET.match(raw)
         if bullet:
+            flush_spacer()
             if not in_list:
                 out.append("<ul>")
                 in_list = True
             out.append(f"<li>{_inline(bullet.group(1).strip())}</li>")
             continue
-        if in_list:
-            out.append("</ul>")
-            in_list = False
+        close_list()
+        flush_spacer()
         heading = _HEADING.match(stripped)
         if heading:
             level = len(heading.group(1))
             out.append(f"<h{level}>{_inline(heading.group(2).strip())}</h{level}>")
             continue
         out.append(f"<div>{_inline(stripped)}</div>")
-    if in_list:
-        out.append("</ul>")
+    close_list()
     return "".join(out)
 
 
@@ -306,7 +323,9 @@ class NotesTools:
         # Notes bodies are HTML — render the text so headings/lists/line breaks
         # survive. The first line is the title (bold) so the note's name matches it.
         fragment = _render_html(body)
-        create_body = f"<div><b>{_inline(name)}</b></div>{fragment}"
+        # Title line, a blank spacer, then the rendered body — so the heading the
+        # note's name is taken from doesn't crowd the first section.
+        create_body = f"<div><b>{_inline(name)}</b></div><div><br></div>{fragment}"
         rc, out = self._run(["osascript", "-e", _UPSERT, name, create_body, fragment, fld, m])
         if rc != 0:
             return self._fail(out, f"I couldn't save the note “{name}”")
