@@ -100,7 +100,9 @@ class MeetingTranscriber:
         audio = read_wav(wav_path)
         total_s = len(audio) / _SAMPLE_RATE
         collected: list[Segment] = []
+        windows_count = 0
         for start_s, end_s in plan_windows(total_s, self._chunk_s, self._overlap_s):
+            windows_count += 1
             window = audio[int(start_s * _SAMPLE_RATE) : int(end_s * _SAMPLE_RATE)]
             for seg in self._stt.transcribe_segments(
                 window,
@@ -111,7 +113,12 @@ class MeetingTranscriber:
             ):
                 collected.append(Segment(seg.text, seg.start + start_s, seg.end + start_s))
         deduped = dedupe_overlap(collected)
-        _log.info("transcribe stream=%s windows=%d segments=%d", wav_path, 0, len(deduped))
+        _log.info(
+            "transcribe stream=%s windows=%d segments=%d",
+            wav_path,
+            windows_count,
+            len(deduped),
+        )
         return deduped
 
     def build(self, near_wav: str, far_wav: str | None, *, mic_only: bool) -> str:

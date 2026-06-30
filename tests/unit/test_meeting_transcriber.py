@@ -29,6 +29,12 @@ def test_dedupe_overlap_drops_repeated_boundary_word() -> None:
     assert [s.text for s in out] == ["hello there", "next"]
 
 
+def test_dedupe_overlap_keeps_repeated_text_far_apart() -> None:
+    segs = [Segment("yeah", 0.0, 0.5), Segment("yeah", 60.0, 60.5)]
+    out = dedupe_overlap(segs)
+    assert [s.text for s in out] == ["yeah", "yeah"]
+
+
 def test_merge_tags_and_orders() -> None:
     near = [Segment("hi", 0.0, 1.0), Segment("bye", 5.0, 6.0)]
     far = [Segment("hello", 2.0, 3.0)]
