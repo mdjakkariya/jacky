@@ -1,14 +1,14 @@
 # Publish a release when a version tag (vX.Y.Z) is pushed.
 #
-# The git **tag is the source of truth** for the version. You don't bump the
-# manifests by hand: CI sets them from the tag, builds the engine, creates the
-# GitHub Release, and commits the bump (incl. Cargo.lock) back to the default
-# branch — so a forgotten manifest bump can never fail or skip a release.
+# The manifest bump lands on the default branch via a **release PR** (branch
+# protection blocks direct pushes — including this workflow's bot — so CI does NOT
+# commit a bump back). Pushing the tag on the merged commit triggers this workflow,
+# which builds the engine and creates the GitHub Release. CI still sets the *build*
+# version from the tag, so the wheel/sdist are correct regardless of the manifests.
 #
-# Runs on Linux only (macOS CI minutes are ~10x the cost). CI builds the Python
-# engine wheel/sdist and creates the GitHub Release. The macOS orb `.dmg` is built
-# locally on a Mac and uploaded to the same Release — see `docs/RELEASING.md`
-# (`make bundle` + `make publish-orb`), after `git pull` picks up the bump.
+# Runs on Linux only (macOS CI minutes are ~10x the cost). The macOS orb `.dmg` is
+# built locally on a Mac and uploaded to the same Release — see `docs/RELEASING.md`
+# (`make bundle` + `make publish-orb`).
 name: Release
 
 on:
@@ -16,12 +16,12 @@ on:
     tags: ["v*.*.*"]
 
 permissions:
-  contents: write # create the GitHub Release, upload assets, and push the bump
+  contents: write # create the GitHub Release and upload assets
 
 jobs:
-  # Gate: the same quality checks as CI. The version is NOT gated here — the tag is
-  # authoritative and the release job sets the manifests from it, so a version
-  # mismatch only warns (it must never abort a tagged release).
+  # Gate: the same quality checks as CI. The manifest-vs-tag check is non-blocking
+  # (a warning) — the release job builds with the tag's version regardless, and the
+  # bump itself lands via the release PR, so a mismatch must never abort the release.
   gate:
     runs-on: ubuntu-latest
     steps:
@@ -38,16 +38,13 @@ jobs:
       - name: Manifest version vs tag (non-blocking)
         run: |
           uv run python scripts/bump_version.py --check "${GITHUB_REF_NAME#v}" \
-            || echo "::warning::manifests differ from ${GITHUB_REF_NAME}; CI will set them from the tag and commit it back."
+            || echo "::warning::manifests differ from ${GITHUB_REF_NAME}; the release PR should have bumped them. CI builds with the tag's version regardless."
 
   release:
     needs: gate
     runs-on: ubuntu-latest
     steps:
-      # Full history so we can commit the bump back to the default branch.
       - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
       - uses: astral-sh/setup-uv@v3
         with:
           enable-cache: true
@@ -79,20 +76,6 @@ jobs:
             See the README for prerequisites (Ollama or an Anthropic key, the
             STT/TTS models, Microphone + Automation permissions).
 
-      # Keep the repo in sync without a hand-written bump commit: set the manifests
-      # on the default branch to the tag version and push. [skip ci] stops this from
-      # re-triggering CI, and the tag trigger means it never re-triggers this release.
-      - name: Sync the version bump back to the default branch
-        env:
-          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git checkout -f "$DEFAULT_BRANCH"
-          uv run python scripts/bump_version.py "${GITHUB_REF_NAME#v}"
-          if git diff --quiet; then
-            echo "default branch already at ${GITHUB_REF_NAME#v} — nothing to commit."
-            exit 0
-          fi
-          git commit -am "chore(release): set manifests to ${GITHUB_REF_NAME} [skip ci]"
-          git push origin "HEAD:$DEFAULT_BRANCH"
+      # No bump-back: branch protection blocks direct pushes to the default branch
+      # (the bot included), so the manifest bump lands via the release PR instead.
+      # See docs/RELEASING.md.

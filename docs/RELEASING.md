@@ -1,50 +1,56 @@
 # Releasing Jack
 
-Releases are **tag-driven**. Pushing a `vX.Y.Z` tag makes CI (Linux only) build the
-Python **engine** (wheel + sdist) and create the GitHub Release. The macOS **orb
-app** (`.dmg`) is built **locally on a Mac** and uploaded to that same Release —
-we keep it out of CI because macOS runner minutes are ~10× the cost. The version
-lives in three manifests that must agree; the workflow refuses to publish on a
-mismatch.
+Releases are **PR-bumped, tag-triggered**. The version bump lands on `main` through
+a normal **PR** (branch protection blocks direct pushes — see below); pushing the
+resulting `vX.Y.Z` tag then makes CI (Linux only) build the Python **engine**
+(wheel + sdist) and create the GitHub Release. The macOS **orb app** (`.dmg`) is
+built **locally on a Mac** and uploaded to that same Release — we keep it out of CI
+because macOS runner minutes are ~10× the cost. The version lives in three manifests
+that must agree; `make release-check VERSION=x` verifies them.
 
 ## Cut a release
 
-The **git tag is the source of truth** for the version — you don't bump the
-manifests by hand. Just tag and push; CI sets `pyproject.toml`, `Cargo.toml`,
-`tauri.conf.json` and `Cargo.lock` from the tag, builds the engine, creates the
-Release, and **commits that bump back to `main`** for you (so there's no manual
-version/lockfile commit, and a forgotten bump can never skip a release).
+`main` is **protected** — every change must land through a PR that passes the
+required status checks, and that includes the version bump. (The release bot is
+subject to the same rule, which is why CI no longer pushes a bump commit back to
+`main`.) So the bump rides in on a **release PR**, and the git **tag** — pushed on
+the already-merged commit — is what triggers the build. The `.dmg` is versioned
+from the manifests in your working tree at `make bundle` time, so the bump **must**
+be merged and pulled *before* you build.
 
 ```bash
-# 1. (Optional) Refresh the changelog, then COMMIT it. Skip the whole step if you
-#    don't want a changelog entry this release — there's nothing else to commit
-#    (CI does the version bump for you), so a release can be just a tag.
-# prepends a section to CHANGELOG.md
-make changelog VERSION=0.5.1
+# 1. Branch off an up-to-date main.
+git checkout main && git pull
+git checkout -b release/v0.6.0
 
-# review and commit
-git add CHANGELOG.md && git commit -m "docs: changelog for v0.5.1"
+# 2. Bump every manifest + lockfile and refresh the changelog. Commit both.
+make release VERSION=0.6.0      # rewrites pyproject / Cargo.toml / tauri.conf.json + lockfiles
+make changelog VERSION=0.6.0    # prepends the v0.6.0 section to CHANGELOG.md (needs git-cliff)
+git add -A && git commit -m "chore(release): v0.6.0"
 
-# 2. Tag and push. The TAG is the trigger; `--tags` pushes it. Pushing `main` just
-#    keeps origin/main current (so it includes any changelog commit AND matches the
-#    tagged commit — CI commits the version bump back onto main). With no commit in
-#    step 1, the `main` push is a harmless no-op and only the tag goes up.
-git tag v0.5.1
-git push origin main --tags
+# 3. Open the PR; merge it once the required checks are green.
+git push -u origin release/v0.6.0
+gh pr create --fill             # then review + merge in the usual way
 
-# 3. CI gates the checks, sets the version FROM the tag, builds the engine wheel,
-#    creates the GitHub Release, and pushes a "chore(release): v0.5.1 [skip ci]"
-#    commit with the bumped manifests back to main.
+# 4. Tag the merged commit and push ONLY the tag. You don't (and can't) push main
+#    directly — it's protected — but the tag pushes fine and is the CI trigger.
+git checkout main && git pull   # picks up the merged bump
+git tag v0.6.0 && git push origin v0.6.0
 
-# 4. On your Mac, pull that bump, then build + attach the single .dmg:
-git pull                            # picks up CI's version bump (so the .dmg is versioned right)
-make bundle                         # freeze engine -> sidecar -> the .dmg
-make publish-orb VERSION=0.5.1      # uploads the .dmg AND sets the release notes
+# 5. CI (triggered by the tag) builds the engine wheel/sdist and creates the GitHub
+#    Release. The manifests are already correct (bumped in the PR), so there is no
+#    bump-back commit — nothing else lands on main.
+
+# 6. On your Mac, build + attach the single .dmg:
+git pull                            # ensure the merged bump is in your tree
+make bundle                         # freeze engine -> sidecar -> the .dmg (versioned from the manifests)
+make publish-orb VERSION=0.6.0      # uploads the .dmg AND sets the release notes
 ```
 
-`make release VERSION=x` (local manifest bump) and `make release-check VERSION=x`
-still exist if you ever want to bump/verify by hand, but the tagged release no
-longer needs them — CI is authoritative.
+CI sets the build version **from the tag**, so the engine wheel/sdist are always
+versioned correctly even if a manifest was missed — but `main` (and the locally
+built `.dmg`) only get the bump from the PR, so don't skip steps 2–3.
+`make release-check VERSION=x` confirms every manifest agrees before you open the PR.
 
 ## Changelog (automated)
 
@@ -70,18 +76,18 @@ producing one `.dmg` that contains both. See [`PACKAGING.md`](PACKAGING.md).
 
 Pushing the tag triggers `.github/workflows/release.yml`:
 
-1. **gate** (ubuntu) — ruff, format, mypy, pytest. The manifest-vs-tag check runs
-   here too but is **non-blocking** (a warning): the tag is authoritative, so a
-   version mismatch must never abort a tagged release.
-2. **release** (ubuntu) — sets the manifests from the tag (`bump_version.py`),
-   `uv build` makes the engine wheel/sdist, `softprops/action-gh-release` creates
-   the GitHub Release, and the bump is committed back to the default branch as
-   `chore(release): vX [skip ci]`.
+1. **gate** (ubuntu) — ruff, format, mypy, pytest, plus a manifest-vs-tag check.
+   The check is **non-blocking** (a warning) because CI builds with the version
+   from the tag regardless — but in the PR-based flow the manifests should already
+   match, so a warning here means the release PR's bump was wrong or skipped.
+2. **release** (ubuntu) — sets the *build* version from the tag (`bump_version.py`),
+   `uv build` makes the engine wheel/sdist, and `softprops/action-gh-release`
+   creates the GitHub Release. CI does **not** commit anything back to `main`: the
+   manifest bump lands via the release PR (steps 1–3 above), because branch
+   protection blocks any direct push to `main` — the bot's included.
 
-The orb `.dmg` is added by `make publish-orb` (step 4) on a Mac, which needs the
-GitHub CLI (`gh auth login`) and `cargo`/`tauri-cli` installed locally. Branch
-protection note: CI pushes the bump commit with the default `GITHUB_TOKEN`, so
-direct pushes to the default branch must be allowed for the bot (or swap in a PAT).
+The orb `.dmg` is added by `make publish-orb` (step 6) on a Mac, which needs the
+GitHub CLI (`gh auth login`) and `cargo`/`tauri-cli` installed locally.
 
 ## Versioning
 
