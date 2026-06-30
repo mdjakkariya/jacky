@@ -21,30 +21,37 @@ be merged and pulled *before* you build.
 ```bash
 # 1. Branch off an up-to-date main.
 git checkout main && git pull
-git checkout -b release/v0.6.0
+git checkout -b release/v0.6.1
 
 # 2. Bump every manifest + lockfile and refresh the changelog. Commit both.
-make release VERSION=0.6.0      # rewrites pyproject / Cargo.toml / tauri.conf.json + lockfiles
-make changelog VERSION=0.6.0    # prepends the v0.6.0 section to CHANGELOG.md (needs git-cliff)
-git add -A && git commit -m "chore(release): v0.6.0"
+# rewrites pyproject / Cargo.toml / tauri.conf.json + lockfiles
+make release VERSION=0.6.1
+# prepends the v0.6.1 section to CHANGELOG.md (needs git-cliff)
+make changelog VERSION=0.6.1
+git add . && git commit -m "chore(release): v0.6.1"
 
 # 3. Open the PR; merge it once the required checks are green.
-git push -u origin release/v0.6.0
-gh pr create --fill             # then review + merge in the usual way
+git push -u origin release/v0.6.1
+# then review + merge in the usual way
+gh pr create --fill
 
 # 4. Tag the merged commit and push ONLY the tag. You don't (and can't) push main
 #    directly — it's protected — but the tag pushes fine and is the CI trigger.
-git checkout main && git pull   # picks up the merged bump
-git tag v0.6.0 && git push origin v0.6.0
+# picks up the merged bump
+git checkout main && git pull
+git tag v0.6.1 && git push origin v0.6.1
 
 # 5. CI (triggered by the tag) builds the engine wheel/sdist and creates the GitHub
 #    Release. The manifests are already correct (bumped in the PR), so there is no
 #    bump-back commit — nothing else lands on main.
 
 # 6. On your Mac, build + attach the single .dmg:
-git pull                            # ensure the merged bump is in your tree
-make bundle                         # freeze engine -> sidecar -> the .dmg (versioned from the manifests)
-make publish-orb VERSION=0.6.0      # uploads the .dmg AND sets the release notes
+# ensure the merged bump is in your tree
+git pull
+# freeze engine -> sidecar -> the .dmg (versioned from the manifests)
+make bundle
+# uploads the .dmg AND sets the release notes
+make publish-orb VERSION=0.6.1
 ```
 
 CI sets the build version **from the tag**, so the engine wheel/sdist are always
