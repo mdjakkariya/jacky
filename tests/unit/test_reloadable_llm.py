@@ -13,6 +13,9 @@ class FakeLLM:
     def run_turn(self, user_text: str, execute: object) -> str:
         return self.tag
 
+    def complete(self, prompt: str, *, temperature: float = 0.0) -> str:
+        return self.tag
+
 
 def _exec(_c: ToolCall) -> ToolResult:  # unused stub
     return ToolResult(name="x", content="")

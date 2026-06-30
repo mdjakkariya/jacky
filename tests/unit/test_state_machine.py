@@ -73,6 +73,9 @@ class _ToolingLLM:
         result = execute(ToolCall(name="create_file", arguments={"path": "x"}))
         return f"done: {result.content}"
 
+    def complete(self, prompt: str, *, temperature: float = 0.0) -> str:
+        return ""
+
 
 class _RecordingGate:
     def __init__(self, risk: Risk = Risk.WRITE) -> None:
@@ -158,6 +161,9 @@ def test_turn_sets_delivery_mode_voice_then_chat() -> None:
 
         def run_turn(self, user_text: str, execute) -> str:  # type: ignore[no-untyped-def]
             return "ok"
+
+        def complete(self, prompt: str, *, temperature: float = 0.0) -> str:
+            return ""
 
     llm = _DeliveryLLM()
     orch = Orchestrator(
@@ -390,6 +396,9 @@ class _EchoLLM:
     def run_turn(self, user_text: str, execute) -> str:  # type: ignore[no-untyped-def]
         return user_text
 
+    def complete(self, prompt: str, *, temperature: float = 0.0) -> str:
+        return ""
+
 
 def test_awake_true_after_addressed_turn_false_when_ignored() -> None:
     from autobot.orchestrator.wake_gate import Address, PassThroughGate, WakeResult
@@ -581,6 +590,9 @@ def test_voice_and_chat_turns_do_not_interleave_state() -> None:
             release.wait(timeout=5)
             return user_text
 
+        def complete(self, prompt: str, *, temperature: float = 0.0) -> str:
+            return ""
+
     orch = Orchestrator(
         settings=Settings(interaction_mode="voice"),
         audio=_FakeAudio(),
@@ -668,6 +680,9 @@ class _DismissLLM:
         execute(ToolCall(name="dismiss", arguments={}))
         return ""
 
+    def complete(self, prompt: str, *, temperature: float = 0.0) -> str:
+        return ""
+
 
 def _chat_orch(llm: object) -> Orchestrator:
     from autobot.orchestrator.wake_gate import PassThroughGate
@@ -692,6 +707,9 @@ def test_chat_turn_never_returns_empty_reply() -> None:
 
     class _SilentLLM:
         def run_turn(self, user_text: str, execute) -> str:  # type: ignore[no-untyped-def]
+            return ""
+
+        def complete(self, prompt: str, *, temperature: float = 0.0) -> str:
             return ""
 
     # A non-dismiss empty reply -> a neutral acknowledgement.
@@ -887,6 +905,9 @@ def test_voice_cue_dedupes_repeated_phrases_within_a_turn() -> None:
             execute(ToolCall(name="create_file", arguments={"path": "a"}))
             execute(ToolCall(name="create_file", arguments={"path": "b"}))
             return "done"
+
+        def complete(self, prompt: str, *, temperature: float = 0.0) -> str:
+            return ""
 
     tts = _RecordingTTS()
     orch = Orchestrator(

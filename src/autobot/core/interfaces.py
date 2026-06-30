@@ -113,6 +113,18 @@ class LanguageModel(Protocol):
         """
         ...
 
+    def complete(self, prompt: str, *, temperature: float = 0.0) -> str:
+        """One-shot, non-conversational completion (no tools). Used for summaries.
+
+        Args:
+            prompt: The full prompt to send to the model.
+            temperature: Sampling temperature; defaults to 0.0 for deterministic output.
+
+        Returns:
+            The model's reply text, stripped of leading/trailing whitespace.
+        """
+        ...
+
 
 @runtime_checkable
 class TextToSpeech(Protocol):

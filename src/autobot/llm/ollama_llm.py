@@ -442,6 +442,37 @@ class OllamaLanguageModel:
         self._report_usage()
         return reply
 
+    def complete(self, prompt: str, *, temperature: float = 0.0) -> str:
+        """One-shot completion via Ollama chat (no tools advertised).
+
+        A single non-conversational call — no history, no tools, no executor. Used
+        by the meeting summarizer and similar batch tasks that need a plain LLM
+        completion rather than a full interactive turn.
+
+        Args:
+            prompt: The full prompt to send.
+            temperature: Sampling temperature; 0.0 for deterministic output.
+
+        Returns:
+            The model's reply text, stripped of leading/trailing whitespace.
+        """
+        model = self._settings.llm_model
+        think_on = "qwen3" in model and self._settings.llm_think
+        kwargs: dict[str, Any] = {
+            "model": model,
+            "messages": [{"role": "user", "content": prompt}],
+            "options": {"temperature": temperature},
+        }
+        if "qwen3" in model:
+            try:
+                response = self._client.chat(think=False, **kwargs)
+            except TypeError:
+                response = self._client.chat(**kwargs)
+        else:
+            response = self._client.chat(**kwargs)
+        _ = think_on  # resolved above; unused in the no-think branch
+        return str(message_content(_get(response, "message"))).strip()
+
     def _final_answer_no_tools(self, messages: list[dict[str, Any]]) -> str:
         """One tools-disabled call to synthesize a reply when the round cap is hit.
 
