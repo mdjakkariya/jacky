@@ -42,6 +42,17 @@ _log = get_logger("mcp")
 CALL_TIMEOUT_S = 30.0
 
 
+def _root_cause(exc: BaseException) -> BaseException:
+    """Unwrap nested ExceptionGroups (anyio TaskGroup wrapping) to the first leaf."""
+    inner: BaseException = exc
+    for _ in range(6):  # bounded unwrap of nested ExceptionGroups
+        if isinstance(inner, BaseExceptionGroup) and inner.exceptions:
+            inner = inner.exceptions[0]
+        else:
+            break
+    return inner
+
+
 def friendly_error(exc: BaseException) -> str:
     """Best-effort human-readable message from a worker failure.
 
@@ -56,12 +67,7 @@ def friendly_error(exc: BaseException) -> str:
     Returns:
         A concise, user-facing error string.
     """
-    inner: BaseException = exc
-    for _ in range(6):  # bounded unwrap of nested ExceptionGroups
-        if isinstance(inner, BaseExceptionGroup) and inner.exceptions:
-            inner = inner.exceptions[0]
-        else:
-            break
+    inner = _root_cause(exc)
     msg = str(inner).strip() or inner.__class__.__name__
     low = msg.lower()
     _dcr_markers = ("registration failed", "registrationerror", "dynamic client registration")
@@ -287,8 +293,15 @@ class McpServerWorker:
                 await self._run_stdio()
         except Exception as exc:  # never let the worker crash the loop
             self._state = "error"
-            _log.exception("mcp worker failed server=%s", self._cfg.id)
-            self._emit_status(error=friendly_error(exc))
+            if isinstance(_root_cause(exc), TimeoutError):
+                # OAuth browser sign-in wasn't completed in time — expected (the user
+                # closed/ignored the tab), not a bug. Log a clean line instead of dumping
+                # an alarming anyio ExceptionGroup traceback.
+                _log.warning("mcp oauth sign-in not completed server=%s (timed out)", self._cfg.id)
+                self._emit_status(error="sign-in not completed (timed out)")
+            else:
+                _log.exception("mcp worker failed server=%s", self._cfg.id)
+                self._emit_status(error=friendly_error(exc))
         finally:
             # Flip off "connected" first so new submit_call()s are rejected fast,
             # then fail any calls still queued/in-flight so their callers don't have
