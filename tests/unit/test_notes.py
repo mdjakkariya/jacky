@@ -22,20 +22,43 @@ class FakeRunner:
 # --- note() upsert -------------------------------------------------------
 
 
-def test_note_create_branch_passes_name_bodies_and_empty_folder() -> None:
+def test_note_create_branch_passes_name_bodies_folder_and_mode() -> None:
     runner = FakeRunner((0, "created"))
     tools = NotesTools(runner)
     msg = tools.note("buy milk", "2% gallon")
     argv = runner.calls[-1]
     assert argv[0] == "osascript" and argv[1] == "-e"
-    # data args: name (raw, for matching), create-body (HTML), append-fragment, folder.
-    name, create_body, append_fragment, folder = argv[-4:]
+    # data args: name (raw), create-body (HTML), append-fragment, folder, mode.
+    name, create_body, append_fragment, folder, mode = argv[-5:]
     assert name == "buy milk"
     assert folder == ""
+    assert mode == "append"  # default
     assert "<b>buy milk</b>" in create_body  # title becomes the first (name) line
     assert "<div>2% gallon</div>" in create_body
     assert append_fragment == "<div>2% gallon</div>"
     assert "buy milk" in msg and "Created" in msg
+
+
+def test_note_replace_mode_is_passed_through() -> None:
+    runner = FakeRunner((0, "replaced"))
+    tools = NotesTools(runner)
+    tools.note("buy milk", "fresh content", mode="replace")
+    assert runner.calls[-1][-1] == "replace"
+
+
+def test_note_replace_branch_reports_rewrite() -> None:
+    runner = FakeRunner((0, "replaced"))
+    tools = NotesTools(runner)
+    msg = tools.note("RCA", "clean content", mode="replace")
+    assert "RCA" in msg
+    assert "Rewrote" in msg or "Replaced" in msg
+
+
+def test_note_unknown_mode_defaults_to_append() -> None:
+    runner = FakeRunner((0, "appended"))
+    tools = NotesTools(runner)
+    tools.note("x", "y", mode="bogus")
+    assert runner.calls[-1][-1] == "append"
 
 
 # --- _render_html (markdown-lite -> Notes HTML) --------------------------
@@ -80,7 +103,8 @@ def test_note_folder_is_passed_through() -> None:
     runner = FakeRunner((0, "created"))
     tools = NotesTools(runner)
     tools.note("standup", "ship notes tool", folder="Work")
-    assert runner.calls[-1][-1] == "Work"
+    # folder is the second-to-last data arg (mode is last).
+    assert runner.calls[-1][-2] == "Work"
 
 
 def test_note_blank_title_asks_instead_of_creating() -> None:

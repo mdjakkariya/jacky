@@ -93,15 +93,18 @@ def _render_html(text: str) -> str:
 
 # Upsert by title within an optional folder. argv: 1=name (raw, for matching),
 # 2=create-body (full HTML for a new note), 3=append-fragment (HTML appended to an
-# existing note), 4=folder ("" = default). The HTML is built in Python (see
-# `_render_html`) so this script only stores it. `name is` is a case-insensitive
-# exact match (AppleScript ignores case by default). Returns "created"/"appended".
+# existing note), 4=folder ("" = default), 5=mode ("append"|"replace"). The HTML is
+# built in Python (see `_render_html`) so this script only stores it. When the note
+# exists: "replace" overwrites its whole body with the create-body (rewrite/format),
+# "append" adds the fragment. `name is` is a case-insensitive exact match
+# (AppleScript ignores case by default). Returns "created"/"appended"/"replaced".
 _UPSERT = (
     "on run argv\n"
     "set theName to item 1 of argv\n"
     "set theCreate to item 2 of argv\n"
     "set theAppend to item 3 of argv\n"
     "set theFolder to item 4 of argv\n"
+    "set theMode to item 5 of argv\n"
     'tell application "Notes"\n'
     'if theFolder is "" then\n'
     "set existing to (notes whose name is theName)\n"
@@ -111,8 +114,13 @@ _UPSERT = (
     "end if\n"
     "if existing is not {} then\n"
     "set n to item 1 of existing\n"
+    'if theMode is "replace" then\n'
+    "set body of n to theCreate\n"
+    'set verb to "replaced"\n'
+    "else\n"
     "set body of n to (body of n) & theAppend\n"
     'set verb to "appended"\n'
+    "end if\n"
     "else\n"
     'if theFolder is "" then\n'
     "make new note with properties {body:theCreate}\n"
@@ -280,8 +288,13 @@ class NotesTools:
         detail = f" ({out.strip()})" if out.strip() else ""
         return f"{generic}{detail}"
 
-    def note(self, title: str, text: str, folder: str | None = None) -> str:
-        """Create a note titled ``title`` (or append ``text`` to an existing one)."""
+    def note(self, title: str, text: str, folder: str | None = None, mode: str = "append") -> str:
+        """Create a note, or append to / rewrite an existing same-named one.
+
+        ``mode`` is ``"append"`` (default — add ``text`` to the end) or ``"replace"``
+        (overwrite the whole note, e.g. when formatting or rewriting it). Anything
+        other than ``"replace"`` is treated as append.
+        """
         name = (title or "").strip()
         body = (text or "").strip()
         if not name:
@@ -289,18 +302,21 @@ class NotesTools:
         if not body:
             return f"What would you like the note “{name}” to say?"
         fld = (folder or "").strip()
+        m = "replace" if (mode or "").strip().lower() == "replace" else "append"
         # Notes bodies are HTML — render the text so headings/lists/line breaks
         # survive. The first line is the title (bold) so the note's name matches it.
         fragment = _render_html(body)
         create_body = f"<div><b>{_inline(name)}</b></div>{fragment}"
-        rc, out = self._run(["osascript", "-e", _UPSERT, name, create_body, fragment, fld])
+        rc, out = self._run(["osascript", "-e", _UPSERT, name, create_body, fragment, fld, m])
         if rc != 0:
             return self._fail(out, f"I couldn't save the note “{name}”")
-        appended = out.strip().lower() == "appended"
+        verb = out.strip().lower()
         where = f" in {fld}" if fld else ""
-        _log.info("note %s title=%r folder=%r", "appended" if appended else "created", name, fld)
-        if appended:
+        _log.info("note %s title=%r folder=%r", verb or "created", name, fld)
+        if verb == "appended":
             return f"Added that to your “{name}” note."
+        if verb == "replaced":
+            return f"Rewrote your “{name}” note."
         return f"Created a note “{name}”{where}."
 
     def list_notes(self, query: str | None = None, folder: str | None = None) -> str:
@@ -390,17 +406,23 @@ class NotesTools:
             ToolSpec(
                 name="note",
                 description=(
-                    "Create a note or append to an existing one in the macOS Notes app "
-                    "(an upsert). Cues: 'note down …', 'make a note …', 'jot down …', "
-                    "'add … to my <name> note'. Put the note's name in `title` and the "
-                    "content in `text`. If the user names the note ('my shopping note'), "
-                    "use that as `title`; otherwise derive a short 3-5 word title from "
-                    "the content. Do NOT repeat the title inside `text` — it's added as "
-                    "the heading automatically. `text` may use simple markdown — headings "
-                    "(#, ##, ###), dash bullet lists, and **bold** — which is rendered for "
-                    "display; keep it light. If a note with that title already exists, "
-                    "this APPENDS to it; otherwise it creates a new one. Pass `folder` "
-                    "only when the user names a folder (e.g. 'in my Work folder')."
+                    "Write to the user's notes in the macOS Notes app (Apple Notes) — "
+                    "NOT Notion, Obsidian, or any other app. This is the ONLY tool for "
+                    "the user's macOS notes; never use a Notion/MCP page tool for them. "
+                    "Cues: 'note down …', 'make a note …', 'jot down …', 'add … to my "
+                    "<name> note', 'format/rewrite/clean up my <name> note'. Put the "
+                    "note's name in `title` and the content in `text`. If the user names "
+                    "the note ('my shopping note'), use that as `title`; otherwise derive "
+                    "a short 3-5 word title from the content. Do NOT repeat the title "
+                    "inside `text` — it's added as the heading automatically. `text` may "
+                    "use simple markdown — headings (#, ##, ###), dash bullet lists, and "
+                    "**bold** — which is rendered for display; keep it light. `mode` "
+                    "controls what happens when a note with that title already exists: "
+                    "'append' (default) adds to the end; 'replace' overwrites the whole "
+                    "note — use 'replace' when the user asks to format, rewrite, clean "
+                    "up, fix, or replace a note (so the old content doesn't linger). For "
+                    "a new note either mode just creates it. Pass `folder` only when the "
+                    "user names one (e.g. 'in my Work folder')."
                 ),
                 parameters={
                     "type": "object",
@@ -411,11 +433,19 @@ class NotesTools:
                         },
                         "text": {
                             "type": "string",
-                            "description": "The content to write or append.",
+                            "description": "The content to write, append, or replace with.",
                         },
                         "folder": {
                             "type": "string",
                             "description": "Optional folder name to file the note under.",
+                        },
+                        "mode": {
+                            "type": "string",
+                            "enum": ["append", "replace"],
+                            "description": (
+                                "'append' (default) adds to an existing note; 'replace' "
+                                "rewrites it (use for format/rewrite/clean-up requests)."
+                            ),
                         },
                     },
                     "required": ["title", "text"],
@@ -457,9 +487,12 @@ class NotesTools:
             ToolSpec(
                 name="read_note",
                 description=(
-                    "Read back the text of one note by name. Cues: 'what's in my <name> "
-                    "note', 'read my <name> note', 'what does my shopping note say'. "
-                    "Matches a note whose name is `title` (case-insensitive)."
+                    "Read the full text of one note from the macOS Notes app. You CAN "
+                    "read note contents — call this whenever the user asks what a note "
+                    "says or to read/show/open a note; do not say you can't. Cues: "
+                    "'what's in my <name> note', 'read my <name> note', 'what does my "
+                    "shopping note say'. Matches a note whose name is `title` "
+                    "(case-insensitive)."
                 ),
                 parameters={
                     "type": "object",
