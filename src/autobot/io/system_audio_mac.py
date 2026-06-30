@@ -45,7 +45,7 @@ def pcm16_to_frames(
 class CoreAudioTapSource:
     """Reads far-end PCM frames from the ``autobot-syscap`` sidecar subprocess."""
 
-    aec_active = False
+    aec_active: bool = False
 
     def __init__(self, binary_path: str, exclude_pid: int = 0, sample_rate: int = 16000) -> None:
         import subprocess
@@ -68,14 +68,22 @@ class CoreAudioTapSource:
         while not self._stopped.is_set():
             chunk = self._proc.stdout.read(4096)
             if not chunk:  # EOF — sidecar exited (crash or stop)
+                # If we stopped it ourselves, return normally (clean shutdown).
+                if self._stopped.is_set():
+                    break
+                # Sidecar exited on its own; check the exit code.
                 code = self._proc.poll()
                 if code not in (0, None):
+                    # Unexpected exit — read stderr and raise.
                     stderr_text = (
                         self._proc.stderr.read().decode("utf-8", "replace")
                         if self._proc.stderr
                         else ""
                     )
-                    _log.warning("syscap exited code=%s err=%s", code, stderr_text.strip()[:200])
+                    err_summary = stderr_text.strip()[:200]
+                    msg = f"syscap exited code={code}: {err_summary}"
+                    raise RuntimeError(msg)
+                # Clean exit with code 0.
                 break
             new_frames, leftover = pcm16_to_frames(chunk, leftover)
             yield from new_frames
