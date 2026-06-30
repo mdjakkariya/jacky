@@ -20,26 +20,26 @@ version/lockfile commit, and a forgotten bump can never skip a release).
 #    don't want a changelog entry this release — there's nothing else to commit
 #    (CI does the version bump for you), so a release can be just a tag.
 # prepends a section to CHANGELOG.md
-make changelog VERSION=0.5.1
+make changelog VERSION=0.6.0
 
 # review and commit
-git add CHANGELOG.md && git commit -m "docs: changelog for v0.5.1"
+git add CHANGELOG.md docs/RELEASING.md && git commit -m "docs: changelog for v0.6.0"
 
 # 2. Tag and push. The TAG is the trigger; `--tags` pushes it. Pushing `main` just
 #    keeps origin/main current (so it includes any changelog commit AND matches the
 #    tagged commit — CI commits the version bump back onto main). With no commit in
 #    step 1, the `main` push is a harmless no-op and only the tag goes up.
-git tag v0.5.1
+git tag v0.6.0
 git push origin main --tags
 
 # 3. CI gates the checks, sets the version FROM the tag, builds the engine wheel,
-#    creates the GitHub Release, and pushes a "chore(release): v0.5.1 [skip ci]"
+#    creates the GitHub Release, and pushes a "chore(release): v0.6.0 [skip ci]"
 #    commit with the bumped manifests back to main.
 
 # 4. On your Mac, pull that bump, then build + attach the single .dmg:
 git pull                            # picks up CI's version bump (so the .dmg is versioned right)
 make bundle                         # freeze engine -> sidecar -> the .dmg
-make publish-orb VERSION=0.5.1      # uploads the .dmg AND sets the release notes
+make publish-orb VERSION=0.6.0      # uploads the .dmg AND sets the release notes
 ```
 
 `make release VERSION=x` (local manifest bump) and `make release-check VERSION=x`
