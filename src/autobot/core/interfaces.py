@@ -13,6 +13,7 @@ satisfies the contract with ``isinstance``.
 
 from __future__ import annotations
 
+from collections.abc import Iterator
 from typing import TYPE_CHECKING, Protocol, runtime_checkable
 
 if TYPE_CHECKING:
@@ -36,6 +37,22 @@ class AudioSource(Protocol):
             A 1-D ``float32`` array of mono PCM samples at 16 kHz. May be empty
             if nothing was captured.
         """
+        ...
+
+
+@runtime_checkable
+class SystemAudioSource(Protocol):
+    """Continuous far-end (system output) capture for meetings."""
+
+    aec_active: bool
+    """Parity with the mic source flags; always ``False`` for a system tap."""
+
+    def frames(self) -> Iterator[AudioClip]:
+        """Yield 512-sample 16 kHz mono ``float32`` frames until :meth:`close`."""
+        ...
+
+    def close(self) -> None:
+        """Stop capture and release the sidecar. Idempotent."""
         ...
 
 
