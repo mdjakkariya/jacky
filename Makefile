@@ -12,10 +12,10 @@ setup: install hooks ## Create the env and install git hooks
 	@echo "Setup complete. Run 'make run' to start (needs Ollama running)."
 
 # `uv sync` REPLACES the installed extra set, so always sync the whole set at once.
-EXTRAS := dev all daemon cloud whispercpp aec
+EXTRAS := dev all daemon cloud whispercpp aec mcp
 EXTRA_FLAGS := $(addprefix --extra ,$(EXTRAS))
 
-install: ## Sync the virtualenv with all deps (dev + wake + tts + daemon + cloud + whispercpp + aec)
+install: ## Sync the virtualenv with all deps (dev + wake + tts + daemon + cloud + whispercpp + aec + mcp)
 	uv sync $(EXTRA_FLAGS)
 
 lint: ## Lint with ruff
@@ -67,7 +67,7 @@ changelog-preview: ## Print the pending (unreleased) changelog without writing a
 	@command -v git-cliff >/dev/null || { echo "git-cliff not found — install with 'brew install git-cliff'."; exit 1; }
 	@git-cliff --unreleased
 
-freeze: ## Freeze the engine into dist/autobot-daemon (bundles the daemon/cloud/tts/wake deps)
+freeze: ## Freeze the engine into dist/autobot-daemon (bundles the daemon/cloud/tts/wake/mcp deps)
 	uv sync $(EXTRA_FLAGS) --extra freeze
 	uv run pyinstaller --noconfirm --clean packaging/autobot-daemon.spec
 	@echo "Built: dist/autobot-daemon"

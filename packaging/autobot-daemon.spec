@@ -44,6 +44,13 @@ for _pkg in (
     "huggingface_hub",
     "pydantic",
     "pydantic_core",
+    # MCP client SDK (lazy-imported by autobot.mcp; absent in open-source/CI builds).
+    # jsonschema validates tool schemas and loads its meta-schemas from
+    # jsonschema_specifications' bundled .json resources — a classic PyInstaller miss,
+    # so collect those data files explicitly.
+    "mcp",
+    "jsonschema",
+    "jsonschema_specifications",
 ):
     try:
         _d, _b, _h = collect_all(_pkg)
