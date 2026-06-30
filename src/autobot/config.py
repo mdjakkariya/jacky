@@ -215,6 +215,7 @@ class Settings:
     allow_file_search: bool = True
     allow_clipboard: bool = True
     allow_reminders: bool = True
+    allow_notes: bool = True
     allow_file_io: bool = True
     allow_system_toggles: bool = True
     access_store: str = "~/.autobot/access.json"

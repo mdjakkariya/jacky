@@ -438,6 +438,16 @@ def build(
         log.info("reminders ENABLED (create/update/list/complete/delete)")
         print("[reminders] reminders ENABLED — Jack can manage your Reminders.")
 
+    if settings.allow_notes:
+        # macOS Notes (capture/read/organize/delete) via osascript; gated like
+        # everything else — reads are READ_ONLY, note/move are WRITE, delete
+        # confirms (DESTRUCTIVE). On-device.
+        from autobot.tools.notes import register_notes_tools
+
+        register_notes_tools(registry)
+        log.info("notes ENABLED (note/list/read/move/delete/folders)")
+        print("[notes] notes ENABLED — Jack can manage your Notes.")
+
     # Phase 4: persistent personalization. The store is read into the prompt each
     # turn and grown via the (gated) memory tools.
     memory = None
