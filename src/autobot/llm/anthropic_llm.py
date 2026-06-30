@@ -66,20 +66,20 @@ _MAX_TOKENS_RE = re.compile(r">\s*([0-9]+)\s*maximum")
 # tool; deferred tool defs cost ~0 baseline tokens until loaded on demand.
 TOOL_SEARCH_TYPE = "tool_search_tool_bm25_20251119"
 TOOL_SEARCH_NAME = "tool_search_tool_bm25"
-# Models for which "auto" turns ON native tool search. This is a COST/POLICY choice,
-# not a pure capability one: Haiku 4.5 also *supports* tool search, but with prompt
-# caching a static tool set is cheap to carry (the whole prefix is re-read at 0.1x),
-# whereas tool search adds per-use cost — the server search plus tool definitions loaded
-# on demand as fresh, uncached input. So "auto" enables it only where the context-size
-# and tool-selection-accuracy win clearly outweighs that (large catalogs on the bigger
-# models). Set anthropic_tool_search="on" to force it for any model — worth it on Haiku
-# when you connect many MCP servers or hold long conversations (tool defs would otherwise
-# crowd out history). Adjust this list as the tradeoff shifts.
+# Models for which "auto" turns ON native tool search. All listed models support it
+# (Sonnet 4+, Opus 4+, Haiku 4.5+). The default model claude-haiku-4-5 is included so the
+# out-of-the-box cloud experience bounds context: deferred MCP tools cost ~0 baseline and
+# the model selects among a relevant few rather than the whole catalog. The tradeoff is a
+# small per-use cost (the server search + tool definitions loaded on demand as fresh,
+# uncached input) — now visible in the cost meter, which prices cache reads/writes. Set
+# anthropic_tool_search="off" to fall back to advertising all tools (cheapest on short
+# turns with a static, cache-friendly tool set); "on" forces search for any model.
 _TOOL_SEARCH_MODEL_PREFIXES: tuple[str, ...] = (
     "claude-opus-4-8",
     "claude-opus-4-7",
     "claude-opus-4-6",
     "claude-sonnet-4-6",
+    "claude-haiku-4-5",
 )
 
 

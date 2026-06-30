@@ -634,13 +634,13 @@ def test_run_turn_advertises_tiered_tools_when_search_supported() -> None:
     assert sent[-1]["cache_control"] == {"type": "ephemeral"}  # cache on the last tool
 
 
-def test_run_turn_advertises_all_tools_when_search_unsupported() -> None:
+def test_run_turn_advertises_all_tools_when_search_off() -> None:
     resp = SimpleNamespace(
         content=[_block(type="text", text="ok")],
         usage=SimpleNamespace(input_tokens=5, output_tokens=2),
     )
     model = AnthropicLanguageModel(
-        Settings(llm_provider="anthropic"),  # default model -> auto disables search
+        Settings(llm_provider="anthropic", anthropic_tool_search="off"),  # search disabled
         _tiered_registry(),
         client=FakeClient([resp]),
     )
@@ -658,7 +658,8 @@ def test_tool_search_supported_resolves_mode_and_model() -> None:
     assert tool_search_supported("claude-opus-4-8", "off") is False
     assert tool_search_supported("some-unknown-model", "on") is True
     assert tool_search_supported("claude-opus-4-8", "auto") is True
-    assert tool_search_supported("claude-haiku-4-5", "auto") is False  # not in the table
+    assert tool_search_supported("claude-haiku-4-5", "auto") is True  # Haiku 4.5 is in the table
+    assert tool_search_supported("some-unknown-model", "auto") is False  # auto still gates by table
 
 
 def test_partition_tools_splits_core_from_gated() -> None:
@@ -702,10 +703,20 @@ def test_tool_search_capability_on_for_supported_model() -> None:
     assert model._tool_search is True
 
 
-def test_tool_search_capability_off_for_default_model_in_auto() -> None:
-    # Default model (claude-haiku-4-5) is not in the support table -> auto disables it.
+def test_tool_search_capability_on_for_default_model_in_auto() -> None:
+    # Default model (claude-haiku-4-5) is now in the support table -> auto enables search.
     model = AnthropicLanguageModel(
         Settings(llm_provider="anthropic"), _registry(), client=FakeClient([])
+    )
+    assert model._tool_search is True
+
+
+def test_tool_search_capability_off_by_setting_overrides_supported_model() -> None:
+    # "off" disables search even for a supported model (the legacy / cost-only escape).
+    model = AnthropicLanguageModel(
+        Settings(llm_provider="anthropic", anthropic_tool_search="off"),
+        _registry(),
+        client=FakeClient([]),
     )
     assert model._tool_search is False
 
