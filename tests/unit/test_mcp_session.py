@@ -94,7 +94,9 @@ def test_expire_loaded_token_forces_refresh_when_refresh_present() -> None:
         current_tokens=SimpleNamespace(refresh_token="r1"), token_expiry_time=None
     )
     _expire_loaded_token(ctx)
-    assert ctx.token_expiry_time == 0.0  # forced expired -> triggers silent refresh
+    # Positive-but-past (NOT 0.0, which the SDK treats as "no expiry" since 0.0 is falsy).
+    assert ctx.token_expiry_time == 1.0
+    assert ctx.token_expiry_time  # truthy, so the SDK's `not token_expiry_time` is False
 
 
 def test_expire_loaded_token_noop_without_refresh_token() -> None:

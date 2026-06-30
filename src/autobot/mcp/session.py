@@ -153,7 +153,11 @@ def _expire_loaded_token(context: Any) -> None:
     """
     tokens = getattr(context, "current_tokens", None)
     if tokens is not None and getattr(tokens, "refresh_token", None):
-        context.token_expiry_time = 0.0
+        # NOT 0.0: the SDK checks `not token_expiry_time or now <= token_expiry_time`, and
+        # `not 0.0` is True (0.0 is falsy) — which marks the token valid-forever. Use a
+        # small POSITIVE epoch time: truthy, and firmly in the past, so the token reads as
+        # expired and the SDK takes its silent refresh path instead of a browser re-auth.
+        context.token_expiry_time = 1.0
 
 
 def tool_allowed(name: str, allow: tuple[str, ...], deny: tuple[str, ...]) -> bool:
