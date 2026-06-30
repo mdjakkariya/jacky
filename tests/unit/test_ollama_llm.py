@@ -13,6 +13,7 @@ from autobot.config import Settings
 from autobot.core.types import ToolCall, ToolResult
 from autobot.llm.ollama_llm import OllamaLanguageModel
 from autobot.tools.registry import ToolRegistry, ToolSpec
+from autobot.tools.selection import LexicalToolSelector
 
 
 def _tc(name: str, args: dict[str, Any]) -> dict[str, Any]:
@@ -161,3 +162,134 @@ def test_history_keeps_tool_messages_across_turns() -> None:
     sent = model._client.calls[-1]["messages"]
     roles = [m.get("role") for m in sent]
     assert "tool" in roles  # the prior turn's tool result is carried into turn 2
+
+
+def test_selector_gates_advertised_tools() -> None:
+    reg = ToolRegistry()
+    reg.register(
+        ToolSpec(
+            name="battery_status",
+            description="Check the Mac's battery level and charging state.",
+            parameters={},
+            handler=lambda: "100%",
+            core=True,
+        )
+    )
+    reg.register(
+        ToolSpec(
+            name="slack__send",
+            description="Send a message to a Slack channel.",
+            parameters={},
+            handler=lambda **k: "sent",
+        )
+    )
+    selector = LexicalToolSelector(reg, budget=20, core_extra=frozenset(), core_remove=frozenset())
+    client = _FakeOllama([_resp(content="100%.")])
+    model = OllamaLanguageModel(
+        Settings(context_tokens=4096), reg, client=client, selector=selector
+    )
+    model.run_turn("what's my battery?", lambda c: ToolResult(name=c.name, content=""))
+    advertised = {t["function"]["name"] for t in client.calls[0]["tools"]}
+    assert "battery_status" in advertised  # core, always advertised
+    assert "slack__send" not in advertised  # gated, irrelevant to a battery query
+
+
+def test_no_selector_advertises_all_tools() -> None:
+    client = _FakeOllama([_resp(content="hi")])
+    model = OllamaLanguageModel(
+        Settings(context_tokens=4096), _registry(), client=client
+    )  # no selector → legacy behavior
+    model.run_turn("hi", lambda c: ToolResult(name=c.name, content=""))
+    advertised = {t["function"]["name"] for t in client.calls[0]["tools"]}
+    assert advertised == {"list_files", "open_path"}
+
+
+def _battery_slack_registry() -> ToolRegistry:
+    reg = ToolRegistry()
+    reg.register(
+        ToolSpec(
+            name="battery_status",
+            description="Check the Mac's battery level and charging state.",
+            parameters={},
+            handler=lambda: "100%",
+            core=True,
+        )
+    )
+    reg.register(
+        ToolSpec(
+            name="slack__send",
+            description="Send a message to a Slack channel.",
+            parameters={},
+            handler=lambda **k: "sent",
+        )
+    )
+    return reg
+
+
+def _selector(reg: ToolRegistry) -> LexicalToolSelector:
+    return LexicalToolSelector(reg, budget=20, core_extra=frozenset(), core_remove=frozenset())
+
+
+def test_find_tools_is_always_advertised_with_selector() -> None:
+    reg = _battery_slack_registry()
+    client = _FakeOllama([_resp(content="100%.")])
+    model = OllamaLanguageModel(
+        Settings(context_tokens=4096), reg, client=client, selector=_selector(reg)
+    )
+    model.run_turn("what's my battery?", lambda c: ToolResult(name=c.name, content=""))
+    advertised = {t["function"]["name"] for t in client.calls[0]["tools"]}
+    assert "find_tools" in advertised  # always, even when no gated tool matched
+    assert "battery_status" in advertised  # core
+    assert "slack__send" not in advertised  # gated + irrelevant → not yet advertised
+
+
+def test_find_tools_call_pins_matches_for_next_round() -> None:
+    reg = _battery_slack_registry()
+    # Round 1: the model can't see a slack tool, so it calls find_tools.
+    # Round 2: it should now see slack__send (pinned) and call it.
+    # Round 3: final text.
+    responses = [
+        _resp(tool_calls=[_tc("find_tools", {"intent": "send a message on slack"})]),
+        _resp(tool_calls=[_tc("slack__send", {"text": "hi"})]),
+        _resp(content="Sent your message."),
+    ]
+    client = _FakeOllama(responses)
+    model = OllamaLanguageModel(
+        Settings(context_tokens=4096), reg, client=client, selector=_selector(reg)
+    )
+    executed: list[str] = []
+
+    def execute(call: ToolCall) -> ToolResult:
+        executed.append(call.name)
+        return ToolResult(name=call.name, content="sent", ok=True)
+
+    reply = model.run_turn("tell the team hi on slack", execute)
+    assert reply == "Sent your message."
+    # find_tools was NOT dispatched through the executor (the loop owns it):
+    assert executed == ["slack__send"]
+    # Round 2's advertised set includes the pinned slack__send:
+    round2_tools = {t["function"]["name"] for t in client.calls[1]["tools"]}
+    assert "slack__send" in round2_tools
+    # The find_tools result was fed back as a tool message in round 2's prompt:
+    round2_msgs = client.calls[1]["messages"]
+    assert any(m.get("role") == "tool" and m.get("tool_name") == "find_tools" for m in round2_msgs)
+
+
+def test_pins_reset_between_turns() -> None:
+    reg = _battery_slack_registry()
+    responses = [
+        _resp(tool_calls=[_tc("find_tools", {"intent": "send a message on slack"})]),
+        _resp(content="Found it."),  # turn 1, round 2: final
+        _resp(content="100%."),  # turn 2, round 1: final
+    ]
+    client = _FakeOllama(responses)
+    model = OllamaLanguageModel(
+        Settings(context_tokens=4096), reg, client=client, selector=_selector(reg)
+    )
+    model.run_turn("message slack", lambda c: ToolResult(name=c.name, content="", ok=True))
+    assert "slack__send" in model._pinned  # pinned during turn 1
+    model.run_turn("what's my battery?", lambda c: ToolResult(name=c.name, content="", ok=True))
+    assert model._pinned == set()  # reset at the start of turn 2
+    # Turn 2's first round must NOT carry turn 1's pin into the advertised set:
+    turn2_tools = {t["function"]["name"] for t in client.calls[-1]["tools"]}
+    assert "slack__send" not in turn2_tools

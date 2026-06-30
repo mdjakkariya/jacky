@@ -541,6 +541,7 @@ def register_file_tools(
             ),
             risk=Risk.READ_ONLY,
             ack="Searching your files.",
+            core=True,
         )
     )
     registry.register(

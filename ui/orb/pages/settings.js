@@ -9,8 +9,17 @@ import "../components/permissions-list/permissions-list.js";
 import "../components/access-list/access-list.js";
 import "../components/voice-download/voice-download.js";
 import { setupReportSheet } from "../components/report-sheet/report-sheet.js";
+import "../components/connections-list/connections-list.js";
+import { showAddConnection, hideAddConnection } from "../components/add-connection/add-connection.js";
+import { showConnectionDetail, hideConnectionDetail } from "../components/connection-detail/connection-detail.js";
+import { privacyExits, renderPrivacySummary } from "./privacy-summary.js";
 
-const CHECKS = ["tts_enabled", "barge_in", "aec", "allow_app_control", "allow_system_info", "allow_memory", "allow_file_search", "allow_clipboard", "allow_reminders", "allow_file_io", "allow_web"];
+// Open the daemon WebSocket so live events (mcp_status / mcp_oauth) reach the
+// Settings window — the connections list, connection detail, and the add-connection
+// wizard all subscribe via daemon.on(...) and otherwise would never update live.
+daemon.connect();
+
+const CHECKS = ["tts_enabled", "barge_in", "aec", "allow_app_control", "allow_system_info", "allow_memory", "allow_file_search", "allow_clipboard", "allow_reminders", "allow_file_io", "allow_web", "allow_mcp"];
 
 // --- status line ------------------------------------------------------------
 let _statusTimer = null;
@@ -27,11 +36,119 @@ const tabs = document.querySelector("settings-tabs");
 tabs.addEventListener("tab-change", (e) => {
   if (e.detail === "perms") $("permsList").load();
   if (e.detail === "listen") $("voiceSetupCard").loadStatus();
+  if (e.detail === "connections") {
+    const connList = $("connList");
+    if (connList) connList.load();
+  }
+  if (e.detail === "privacy") renderPrivacy($("privacyPanel"));
 });
 
 // --- access-list status events -> page status line --------------------------
 const access = document.querySelector("access-list");
 if (access) access.addEventListener("status", (e) => setStatus(e.detail.msg, e.detail.isError));
+
+// --- connections-list event wiring ------------------------------------------
+// Wired lazily: the element is present in the DOM but the component only fully
+// activates when the Connections tab is first opened (via connList.load()).
+// openAddConnection / openConnectionDetail are stubs filled in by Tasks 5 & 6.
+const connList = $("connList");
+if (connList) {
+  connList.addEventListener("add-connection", () => openAddConnection());
+  connList.addEventListener("server-select", (e) => openConnectionDetail(e.detail));
+}
+
+// The "Enable MCP connections" master toggle applies immediately: it saves on
+// change and the daemon turns the MCP subsystem on/off live (no restart). The
+// "off by default" info banner is shown ONLY when MCP is disabled AND the list is
+// visible — it's hidden once MCP is on (it would contradict the on state) and while
+// the wizard/detail view has replaced the list. Single source of truth so the toggle
+// and setConnListVisible() don't fight over the banner.
+function updateMcpUI() {
+  const panel = document.getElementById("tab-connections");
+  const banner = panel && panel.querySelector(".mcp-banner");
+  if (!banner) return;
+  const list = panel.querySelector("connections-list");
+  const listHidden = !!(list && list.classList.contains("hidden"));
+  const mcpOn = !!($("allow_mcp") && $("allow_mcp").checked);
+  banner.classList.toggle("hidden", mcpOn || listHidden);
+}
+const allowMcpToggle = $("allow_mcp");
+if (allowMcpToggle) {
+  allowMcpToggle.addEventListener("change", async () => {
+    try {
+      await daemon.setSettings({ allow_mcp: allowMcpToggle.checked });
+      setStatus(allowMcpToggle.checked ? "MCP enabled." : "MCP disabled.");
+    } catch (_) {
+      setStatus("Couldn’t update — is Jack running?", true);
+    }
+    updateMcpUI();
+    const cl = $("connList");
+    if (cl) cl.load(); // reflect the new state (servers list vs. disabled message)
+  });
+}
+
+/** Show or hide the connections list + intro banner (so the wizard / detail
+ *  view replaces them in-place rather than stacking below). */
+function setConnListVisible(panel, visible) {
+  const list = panel.querySelector("connections-list");
+  if (list) list.classList.toggle("hidden", !visible);
+  updateMcpUI(); // banner follows: hidden when MCP on OR list hidden
+}
+
+/** Open the add-connection wizard in place of the connections list. */
+function openAddConnection() {
+  // Use the connections panel as the container so the wizard is scoped to that tab.
+  const panel = document.getElementById("tab-connections");
+  if (!panel) return;
+  setConnListVisible(panel, false);
+  const restore = () => { hideAddConnection(panel); setConnListVisible(panel, true); };
+  showAddConnection(panel, {
+    onDone: () => {
+      restore();
+      // Reload the connections list so the new server appears.
+      const connList = $("connList");
+      if (connList) connList.load();
+    },
+    onCancel: restore,
+  });
+}
+
+/** Open the connection-detail panel for the given server row (the full object from
+ *  connections-list's server-select event detail). Builds meta directly from the row —
+ *  no DOM scraping required. */
+function openConnectionDetail(srv) {
+  const panel = document.getElementById("tab-connections");
+  if (!panel) return;
+  const meta = {
+    label: srv.label || srv.server,
+    egress: srv.egress === "network",
+    state: srv.state || "disconnected",
+    auth_type: srv.auth_type || "",
+  };
+  setConnListVisible(panel, false);
+  showConnectionDetail(panel, srv.server, meta, {
+    onClose: () => {
+      hideConnectionDetail(panel);
+      setConnListVisible(panel, true);
+      const connList = $("connList");
+      if (connList) connList.load();
+    },
+  });
+}
+
+// --- privacy summary ---------------------------------------------------------
+async function renderPrivacy(el) {
+  if (!el) return;
+  el.textContent = "Loading…";
+  try {
+    const [settings, serversRes] = await Promise.all([daemon.settings(), daemon.mcpServers()]);
+    const exits = privacyExits(settings, serversRes.servers || []);
+    // "View audit log" opens the activity/report sheet (recent gated tool activity).
+    renderPrivacySummary(el, exits, () => report.open());
+  } catch (_) {
+    el.textContent = "Couldn't load privacy summary — is Jack running?";
+  }
+}
 
 // --- model pickers (provider + Claude/Ollama/STT, with a Custom… escape hatch) ---
 const CLAUDE_SUGGESTIONS = ["claude-haiku-4-5", "claude-sonnet-4-6", "claude-opus-4-8"];
@@ -136,6 +253,7 @@ async function load() {
   CHECKS.forEach((k) => { $(k).checked = !!s[k]; });
   $("web_provider").value = s.web_provider || "auto";
   updateWebUI();
+  updateMcpUI();
   const sec = s._secrets || {};
   $("keyState").textContent = sec.anthropic_api_key ? "— saved (leave blank to keep)" : "— not set";
   $("webKeyState").textContent = sec.web_api_key ? "— saved (leave blank to keep)" : "— not set";

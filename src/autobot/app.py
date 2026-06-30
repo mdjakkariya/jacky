@@ -33,6 +33,7 @@ from autobot.tools.registry import ToolRegistry
 
 if TYPE_CHECKING:
     from autobot.io.listening import FrameSource
+    from autobot.mcp.manager import McpManager
     from autobot.memory.store import MemoryStore
 
 
@@ -278,7 +279,11 @@ def _build_llm(
             from autobot.llm.anthropic_llm import AnthropicLanguageModel
 
             llm = AnthropicLanguageModel(settings, registry, transcript, memory=memory)
-            log.info("llm provider=anthropic model=%s (OFF-DEVICE)", settings.anthropic_model)
+            log.info(
+                "llm provider=anthropic model=%s tool_search=%s (OFF-DEVICE)",
+                settings.anthropic_model,
+                settings.anthropic_tool_search,
+            )
             print(
                 f"[llm] CLOUD mode — Claude ({settings.anthropic_model}). Your requests and "
                 "remembered profile are sent to Anthropic. Actions still run locally."
@@ -293,7 +298,10 @@ def _build_llm(
         except ValueError as exc:
             log.warning("cloud LLM unavailable, falling back to local: %s", exc)
             print(f"[llm] cloud unavailable ({exc}) — using local Ollama.")
-    return OllamaLanguageModel(settings, registry, transcript, memory=memory)
+    from autobot.tools.selection import build_tool_selector
+
+    selector = build_tool_selector(settings, registry)
+    return OllamaLanguageModel(settings, registry, transcript, memory=memory, selector=selector)
 
 
 def build(
@@ -309,6 +317,7 @@ def build(
     on_choices: ChoicesSink | None = None,
     on_step: Callable[[int, str, str, str], None] | None = None,
     on_workspace: Callable[[str, str], None] | None = None,
+    on_mcp_event: Callable[[dict[str, object]], None] | None = None,
 ) -> Orchestrator:
     """Compose a fully wired :class:`Orchestrator`.
 
@@ -346,6 +355,9 @@ def build(
             changes (e.g. via ``set_working_directory``), so the chat drawer can
             update its folder chip; the daemon wires it to the bus's
             ``publish_workspace``.
+        on_mcp_event: Optional callback invoked when the MCP manager publishes an
+            event; the daemon passes the bus's ``publish_mcp`` to wire MCP state
+            to connected clients.
 
     Returns:
         A ready-to-run orchestrator. Constructing it loads the STT model, opens
@@ -510,6 +522,34 @@ def build(
     confirmer = _build_confirmer(
         settings, tts, audio, stt, on_confirm, on_confirm_clear, poll_click
     )
+
+    # MCP integration (opt-in, the third disclosed exception). Built behind a provider
+    # so "Enable MCP connections" (allow_mcp) can turn the whole subsystem on or off at
+    # runtime with no restart: the daemon reads the live manager through the provider and
+    # the Settings endpoint flips it. Each enabled server's tools join the same registry,
+    # gated like any other tool; network-egress servers send data off-device (disclosed
+    # per-connection, confirmed by the gate), local stdio servers stay on-device.
+    import atexit
+
+    from autobot.mcp.provider import McpProvider
+
+    def _make_mcp() -> McpManager:
+        from autobot.mcp.config import load_mcp_config
+        from autobot.mcp.manager import McpManager
+
+        mgr = McpManager(load_mcp_config(), registry, on_event=on_mcp_event)
+        mgr.start()
+        # Confirmer wired BEFORE connecting so stdio spawn-consent goes through the
+        # gate rather than auto-approving.
+        mgr.set_confirmer(confirmer)
+        mgr.connect_enabled()
+        return mgr
+
+    mcp_provider = McpProvider(_make_mcp)
+    if settings.allow_mcp:
+        mcp_provider.set_enabled(True)
+        log.info("mcp ENABLED")
+    atexit.register(mcp_provider.shutdown)
     # Permission-aware: refuse a tool whose macOS permission is missing (and open the
     # right Settings pane) instead of letting it fail deep in AppleScript.
     from autobot import permissions
@@ -551,7 +591,7 @@ def build(
     if settings.barge_in:
         log.info("barge-in enabled — engages when voice starts (if AEC is active)")
 
-    return Orchestrator(
+    orch = Orchestrator(
         settings=settings,
         audio=audio,
         stt=stt,
@@ -570,6 +610,8 @@ def build(
         # the voice I/O rebuilds lazily on the next switch back to voice.
         release_voice_io=_voice_io.release,
     )
+    orch.mcp_provider = mcp_provider
+    return orch
 
 
 def main() -> None:

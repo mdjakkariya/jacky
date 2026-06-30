@@ -18,6 +18,7 @@ from typing import TYPE_CHECKING, Protocol, runtime_checkable
 if TYPE_CHECKING:
     # Imported only for type checking so this module stays runtime-light.
     from autobot.core.types import AudioClip, ToolExecutor, Transcription
+    from autobot.tools.registry import ToolSpec
 
 
 @runtime_checkable
@@ -97,5 +98,50 @@ class TextToSpeech(Protocol):
 
         Called from another thread (e.g. when the user barges in). Safe to call
         when nothing is playing — it just clears the way for the next ``speak``.
+        """
+        ...
+
+
+@runtime_checkable
+class ToolSelector(Protocol):
+    """Chooses which tools to advertise to the model for one round.
+
+    The pipeline funnels every request's tool list through a selector instead of
+    advertising the whole registry. Implementations return the always-on core set
+    plus the gated tools judged relevant to ``query`` (and any explicitly
+    ``pinned`` tools), bounded so per-turn tool context stays small.
+    """
+
+    def select(self, query: str, *, pinned: frozenset[str] = frozenset()) -> list[ToolSpec]:
+        """Return the ToolSpecs to advertise this round.
+
+        Args:
+            query: The current user message (the relevance signal).
+            pinned: Tool names to force-include (e.g. discovered via an escape
+                hatch); resolved against the registry and added to the result.
+
+        Returns:
+            A bounded, deduplicated list of specs: core U pinned U top relevant.
+        """
+        ...
+
+    def search(self, intent: str, *, limit: int = 5) -> list[str]:
+        """Return the names of the best gated tools for an explicit intent.
+
+        The model's escape hatch: when the relevance-gated set advertised by
+        :meth:`select` lacks the tool a request needs, the model calls
+        ``find_tools(intent)`` and the turn loop forwards ``intent`` here. The
+        returned names are then pinned (force-advertised via ``select(..., pinned)``)
+        for the rest of the turn, so the model can call the real tool next round.
+
+        Args:
+            intent: A short natural-language description of what the model wants to
+                do (e.g. ``"send a message on slack"``).
+            limit: Maximum number of tool names to return.
+
+        Returns:
+            Up to ``limit`` bare tool names, most relevant first. Never includes
+            always-on core tools (the model already sees those). Empty when nothing
+            matches.
         """
         ...

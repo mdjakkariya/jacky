@@ -11,13 +11,17 @@ are pure functions so they can be unit-tested without a live Ollama server.
 from __future__ import annotations
 
 import json
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from autobot.core.interfaces import ToolSelector
 
 from autobot.config import Settings
 from autobot.core.types import ToolCall, ToolExecutor
 from autobot.logging_setup import get_logger
 from autobot.memory.store import MemoryStore
 from autobot.session_log import NullTranscript, Transcript
+from autobot.tools.builtin import FIND_TOOLS
 from autobot.tools.registry import ToolRegistry
 
 _log = get_logger("llm")
@@ -235,9 +239,13 @@ class OllamaLanguageModel:
         transcript: Transcript | None = None,
         memory: MemoryStore | None = None,
         client: Any | None = None,
+        selector: ToolSelector | None = None,
     ) -> None:
         self._settings = settings
         self._registry = registry
+        self._selector = selector
+        self._round_query = ""  # current turn's user text; the relevance signal
+        self._pinned: set[str] = set()  # tools discovered via find_tools, this turn only
         self._transcript = transcript or NullTranscript()
         self._memory = memory
         if client is not None:  # injected (tests)
@@ -289,7 +297,7 @@ class OllamaLanguageModel:
             },
         }
         if with_tools:
-            kwargs["tools"] = self._registry.schemas()
+            kwargs["tools"] = self._tools_for_round()
         # Only qwen3 supports the reasoning toggle; other models reject the kwarg.
         if "qwen3" in model:
             try:
@@ -301,6 +309,42 @@ class OllamaLanguageModel:
         self._last_prompt_tokens = int(_get(response, "prompt_eval_count") or 0)
         self._last_eval_tokens = int(_get(response, "eval_count") or 0)
         return response
+
+    def _tools_for_round(self) -> list[dict[str, Any]]:
+        """Schemas to advertise this round: the selector's subset, or all tools.
+
+        With a selector wired, advertise the relevance-gated subset for this turn's
+        message (including any tools pinned by ``find_tools`` so far), plus the
+        always-on ``find_tools`` meta-tool so the model can discover what the
+        pre-filter missed. Without a selector, every registered tool is advertised —
+        the original behavior, kept so existing callers/tests are unaffected (and
+        ``find_tools`` is pointless there: nothing is gated, nothing to discover).
+        """
+        if self._selector is None:
+            return self._registry.schemas()
+        selected = self._selector.select(self._round_query, pinned=frozenset(self._pinned))
+        return [spec.to_schema() for spec in selected] + [FIND_TOOLS.to_schema()]
+
+    def _discover_tools(self, intent: str) -> str:
+        """Run the find_tools escape hatch: search, pin matches, summarize for the model.
+
+        Asks the selector for the gated tools best matching ``intent``, pins their
+        names so :meth:`_tools_for_round` advertises them for the rest of this turn,
+        and returns a short ``name: description`` summary the model can read to pick
+        the right tool on its next step. With no selector (legacy path) ``find_tools``
+        is never advertised, so this is only reached when ``self._selector`` is set.
+        """
+        if self._selector is None:  # defensive; find_tools isn't advertised without one
+            return "Tool discovery is unavailable."
+        names = self._selector.search(intent)
+        self._pinned.update(names)
+        specs = [self._registry.get(name) for name in names]
+        found = [s for s in specs if s is not None]
+        _log.info("find_tools intent=%r matched=%s", intent, [s.name for s in found])
+        if not found:
+            return f"No tools found for: {intent}. Tell the user you can't do that."
+        lines = [f"- {s.name}: {s.description}" for s in found]
+        return "Found these tools (now available to call):\n" + "\n".join(lines)
 
     def _assemble(self, user_msg: dict[str, Any]) -> list[dict[str, Any]]:
         """System prompt + running summary (if any) + recent turns + the new message."""
@@ -335,6 +379,8 @@ class OllamaLanguageModel:
         re-run, so a flapping step can't spin the loop.
         """
         user_msg = {"role": "user", "content": user_text}
+        self._round_query = user_text  # relevance signal for tool selection this turn
+        self._pinned = set()  # find_tools discoveries are per-turn; never leak across turns
 
         # Proactive: compact BEFORE sending if this prompt would cross the budget.
         estimated = estimate_tokens(self._assemble(user_msg))
@@ -360,6 +406,11 @@ class OllamaLanguageModel:
             all_repeat = True  # did this round only re-issue calls that already failed?
             last_fail = ""  # most recent cached failure text this round; used only when all_repeat
             for call in calls:
+                if call.name == FIND_TOOLS.name and self._selector is not None:
+                    all_repeat = False  # discovery is real progress, not a failing repeat
+                    summary = self._discover_tools(call.arguments.get("intent", ""))
+                    messages.append({"role": "tool", "tool_name": call.name, "content": summary})
+                    continue
                 key = call.name + "\0" + json.dumps(call.arguments, sort_keys=True, default=str)
                 if key in failed:
                     out = failed[key]  # already failed — reuse, don't re-run

@@ -95,6 +95,83 @@
   .tip { position: absolute; bottom: calc(100% + 7px); left: 50%; transform: translateX(-50%); background: var(--text); color: var(--panel); font-size: 11px; font-weight: 500; padding: 3px 8px; border-radius: 6px; white-space: nowrap; opacity: 0; pointer-events: none; transition: opacity .15s ease; box-shadow: 0 2px 8px rgba(0, 0, 0, .25); }
   .tip:after { content: ""; position: absolute; top: 100%; left: 50%; transform: translateX(-50%); border: 4px solid transparent; border-top-color: var(--text); }
   .tip.show { opacity: 1; }
+  /* MCP info banner */
+  .mcp-banner { display:flex; align-items:flex-start; gap:12px; padding:12px 14px; border-radius:10px;
+    font-size:12.5px; line-height:1.5;
+    background:var(--net-bg); border:1px solid rgba(251,146,60,.28); color:var(--net); margin-bottom:14px; }
+  .mcp-banner > :first-child { flex:none; }   /* the ↗ / ● glyph keeps its own column */
+  .mcp-banner strong { display:inline-block; margin-right:2px; }
+  .mcp-banner.local { background:rgba(40,180,90,.08); border-color:rgba(40,180,90,.25); color:var(--ok); }
+  /* MCP server card (connections list) — the whole row opens the detail view. */
+  .srv-card { display:flex; align-items:center; gap:12px; padding:11px 14px;
+    border-top:.5px solid var(--line); cursor:pointer; transition:background .12s ease; }
+  .srv-card:hover { background:var(--seg-bg); }
+  .srv-card:first-child { border-top:none; }
+  .srv-icon { width:36px; height:36px; border-radius:9px; flex:0 0 auto;
+    display:flex; align-items:center; justify-content:center; font-size:18px;
+    background:var(--seg-bg); border:.5px solid var(--line); color:var(--text); }
+  .srv-icon svg { width:20px; height:20px; display:block; }
+  .srv-meta { flex:1; min-width:0; }
+  .srv-name { font-weight:600; display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
+  .srv-desc { color:var(--muted); font-size:12px; margin-top:2px; display:flex; gap:6px; align-items:center; flex-wrap:wrap; }
+  .status-dot { width:7px; height:7px; border-radius:50%; display:inline-block; flex:none; }
+  .status-dot.connected { background:var(--ok); }
+  .status-dot.disconnected { background:var(--muted); }
+  .status-dot.auth_needed { background:var(--warn); }
+  .status-dot.reconnecting { background:var(--warn); }
+  .add-conn-row { display:flex; justify-content:flex-end; padding:12px 14px 2px; }
+  /* MCP risk pills */
+  .pill { display:inline-flex; align-items:center; gap:5px; padding:1px 8px;
+    border-radius:999px; font-size:11px; font-weight:600; line-height:1.7; white-space:nowrap; }
+  .pill.read  { background:rgba(10,132,255,.13); color:var(--accent); }
+  .pill.write { background:rgba(230,135,14,.14); color:var(--net); }
+  .pill.danger { background:var(--danger-bg); color:var(--danger); }
+  .pill.net   { background:var(--net-bg); color:var(--net); }
+  .pill.local { background:rgba(40,180,90,.12); color:var(--ok); }
+  /* Add-connection wizard stepper */
+  .wizard-steps { display:flex; gap:5px; margin-bottom:16px; }
+  .wizard-step { flex:1; height:4px; border-radius:3px; background:var(--line); }
+  .wizard-step.done { background:var(--accent); }
+  .wizard-step.now { background:var(--accent); opacity:.55; }
+  /* Wizard catalog grid */
+  .catalog-grid { display:grid; grid-template-columns:1fr 1fr; gap:8px; margin-bottom:8px; }
+  .cat-item { display:flex; align-items:center; gap:9px; padding:10px; border:.5px solid var(--line);
+    border-radius:9px; background:var(--panel); cursor:pointer; }
+  .cat-item:hover { border-color:var(--accent); }
+  .cat-item.selected { border-color:var(--accent); background:var(--accent-bg); }
+  .cat-icon { width:28px; height:28px; border-radius:7px; display:flex; align-items:center;
+    justify-content:center; font-size:15px; background:var(--seg-bg); flex:none; color:var(--text); }
+  .cat-icon svg { width:18px; height:18px; display:block; }
+  .cat-name { font-weight:600; font-size:12.5px; }
+  .cat-desc { color:var(--muted); font-size:11px; margin-top:1px; }
+  /* Wizard radio option */
+  .opt-item { display:flex; gap:10px; padding:10px; border:.5px solid var(--line);
+    border-radius:9px; margin-bottom:8px; background:var(--panel); cursor:pointer; }
+  .opt-item.selected { border-color:var(--accent); }
+  .opt-radio { width:15px; height:15px; border-radius:50%; border:2px solid var(--muted); flex:none; margin-top:2px; }
+  .opt-item.selected .opt-radio { border-color:var(--accent); background:radial-gradient(circle,var(--accent) 38%,transparent 42%); }
+  .opt-title { font-weight:600; font-size:12.5px; }
+  .opt-desc  { color:var(--muted); font-size:11.5px; margin-top:2px; }
+  /* Connection detail tool list */
+  .tool-row { display:flex; align-items:center; gap:11px; padding:10px 14px;
+    border-top:.5px solid var(--line); }
+  .tool-row:first-child { border-top:none; }
+  .tool-name { font-weight:600; font-size:13px; }
+  .tool-desc { color:var(--muted); font-size:12px; margin-top:2px; }
+  .tool-meta { flex:1; min-width:0; }
+  /* Privacy summary exit rows */
+  .exit-row { display:flex; align-items:center; gap:11px; padding:11px 14px;
+    border-top:.5px solid var(--line); }
+  .exit-row:first-child { border-top:none; }
+  .exit-icon { width:28px; height:28px; border-radius:7px; display:flex; align-items:center;
+    justify-content:center; font-size:14px; background:var(--seg-bg); flex:none; }
+  .exit-meta { flex:1; min-width:0; }
+  .exit-name { font-weight:600; font-size:13px; }
+  .exit-desc { color:var(--muted); font-size:12px; margin-top:2px; }
+  /* Danger zone */
+  .danger-zone { border-top:.5px solid var(--danger-bg); margin-top:4px; padding-top:12px; display:flex; gap:8px; }
+  button.btn.danger { background:var(--danger-bg); color:var(--danger); border-color:var(--danger-bg); }
+  button.btn.ghost-sm { background:transparent; color:var(--muted); border:none; font-size:12px; }
   .hidden { display: none !important; }
   /* First-load overlay: the daemon may take a moment to answer /settings, so cover the
      (empty) form with a spinner until it does, instead of flashing a blank window. */
@@ -110,4 +187,71 @@
     background-size: 45% 100%; background-repeat: no-repeat;
     animation: voiceSlide 1.1s ease-in-out infinite;
   }
+
+  /* ========================================================================
+     MCP add-connection wizard + connection-detail
+     These views replace the connections list in-place, so they read as a
+     focused sub-screen. (Layout CSS that was missing — the components shipped
+     in Phase 5 but their stylesheet did not, so the panels rendered unstyled.)
+     ===================================================================== */
+  /* Card shells */
+  .wizard-card, .connection-detail-card {
+    background: var(--panel); border: .5px solid var(--line); border-radius: 10px; overflow: hidden;
+  }
+  .wizard-body { padding: 14px 16px; }
+  /* Section headers shared by wizard + detail (mirrors .section-title). */
+  .secthead { color: var(--muted); font-size: 11px; font-weight: 600; letter-spacing: .04em;
+    text-transform: uppercase; margin: 16px 2px 8px; }
+  .wizard-body > .wizard-steps + .secthead { margin-top: 4px; }
+  /* Action row: primary action right-aligned via .spacer. */
+  .wizard-row { display: flex; align-items: center; gap: 8px; margin-top: 16px; }
+  .spacer { flex: 1; }
+  /* Cancel / Back read as secondary next to the primary action. */
+  .btn.btn-cancel, .btn.btn-back { background: transparent; color: var(--accent); }
+  /* Form fields (custom transport + token). */
+  .field-label { color: var(--muted); font-size: 12px; margin: 12px 2px 5px; }
+  .field-input { width: 100%; background: var(--field); border: .5px solid var(--field-line);
+    color: var(--text); border-radius: 7px; padding: 7px 10px; font-size: 13px; }
+  .field-input:focus { outline: none; border-color: var(--accent); }
+  textarea.field-input { min-height: 60px; resize: vertical;
+    font: 12px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; }
+  .transport-fields { margin-top: 2px; }
+  /* OAuth explainer (wizard step 4). */
+  .oauth-explainer { text-align: center; }
+  .oauth-emoji-row { font-size: 30px; padding: 6px 0 2px; }
+  .oauth-desc { color: var(--muted); font-size: 13px; margin: 8px 16px 14px; }
+  .oauth-explainer .mcp-banner { text-align: left; margin-bottom: 0; }
+  /* OAuth live progress / status (replaces the old "coming soon" stub). */
+  .oauth-status { display: flex; align-items: center; gap: 8px; justify-content: center;
+    font-size: 12.5px; color: var(--muted); margin: 12px 2px 2px; text-align: center; }
+  .oauth-status.error { color: var(--danger); }
+  .oauth-status.ok { color: var(--ok); }
+  .oauth-spinner { width: 14px; height: 14px; border-radius: 50%; border: 2px solid var(--line);
+    border-top-color: var(--accent); animation: ldspin .8s linear infinite; flex: none; }
+  /* OAuth success state — animated check + label (replaces plain "Connected!"). */
+  .oauth-success { display: flex; align-items: center; justify-content: center; gap: 8px;
+    margin: 14px 2px 2px; color: var(--ok); font-weight: 600; font-size: 13px; }
+  .oauth-check { width: 22px; height: 22px; border-radius: 50%; background: var(--ok); color: #fff;
+    display: flex; align-items: center; justify-content: center; font-size: 13px; flex: none;
+    animation: oauthPop .32s ease; }
+  @keyframes oauthPop { 0% { transform: scale(0); } 70% { transform: scale(1.15); } 100% { transform: scale(1); } }
+  /* OAuth pre-registered credentials block (was unstyled → cramped). */
+  .oauth-creds-block { margin-top: 14px; }
+  .oauth-creds-note { color: var(--muted); font-size: 12px; line-height: 1.5; margin: 14px 2px 10px; }
+  .oauth-redirect-note { color: var(--muted); font-size: 12px; line-height: 1.5; margin: 0 2px 12px; }
+  .oauth-redirect-uri { display: inline-block; margin-top: 5px; padding: 3px 7px; border-radius: 6px;
+    background: var(--seg-bg); color: var(--text); user-select: all;
+    font: 12px ui-monospace, SFMono-Regular, Menlo, monospace; }
+  /* Token + keychain helpers. */
+  .token-error { color: var(--danger); font-size: 12px; margin: 8px 2px 0; }
+  .keychain-banner { margin: 6px 0 4px; }
+  /* Connection-detail header + tools. */
+  .connection-detail-card { padding: 12px 14px; }
+  .detail-back { padding-left: 2px; margin-bottom: 6px; }
+  .detail-header { display: flex; align-items: center; gap: 12px; padding: 2px 2px 12px; }
+  .detail-header .srv-meta { flex: 1; min-width: 0; }
+  .detail-tools-section { border: .5px solid var(--line); border-radius: 9px; overflow: hidden; }
+  .detail-tools-section:empty { display: none; }
+  .tool-pills { display: flex; align-items: center; gap: 6px; flex: none; }
+  .signout-note { color: var(--muted); font-size: 11.5px; margin: 8px 2px 0; }
 }

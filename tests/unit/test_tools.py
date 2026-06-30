@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+import concurrent.futures
+import threading
+import time
+
 import pytest
 
 from autobot.core.types import Risk
@@ -55,3 +59,165 @@ def test_register_rejects_duplicate_names() -> None:
 
 def test_builtin_tool_is_read_only() -> None:
     assert GET_TIME.risk is Risk.READ_ONLY
+
+
+def test_toolspec_network_defaults_false() -> None:
+    spec = ToolSpec(name="t", description="", parameters={}, handler=lambda: "")
+    assert spec.network is False
+
+
+def test_toolspec_network_can_be_set() -> None:
+    spec = ToolSpec(name="t", description="", parameters={}, handler=lambda: "", network=True)
+    assert spec.network is True
+
+
+def _spec(name: str, desc: str = "") -> ToolSpec:
+    return ToolSpec(name=name, description=desc, parameters={}, handler=lambda: name)
+
+
+def test_register_duplicate_still_raises_by_default() -> None:
+    registry = ToolRegistry()
+    registry.register(_spec("dup"))
+    with pytest.raises(ValueError, match="already registered"):
+        registry.register(_spec("dup"))
+
+
+def test_register_replace_overwrites_existing() -> None:
+    registry = ToolRegistry()
+    registry.register(_spec("t", "old"))
+    registry.register(_spec("t", "new"), replace=True)
+    spec = registry.get("t")
+    assert spec is not None
+    assert spec.description == "new"
+
+
+def test_unregister_removes_tool_and_reports_existed() -> None:
+    registry = ToolRegistry()
+    registry.register(_spec("gone"))
+    assert registry.unregister("gone") is True
+    assert registry.get("gone") is None
+    assert "gone" not in [s["function"]["name"] for s in registry.schemas()]
+
+
+def test_unregister_missing_tool_returns_false() -> None:
+    assert ToolRegistry().unregister("never") is False
+
+
+def test_registry_concurrent_register_unregister_does_not_corrupt() -> None:
+    """Concurrent mutations and reads from two threads must not raise or corrupt state."""
+    registry = ToolRegistry()
+    errors: list[Exception] = []
+    stop = threading.Event()
+
+    def mutator() -> None:
+        i = 0
+        while not stop.is_set():
+            name = f"stress_{i % 5}"
+            try:
+                # Capture name in a closure variable to avoid late binding
+                def handler(n: str = name) -> str:
+                    return n
+
+                spec = ToolSpec(name=name, description="", parameters={}, handler=handler)
+                registry.register(spec, replace=True)
+                registry.unregister(name)
+            except Exception as exc:
+                errors.append(exc)
+            i += 1
+
+    def reader() -> None:
+        while not stop.is_set():
+            try:
+                registry.schemas()
+                registry.get("stress_0")
+            except Exception as exc:
+                errors.append(exc)
+
+    t1 = threading.Thread(target=mutator, daemon=True)
+    t2 = threading.Thread(target=reader, daemon=True)
+    t1.start()
+    t2.start()
+    time.sleep(0.5)
+    stop.set()
+    t1.join(timeout=2.0)
+    t2.join(timeout=2.0)
+    assert errors == [], f"thread errors: {errors}"
+
+
+def test_dispatch_runs_handler_outside_lock() -> None:
+    """A handler that takes time must not block concurrent registry reads."""
+    registry = ToolRegistry()
+    blocker_started = threading.Event()
+    allow_finish = threading.Event()
+
+    def slow_handler() -> str:
+        blocker_started.set()
+        allow_finish.wait(timeout=2.0)
+        return "done"
+
+    registry.register(ToolSpec(name="slow", description="", parameters={}, handler=slow_handler))
+    registry.register(ToolSpec(name="fast", description="", parameters={}, handler=lambda: "ok"))
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
+        dispatch_future = pool.submit(registry.dispatch, "slow", {})
+        blocker_started.wait(timeout=2.0)
+        # While slow_handler is running, schemas() and get() must not deadlock
+        schema_future = pool.submit(registry.schemas)
+        schemas = schema_future.result(timeout=1.0)  # must not hang
+        assert any(s["function"]["name"] == "fast" for s in schemas)
+        allow_finish.set()
+        result = dispatch_future.result(timeout=2.0)
+    assert result.ok is True
+    assert result.content == "done"
+
+
+def test_toolspec_core_defaults_false() -> None:
+    spec = ToolSpec(name="t", description="", parameters={}, handler=lambda: "")
+    assert spec.core is False
+
+
+def test_toolspec_core_can_be_set() -> None:
+    spec = ToolSpec(name="t", description="", parameters={}, handler=lambda: "", core=True)
+    assert spec.core is True
+
+
+def test_registry_specs_returns_all_registered_specs() -> None:
+    registry = ToolRegistry()
+    registry.register(ToolSpec(name="a", description="", parameters={}, handler=lambda: "a"))
+    registry.register(
+        ToolSpec(name="b", description="", parameters={}, handler=lambda: "b", core=True)
+    )
+    specs = registry.specs()
+    by_name = {s.name: s for s in specs}
+    assert set(by_name) == {"a", "b"}
+    assert by_name["b"].core is True
+    assert by_name["a"].core is False
+
+
+def test_get_time_is_core() -> None:
+    from autobot.tools.builtin import register_builtins
+
+    reg = ToolRegistry()
+    register_builtins(reg)
+    spec = reg.get("get_time")
+    assert spec is not None
+    assert spec.core is True
+
+
+def test_find_tools_spec_is_well_formed() -> None:
+    from autobot.tools.builtin import FIND_TOOLS
+
+    assert FIND_TOOLS.name == "find_tools"
+    assert "intent" in FIND_TOOLS.parameters["properties"]
+    assert FIND_TOOLS.parameters["required"] == ["intent"]
+    # The handler returns a string and never raises (tool contract).
+    assert isinstance(FIND_TOOLS.handler(intent="anything"), str)
+
+
+def test_find_tools_is_not_registered_by_register_builtins() -> None:
+    from autobot.tools.builtin import register_builtins
+
+    reg = ToolRegistry()
+    register_builtins(reg)
+    # find_tools is owned by the LLM turn loop, not the registry/gate.
+    assert reg.get("find_tools") is None

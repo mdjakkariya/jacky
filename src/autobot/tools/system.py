@@ -169,6 +169,7 @@ class SystemTools:
                 parameters=no_params,
                 handler=self.battery_status,
                 risk=Risk.READ_ONLY,
+                core=True,
             ),
             ToolSpec(
                 name="wifi_status",
@@ -176,6 +177,7 @@ class SystemTools:
                 parameters=no_params,
                 handler=self.wifi_status,
                 risk=Risk.READ_ONLY,
+                core=True,
             ),
             ToolSpec(
                 name="disk_space",
@@ -183,6 +185,7 @@ class SystemTools:
                 parameters=no_params,
                 handler=self.disk_space,
                 risk=Risk.READ_ONLY,
+                core=True,
             ),
         ]
 

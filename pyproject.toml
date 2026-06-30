@@ -55,6 +55,12 @@ cloud = [
 whispercpp = [
     "pywhispercpp>=1.2",
 ]
+# MCP integration (opt-in, off by default). The official MCP client SDK; lazy-
+# imported by autobot.mcp and only needed when allow_mcp is set. `uv sync --extra mcp`.
+# Pinned below 2.0 — v2 is alpha and changes the OAuth callback signature.
+mcp = [
+    "mcp>=1.28,<2",
+]
 # macOS-native bits: echo cancellation via Voice-Processing (for barge-in) and the
 # permission status checks. All lazy-imported and degrade gracefully off macOS.
 # AVFoundation: AEC mic + Microphone status. ApplicationServices: AXIsProcessTrusted
@@ -166,6 +172,7 @@ module = [
     "fastapi.*",
     "uvicorn.*",
     "anthropic.*",
+    "mcp.*",
     "pywhispercpp.*",
     "objc.*",
     "AVFoundation.*",

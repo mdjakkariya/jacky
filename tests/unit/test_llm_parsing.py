@@ -144,6 +144,7 @@ def test_ollama_persists_tool_exchange_in_history() -> None:
     m = object.__new__(OllamaLanguageModel)
     m._settings = Settings()
     m._registry = reg
+    m._selector = None
     m._transcript = NullTranscript()
     m._memory = None
     m._client = cast(Any, FakeClient())

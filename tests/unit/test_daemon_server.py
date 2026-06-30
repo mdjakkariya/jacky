@@ -6,6 +6,8 @@ the core test run stays dependency-light while CI with the extra exercises it.
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING, Any, cast
+
 import pytest
 
 pytest.importorskip("fastapi")
@@ -14,6 +16,9 @@ from fastapi.testclient import TestClient
 
 from autobot.core.events import EventBus, OrbState
 from autobot.daemon.server import create_app, run_daemon
+
+if TYPE_CHECKING:
+    from autobot.mcp.manager import McpManager
 
 
 def test_healthz_reports_current_state() -> None:
@@ -301,3 +306,385 @@ def test_ws_sends_last_workspace_on_connect() -> None:
             "path": "/home/user/project",
             "name": "project",
         }
+
+
+def test_post_secret_accepts_mcp_namespace(tmp_path: object) -> None:
+    from unittest.mock import patch
+
+    client = _settings_client(tmp_path)
+    # Patch set_secret so we don't actually touch the Keychain
+    with patch("autobot.secrets.set_secret", return_value=True):
+        resp = client.post("/secret", json={"name": "mcp.slack.token", "value": "xoxb-fake"}).json()
+    assert resp["ok"] is True
+
+
+def test_post_secret_accepts_any_mcp_subkey(tmp_path: object) -> None:
+    from unittest.mock import patch
+
+    client = _settings_client(tmp_path)
+    with patch("autobot.secrets.set_secret", return_value=True):
+        resp = client.post("/secret", json={"name": "mcp.github.oauth", "value": "gho-fake"}).json()
+    assert resp["ok"] is True
+
+
+def test_post_secret_still_rejects_arbitrary_names(tmp_path: object) -> None:
+    resp = (
+        _settings_client(tmp_path)
+        .post("/secret", json={"name": "totally_evil", "value": "x"})
+        .json()
+    )
+    assert resp["ok"] is False
+    assert "mcp." in resp["error"]  # error message mentions the mcp namespace
+
+
+def test_post_secret_rejects_bare_mcp_prefix(tmp_path: object) -> None:
+    # "mcp." alone (no sub-key) is not a valid secret name
+    resp = _settings_client(tmp_path).post("/secret", json={"name": "mcp.", "value": "x"}).json()
+    assert resp["ok"] is False
+
+
+# ---------------------------------------------------------------------------
+# Task 5: /mcp/* endpoint tests with a FakeMcp stub
+# ---------------------------------------------------------------------------
+
+
+class _FakeMcp:
+    """Minimal McpManager stub for daemon endpoint tests (no SDK, no subprocess)."""
+
+    def __init__(self) -> None:
+        self._servers: dict[str, dict[str, Any]] = {
+            "echo": {
+                "server": "echo",
+                "label": "Echo",
+                "enabled": True,
+                "egress": "local",
+                "state": "connected",
+                "tool_count": 2,
+                "auth_type": "none",
+                "secret_ref": None,
+            }
+        }
+
+    def status(self) -> list[dict[str, Any]]:
+        return list(self._servers.values())
+
+    def secret_present(self, server_id: str) -> bool:
+        cfg = self._servers.get(server_id, {})
+        return cfg.get("secret_ref") is not None
+
+    def add_or_update_server(self, descriptor: dict[str, Any]) -> dict[str, Any]:
+        sid = descriptor.get("id", "")
+        transport = descriptor.get("transport", "")
+        if transport not in {"stdio", "http"}:
+            return {"ok": False, "error": "invalid transport"}
+        self._servers[str(sid)] = {
+            "server": sid,
+            "label": sid,
+            "enabled": False,
+            "egress": "local",
+            "state": "disconnected",
+            "tool_count": 0,
+            "auth_type": "none",
+            "secret_ref": None,
+        }
+        return {"ok": True, "server": self._servers[str(sid)]}
+
+    def remove_server(self, server_id: str) -> bool:
+        return self._servers.pop(server_id, None) is not None
+
+    def set_enabled(self, server_id: str, enabled: bool) -> bool:
+        if server_id not in self._servers:
+            return False
+        self._servers[server_id]["enabled"] = enabled
+        return True
+
+    def connect(self, server_id: str) -> None:
+        if server_id in self._servers:
+            self._servers[server_id]["state"] = "connected"
+
+    def tools_for(self, server_id: str) -> list[dict[str, Any]]:
+        if server_id not in self._servers:
+            return []
+        return [
+            {
+                "name": "echo",
+                "description": "Echo text",
+                "risk": "read_only",
+                "network": False,
+                "enabled": True,
+            },
+            {
+                "name": "whoami",
+                "description": "Return token",
+                "risk": "read_only",
+                "network": False,
+                "enabled": True,
+            },
+        ]
+
+    def set_tool_override(
+        self,
+        server_id: str,
+        tool: str,
+        *,
+        risk: str | None = None,
+        enabled: bool | None = None,
+    ) -> bool:
+        return server_id in self._servers
+
+    def start_oauth(self, server_id: str) -> dict[str, Any]:
+        if server_id not in self._servers:
+            return {"ok": False, "error": f"unknown server: {server_id!r}"}
+        return {"ok": True, "started": True}
+
+    def shutdown(self) -> None:
+        return None
+
+
+def _provider_for(mcp: _FakeMcp) -> Any:
+    """Wrap a fake manager in a real (already-enabled) McpProvider."""
+    from autobot.mcp.provider import McpProvider
+
+    provider = McpProvider(lambda: cast("McpManager", mcp))
+    provider.set_enabled(True)
+    return provider
+
+
+def _mcp_client(mcp: _FakeMcp) -> TestClient:
+    bus = EventBus()
+    return TestClient(create_app(bus, mcp_provider=_provider_for(mcp)))
+
+
+def test_mcp_list_returns_servers() -> None:
+    client = _mcp_client(_FakeMcp())
+    resp = client.get("/mcp/servers").json()
+    assert resp["ok"] is True
+    servers = resp["servers"]
+    assert len(servers) == 1
+    assert servers[0]["server"] == "echo"
+    assert "auth_type" in servers[0]
+    assert "secret_present" in servers[0]
+
+
+def test_mcp_list_when_disabled_returns_error() -> None:
+    bus = EventBus()
+    client = TestClient(create_app(bus))  # no mcp_provider → disabled
+    resp = client.get("/mcp/servers").json()
+    assert resp["ok"] is False
+    assert "mcp disabled" in resp["error"]
+
+
+def test_post_settings_toggles_mcp_at_runtime(tmp_path: object) -> None:
+    """Flipping allow_mcp via /settings enables/disables MCP with no restart."""
+    from pathlib import Path
+
+    from autobot.mcp.provider import McpProvider
+
+    fake = _FakeMcp()
+    provider = McpProvider(lambda: cast("McpManager", fake))  # starts disabled
+    path = Path(str(tmp_path)) / "settings.json"
+    path.write_text("{}", encoding="utf-8")
+    client = TestClient(create_app(EventBus(), settings_path=path, mcp_provider=provider))
+
+    # Disabled until allow_mcp is set: /mcp/* returns the disabled error.
+    assert client.get("/mcp/servers").json()["ok"] is False
+    assert provider.manager is None
+
+    # Enabling via settings spins the manager up live.
+    assert client.post("/settings", json={"allow_mcp": True}).json()["ok"] is True
+    assert provider.manager is fake
+    assert client.get("/mcp/servers").json()["ok"] is True
+
+    # Disabling tears it down again.
+    assert client.post("/settings", json={"allow_mcp": False}).json()["ok"] is True
+    assert provider.manager is None
+    assert client.get("/mcp/servers").json()["ok"] is False
+
+
+def test_mcp_add_valid_server() -> None:
+    fake = _FakeMcp()
+    client = _mcp_client(fake)
+    resp = client.post(
+        "/mcp/servers",
+        json={
+            "id": "gh",
+            "label": "GitHub",
+            "transport": "stdio",
+            "command": "npx",
+            "args": ["-y", "@modelcontextprotocol/server-github"],
+            "enabled": False,
+        },
+    ).json()
+    assert resp["ok"] is True
+    assert "gh" in fake._servers
+
+
+def test_mcp_add_invalid_descriptor() -> None:
+    client = _mcp_client(_FakeMcp())
+    resp = client.post("/mcp/servers", json={"id": "bad", "transport": "grpc"}).json()
+    assert resp["ok"] is False
+
+
+def test_mcp_delete_server() -> None:
+    fake = _FakeMcp()
+    client = _mcp_client(fake)
+    resp = client.delete("/mcp/servers/echo").json()
+    assert resp["ok"] is True
+    assert "echo" not in fake._servers
+
+
+def test_mcp_delete_unknown_server() -> None:
+    client = _mcp_client(_FakeMcp())
+    resp = client.delete("/mcp/servers/nonexistent").json()
+    assert resp["ok"] is False
+
+
+def test_mcp_enable_server() -> None:
+    fake = _FakeMcp()
+    fake._servers["echo"]["enabled"] = False
+    client = _mcp_client(fake)
+    resp = client.post("/mcp/servers/echo/enable").json()
+    assert resp["ok"] is True
+    assert fake._servers["echo"]["enabled"] is True
+
+
+def test_mcp_disable_server() -> None:
+    fake = _FakeMcp()
+    client = _mcp_client(fake)
+    resp = client.post("/mcp/servers/echo/disable").json()
+    assert resp["ok"] is True
+    assert fake._servers["echo"]["enabled"] is False
+
+
+def test_mcp_connect_server() -> None:
+    client = _mcp_client(_FakeMcp())
+    resp = client.post("/mcp/servers/echo/connect").json()
+    assert resp["ok"] is True
+
+
+def test_mcp_test_server_returns_status_row() -> None:
+    client = _mcp_client(_FakeMcp())
+    resp = client.post("/mcp/servers/echo/test").json()
+    assert resp["ok"] is True
+    assert resp["server"]["server"] == "echo"
+
+
+def test_mcp_get_tools() -> None:
+    client = _mcp_client(_FakeMcp())
+    resp = client.get("/mcp/servers/echo/tools").json()
+    assert resp["ok"] is True
+    assert len(resp["tools"]) == 2
+    assert resp["tools"][0]["name"] == "echo"
+
+
+def test_mcp_set_tool_override() -> None:
+    client = _mcp_client(_FakeMcp())
+    resp = client.post(
+        "/mcp/servers/echo/tools/echo",
+        json={"risk": "write", "enabled": False},
+    ).json()
+    assert resp["ok"] is True
+
+
+def test_mcp_auth_start_passthrough() -> None:
+    """Endpoint passes the manager's start_oauth return value through unchanged."""
+    client = _mcp_client(_FakeMcp())
+    resp = client.post("/mcp/servers/echo/auth/start").json()
+    assert resp == {"ok": True, "started": True}
+
+
+def test_mcp_auth_start_unknown_server_passthrough() -> None:
+    """Endpoint forwards the manager's error for an unknown server id."""
+    client = _mcp_client(_FakeMcp())
+    resp = client.post("/mcp/servers/no-such-srv/auth/start").json()
+    assert resp["ok"] is False
+    assert "unknown" in resp["error"]
+
+
+def test_mcp_auth_start_when_disabled() -> None:
+    """When MCP is disabled the endpoint returns the standard mcp-disabled error."""
+    bus = EventBus()
+    client = TestClient(create_app(bus))  # no mcp= → disabled
+    resp = client.post("/mcp/servers/echo/auth/start").json()
+    assert resp["ok"] is False
+    assert "mcp disabled" in resp["error"]
+
+
+def test_mcp_tool_override_accepts_valid_risk() -> None:
+    """Valid risk values (read_only, write, destructive) are forwarded to the manager."""
+    for valid_risk in ("read_only", "write", "destructive"):
+        client = _mcp_client(_FakeMcp())
+        resp = client.post(
+            "/mcp/servers/echo/tools/echo",
+            json={"risk": valid_risk},
+        ).json()
+        assert resp["ok"] is True, f"expected ok=True for risk={valid_risk!r}, got {resp}"
+
+
+def test_mcp_tool_override_rejects_invalid_risk() -> None:
+    """An unrecognised risk string must be rejected before reaching the manager."""
+    client = _mcp_client(_FakeMcp())
+    resp = client.post(
+        "/mcp/servers/echo/tools/echo",
+        json={"risk": "superuser"},
+    ).json()
+    assert resp["ok"] is False
+    assert "invalid risk" in resp["error"]
+
+
+def test_mcp_tool_override_no_risk_is_accepted() -> None:
+    """Omitting risk (None) must still succeed — only enable/disable is adjusted."""
+    client = _mcp_client(_FakeMcp())
+    resp = client.post(
+        "/mcp/servers/echo/tools/echo",
+        json={"enabled": False},
+    ).json()
+    assert resp["ok"] is True
+
+
+def test_mcp_disabled_all_endpoints_return_error() -> None:
+    bus = EventBus()
+    client = TestClient(create_app(bus))  # no mcp
+    for method, path in [
+        ("POST", "/mcp/servers"),
+        ("DELETE", "/mcp/servers/x"),
+        ("POST", "/mcp/servers/x/enable"),
+        ("POST", "/mcp/servers/x/disable"),
+        ("POST", "/mcp/servers/x/connect"),
+        ("POST", "/mcp/servers/x/test"),
+        ("GET", "/mcp/servers/x/tools"),
+        ("POST", "/mcp/servers/x/tools/t"),
+        ("POST", "/mcp/servers/x/auth/start"),
+    ]:
+        if method == "GET":
+            resp = client.get(path).json()
+        else:
+            resp = client.request(method, path, json={}).json()
+        assert resp["ok"] is False, f"{method} {path} should return ok=False when mcp disabled"
+
+
+def test_mcp_list_includes_secret_present_false_when_no_ref() -> None:
+    """Servers without a secret_ref report secret_present=False."""
+    client = _mcp_client(_FakeMcp())
+    resp = client.get("/mcp/servers").json()
+    assert resp["ok"] is True
+    echo = next(s for s in resp["servers"] if s["server"] == "echo")
+    assert echo["secret_present"] is False
+
+
+def test_mcp_list_includes_secret_present_true_when_ref_set() -> None:
+    """Servers with a secret_ref and a set Keychain entry report secret_present=True."""
+
+    class _FakeMcpWithRef(_FakeMcp):
+        def __init__(self) -> None:
+            super().__init__()
+            self._servers["echo"]["secret_ref"] = "mcp.echo.token"
+
+        def secret_present(self, server_id: str) -> bool:
+            cfg_data = self._servers.get(server_id, {})
+            return cfg_data.get("secret_ref") is not None
+
+    client = _mcp_client(_FakeMcpWithRef())
+    resp = client.get("/mcp/servers").json()
+    echo = next(s for s in resp["servers"] if s["server"] == "echo")
+    assert echo["secret_present"] is True

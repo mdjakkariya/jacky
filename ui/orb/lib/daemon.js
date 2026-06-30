@@ -56,6 +56,10 @@ class Daemon {
     if (body !== undefined) opts.body = JSON.stringify(body);
     return (await fetch(this.base + path, opts)).json();
   }
+  async delete(path) {
+    const opts = { method: "DELETE", headers: { "content-type": "application/json" } };
+    return (await fetch(this.base + path, opts)).json();
+  }
 
   // --- named wrappers (thin; preserve each call site's exact payload) ---
   chat(text) { return this.post("/chat", { text }); }
@@ -79,6 +83,19 @@ class Daemon {
   grantAccess(path, write) { return this.post("/access/grant", { path, write }); }
   revokeAccess(path) { return this.post("/access/revoke", { path }); }
   secret(name, value) { return this.post("/secret", { name, value }); }
+
+  // --- MCP methods ---
+  mcpServers() { return this.get("/mcp/servers"); }
+  addMcpServer(descriptor) { return this.post("/mcp/servers", descriptor); }
+  removeMcpServer(id) { return this.delete(`/mcp/servers/${id}`); }
+  enableMcpServer(id) { return this.post(`/mcp/servers/${id}/enable`); }
+  disableMcpServer(id) { return this.post(`/mcp/servers/${id}/disable`); }
+  connectMcpServer(id) { return this.post(`/mcp/servers/${id}/connect`); }
+  testMcpServer(id) { return this.post(`/mcp/servers/${id}/test`); }
+  mcpTools(id) { return this.get(`/mcp/servers/${id}/tools`); }
+  setMcpToolOverride(id, tool, patch) { return this.post(`/mcp/servers/${id}/tools/${tool}`, patch); }
+  mcpAuthStart(id) { return this.post(`/mcp/servers/${id}/auth/start`); }
+  mcpSetToken(id, token) { return this.post("/secret", { name: `mcp.${id}.token`, value: token }); }
 }
 
 export const daemon = new Daemon();

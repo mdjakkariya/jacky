@@ -1,0 +1,415 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Jack · MCP UI/UX Mockups</title>
+<style>
+  :root{
+    --bg:#0c0d10; --panel:#15171c; --panel2:#1c1f26; --line:#2a2e37;
+    --ink:#e8eaf0; --muted:#9aa1ad; --faint:#6b7280;
+    --accent:#7c9cff; --accent2:#a78bfa;
+    --ok:#4ade80; --warn:#fbbf24; --danger:#f87171; --net:#fb923c;
+    --read:#38bdf8;
+    --radius:14px; --shadow:0 8px 30px rgba(0,0,0,.45);
+    font-synthesis:none;
+  }
+  *{box-sizing:border-box}
+  body{
+    margin:0; background:radial-gradient(1200px 700px at 70% -10%,#15171f 0,var(--bg) 55%);
+    color:var(--ink); font:15px/1.5 -apple-system,BlinkMacSystemFont,"SF Pro Text","Segoe UI",sans-serif;
+    padding:40px 24px 80px;
+  }
+  .wrap{max-width:1180px;margin:0 auto}
+  header.page{margin-bottom:8px}
+  h1{font-size:26px;margin:0 0 6px;letter-spacing:-.01em}
+  .sub{color:var(--muted);max-width:760px}
+  .legend{display:flex;gap:14px;flex-wrap:wrap;margin:18px 0 30px;font-size:12.5px;color:var(--muted)}
+  .legend b{color:var(--ink);font-weight:600}
+  .pill{display:inline-flex;align-items:center;gap:6px;padding:2px 9px;border-radius:999px;font-size:11.5px;font-weight:600;line-height:1.7}
+  .pill .dot{width:7px;height:7px;border-radius:50%}
+  .pill.read{background:rgba(56,189,248,.14);color:var(--read)}
+  .pill.write{background:rgba(251,191,36,.14);color:var(--warn)}
+  .pill.danger{background:rgba(248,113,113,.14);color:var(--danger)}
+  .pill.net{background:rgba(251,146,60,.15);color:var(--net)}
+  .pill.local{background:rgba(74,222,128,.13);color:var(--ok)}
+
+  .grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:26px}
+  @media(max-width:880px){.grid{grid-template-columns:1fr}}
+  .card-shot{background:transparent}
+  .shot-label{font-size:12.5px;color:var(--faint);margin:0 0 10px;display:flex;gap:8px;align-items:baseline}
+  .shot-label .n{display:inline-flex;width:20px;height:20px;border-radius:6px;background:var(--panel2);color:var(--accent);
+    align-items:center;justify-content:center;font-weight:700;font-size:11px;border:1px solid var(--line)}
+  .shot-label b{color:var(--ink);font-weight:600;font-size:13.5px}
+  .note{font-size:12px;color:var(--muted);margin:10px 2px 0}
+
+  /* window chrome */
+  .win{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);box-shadow:var(--shadow);overflow:hidden}
+  .titlebar{display:flex;align-items:center;gap:8px;padding:10px 14px;background:linear-gradient(180deg,#191c22,#15171c);border-bottom:1px solid var(--line)}
+  .tl{display:flex;gap:7px}
+  .tl i{width:11px;height:11px;border-radius:50%;display:block}
+  .tl i:nth-child(1){background:#ff5f57}.tl i:nth-child(2){background:#febc2e}.tl i:nth-child(3){background:#28c840}
+  .wtitle{color:var(--muted);font-size:12.5px;margin-left:6px}
+  .body{padding:16px}
+
+  /* settings tabs */
+  .tabs{display:flex;gap:4px;border-bottom:1px solid var(--line);padding:0 10px;background:var(--panel)}
+  .tab{padding:11px 13px;font-size:13px;color:var(--muted);border-bottom:2px solid transparent;cursor:default}
+  .tab.active{color:var(--ink);border-bottom-color:var(--accent)}
+  .tab.new{color:var(--accent)}
+  .tab.new::after{content:"new";margin-left:7px;font-size:9px;background:rgba(124,156,255,.18);color:var(--accent);padding:1px 5px;border-radius:6px;vertical-align:middle}
+
+  /* server card */
+  .srv{display:flex;align-items:center;gap:13px;padding:13px;border:1px solid var(--line);border-radius:12px;background:var(--panel2);margin-bottom:11px}
+  .srv .ic{width:38px;height:38px;border-radius:10px;flex:0 0 auto;display:flex;align-items:center;justify-content:center;font-size:18px;background:#23262f;border:1px solid var(--line)}
+  .srv .meta{flex:1;min-width:0}
+  .srv .name{font-weight:600;display:flex;align-items:center;gap:8px}
+  .srv .desc{color:var(--muted);font-size:12.5px;margin-top:3px;display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+  .statusdot{width:8px;height:8px;border-radius:50%;display:inline-block}
+  .statusdot.on{background:var(--ok);box-shadow:0 0 0 3px rgba(74,222,128,.16)}
+  .statusdot.off{background:var(--faint)}
+  .statusdot.auth{background:var(--warn);box-shadow:0 0 0 3px rgba(251,191,36,.16)}
+
+  .toggle{width:40px;height:23px;border-radius:999px;background:#2c2f38;position:relative;flex:0 0 auto;border:1px solid var(--line)}
+  .toggle.on{background:rgba(124,156,255,.55)}
+  .toggle::after{content:"";position:absolute;top:2px;left:2px;width:17px;height:17px;border-radius:50%;background:#e8eaf0;transition:.2s}
+  .toggle.on::after{left:19px}
+
+  .btn{display:inline-flex;align-items:center;gap:7px;padding:8px 13px;border-radius:9px;font-size:12.5px;font-weight:600;border:1px solid var(--line);background:var(--panel2);color:var(--ink);cursor:default}
+  .btn.primary{background:linear-gradient(180deg,#7c9cff,#6a86f0);border-color:#6a86f0;color:#0b0c10}
+  .btn.ghost{background:transparent}
+  .btn.danger{background:rgba(248,113,113,.12);border-color:rgba(248,113,113,.3);color:var(--danger)}
+  .btn.sm{padding:5px 10px;font-size:11.5px}
+  .row{display:flex;align-items:center;gap:10px}
+  .spacer{flex:1}
+
+  .secthead{font-size:11px;text-transform:uppercase;letter-spacing:.08em;color:var(--faint);margin:18px 2px 9px}
+  .field{background:var(--panel2);border:1px solid var(--line);border-radius:9px;padding:9px 11px;color:var(--ink);font-size:12.5px;display:flex;align-items:center;justify-content:space-between}
+  .field .ph{color:var(--faint)}
+  .label{font-size:12px;color:var(--muted);margin:12px 2px 5px}
+  .mono{font-family:"SF Mono",ui-monospace,Menlo,monospace;font-size:12px}
+
+  /* banners */
+  .banner{display:flex;gap:10px;padding:11px 12px;border-radius:10px;font-size:12.5px;line-height:1.45}
+  .banner.net{background:rgba(251,146,60,.1);border:1px solid rgba(251,146,60,.28);color:#fdba74}
+  .banner.local{background:rgba(74,222,128,.08);border:1px solid rgba(74,222,128,.25);color:#86efac}
+  .banner .bi{flex:0 0 auto}
+  .banner b{color:var(--ink)}
+
+  /* stepper */
+  .steps{display:flex;gap:6px;margin-bottom:14px}
+  .step{flex:1;height:4px;border-radius:3px;background:#2a2e37}
+  .step.done{background:var(--accent)}
+  .step.now{background:var(--accent2)}
+
+  /* tool list */
+  .tool{display:flex;align-items:center;gap:11px;padding:10px 11px;border-bottom:1px solid var(--line)}
+  .tool:last-child{border-bottom:0}
+  .tool .tn{font-weight:600;font-size:13px}
+  .tool .td{color:var(--muted);font-size:12px;margin-top:2px}
+  .tool .tmeta{flex:1;min-width:0}
+
+  /* chat drawer */
+  .drawer{max-width:430px}
+  .chatlog{padding:6px 4px}
+  .msg{margin:0 0 14px;max-width:90%}
+  .msg.user{margin-left:auto;text-align:right}
+  .bubble{display:inline-block;padding:9px 12px;border-radius:13px;font-size:13.5px;text-align:left}
+  .msg.user .bubble{background:#2b3552;border-bottom-right-radius:5px}
+  .msg.jack .bubble{background:var(--panel2);border:1px solid var(--line);border-bottom-left-radius:5px}
+  .stepcard{background:var(--panel2);border:1px solid var(--line);border-radius:11px;padding:10px 11px;margin:0 0 14px;font-size:12.5px}
+  .stepcard .sr{display:flex;align-items:center;gap:9px;padding:3px 0}
+  .stepcard .chk{width:16px;height:16px;border-radius:50%;display:inline-flex;align-items:center;justify-content:center;font-size:10px;flex:0 0 auto}
+  .chk.ok{background:rgba(74,222,128,.18);color:var(--ok)}
+  .chk.run{background:rgba(124,156,255,.18);color:var(--accent)}
+  .srvbadge{display:inline-flex;align-items:center;gap:5px;font-size:10.5px;font-weight:600;background:#23262f;border:1px solid var(--line);padding:1px 7px;border-radius:6px;color:var(--muted)}
+  .egress{font-size:10.5px;color:var(--net);display:inline-flex;align-items:center;gap:4px}
+
+  /* confirm card */
+  .confirm{max-width:430px}
+  .confirm .ctitle{font-weight:600;font-size:14px;margin-bottom:3px}
+  .kv{display:flex;justify-content:space-between;font-size:12.5px;padding:6px 0;border-bottom:1px dashed var(--line)}
+  .kv:last-of-type{border-bottom:0}
+  .kv .k{color:var(--muted)}
+  .confirm .acts{display:flex;gap:9px;margin-top:14px}
+  .confirm .acts .btn{flex:1;justify-content:center}
+
+  /* orb */
+  .orbwrap{display:flex;align-items:center;justify-content:center;height:230px;background:radial-gradient(400px 240px at 50% 40%,#1a1d26,#0c0d10);position:relative}
+  .orb{width:96px;height:96px;border-radius:50%;background:radial-gradient(circle at 35% 30%,#9db4ff,#5566d6 60%,#3a3f8f);box-shadow:0 10px 40px rgba(90,110,230,.45),inset 0 0 24px rgba(255,255,255,.25);position:relative}
+  .orb .ring{position:absolute;inset:-12px;border-radius:50%;border:2px solid rgba(251,146,60,.6);animation:none}
+  .orb .conn{position:absolute;right:-6px;bottom:-6px;width:30px;height:30px;border-radius:50%;background:#15171c;border:1px solid var(--net);display:flex;align-items:center;justify-content:center;font-size:13px}
+  .orbcap{position:absolute;bottom:16px;left:0;right:0;text-align:center;color:var(--net);font-size:12px}
+
+  /* privacy summary */
+  .exit{display:flex;align-items:center;gap:11px;padding:11px;border:1px solid var(--line);border-radius:11px;margin-bottom:9px;background:var(--panel2)}
+  .exit .ei{width:30px;height:30px;border-radius:8px;display:flex;align-items:center;justify-content:center;background:#23262f;border:1px solid var(--line)}
+  .exit .et{flex:1}
+  .exit .en{font-weight:600;font-size:13px}
+  .exit .ed{color:var(--muted);font-size:12px;margin-top:2px}
+
+  .catalog{display:grid;grid-template-columns:1fr 1fr;gap:9px}
+  .cat{display:flex;align-items:center;gap:10px;padding:11px;border:1px solid var(--line);border-radius:11px;background:var(--panel2)}
+  .cat.sel{border-color:var(--accent);box-shadow:0 0 0 2px rgba(124,156,255,.2)}
+  .cat .ci{width:30px;height:30px;border-radius:8px;display:flex;align-items:center;justify-content:center;background:#23262f}
+  .cat .cn{font-weight:600;font-size:12.5px}
+  .cat .cd{color:var(--faint);font-size:11px}
+
+  .opt{display:flex;gap:10px;padding:11px;border:1px solid var(--line);border-radius:10px;margin-bottom:9px;background:var(--panel2)}
+  .opt.sel{border-color:var(--accent)}
+  .opt .radio{width:16px;height:16px;border-radius:50%;border:2px solid var(--faint);flex:0 0 auto;margin-top:2px}
+  .opt.sel .radio{border-color:var(--accent);background:radial-gradient(circle,var(--accent) 38%,transparent 42%)}
+  .opt .on{font-weight:600;font-size:12.5px}
+  .opt .od{color:var(--muted);font-size:11.5px;margin-top:2px}
+  footer{margin-top:46px;color:var(--faint);font-size:12px;text-align:center}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header class="page">
+    <h1>Jack — MCP Integration · UI/UX Mockups</h1>
+    <p class="sub">Proposed views for connecting and using MCP servers. Built to extend the existing orb + chat-drawer + settings shell, and to make the off-device data path explicit at every step. Slack is shown as the first integration.</p>
+    <div class="legend">
+      <span><b>Risk pills:</b></span>
+      <span class="pill read"><span class="dot" style="background:var(--read)"></span>read</span>
+      <span class="pill write"><span class="dot" style="background:var(--warn)"></span>write · confirm</span>
+      <span class="pill danger"><span class="dot" style="background:var(--danger)"></span>destructive</span>
+      <span style="width:14px"></span>
+      <span><b>Data path:</b></span>
+      <span class="pill local">● on-device</span>
+      <span class="pill net">↗ sends data off-device</span>
+    </div>
+  </header>
+
+  <div class="grid">
+
+    <!-- 1. Connections tab -->
+    <div class="card-shot">
+      <p class="shot-label"><span class="n">1</span><b>Settings → new “Connections” tab</b> · list of MCP servers</p>
+      <div class="win">
+        <div class="titlebar"><div class="tl"><i></i><i></i><i></i></div><span class="wtitle">Jack — Settings</span></div>
+        <div class="tabs">
+          <div class="tab">General</div>
+          <div class="tab">Voice</div>
+          <div class="tab">Tools</div>
+          <div class="tab active new">Connections</div>
+          <div class="tab">Privacy</div>
+        </div>
+        <div class="body">
+          <div class="banner net" style="margin-bottom:14px">
+            <span class="bi">↗</span><div><b>MCP is off by default.</b> Connections let Jack use outside services. Servers that reach the network send data off your Mac — each is opt-in and listed below.</div>
+          </div>
+          <div class="srv">
+            <div class="ic">💬</div>
+            <div class="meta">
+              <div class="name">Slack <span class="pill net">↗ sends to slack.com</span></div>
+              <div class="desc"><span class="statusdot on"></span>Connected · 7 tools · OAuth</div>
+            </div>
+            <div class="toggle on"></div>
+          </div>
+          <div class="srv">
+            <div class="ic">📁</div>
+            <div class="meta">
+              <div class="name">Local Files (sqlite) <span class="pill local">● on-device</span></div>
+              <div class="desc"><span class="statusdot on"></span>Connected · 4 tools · stdio</div>
+            </div>
+            <div class="toggle on"></div>
+          </div>
+          <div class="srv">
+            <div class="ic">🐙</div>
+            <div class="meta">
+              <div class="name">GitHub <span class="pill net">↗ sends to github.com</span></div>
+              <div class="desc"><span class="statusdot auth"></span>Sign-in needed</div>
+            </div>
+            <div class="toggle"></div>
+          </div>
+          <div class="row" style="margin-top:14px">
+            <span class="spacer"></span>
+            <span class="btn primary">+ Add connection</span>
+          </div>
+        </div>
+      </div>
+      <p class="note">Each card shows a live status dot (connected / off / sign-in needed), an egress badge, tool count, and an enable toggle — mirroring the existing permissions-list component.</p>
+    </div>
+
+    <!-- 2. Add connection step 1 -->
+    <div class="card-shot">
+      <p class="shot-label"><span class="n">2</span><b>Add connection — pick a source</b> · catalog or custom</p>
+      <div class="win">
+        <div class="titlebar"><div class="tl"><i></i><i></i><i></i></div><span class="wtitle">Add a connection</span></div>
+        <div class="body">
+          <div class="steps"><div class="step now"></div><div class="step"></div><div class="step"></div><div class="step"></div></div>
+          <div class="secthead">From catalog</div>
+          <div class="catalog">
+            <div class="cat sel"><div class="ci">💬</div><div><div class="cn">Slack</div><div class="cd">OAuth / bot token</div></div></div>
+            <div class="cat"><div class="ci">🐙</div><div><div class="cn">GitHub</div><div class="cd">OAuth</div></div></div>
+            <div class="cat"><div class="ci">📁</div><div><div class="cn">Local Files</div><div class="cd">on-device</div></div></div>
+            <div class="cat"><div class="ci">🗒️</div><div><div class="cn">Notion</div><div class="cd">OAuth</div></div></div>
+          </div>
+          <div class="secthead">Or add your own</div>
+          <div class="cat" style="grid-column:1/-1">
+            <div class="ci">➕</div><div><div class="cn">Custom MCP server</div><div class="cd">Paste a command (stdio) or an https URL — no code needed</div></div>
+          </div>
+          <div class="row" style="margin-top:16px"><span class="spacer"></span><span class="btn ghost">Cancel</span><span class="btn primary">Continue</span></div>
+        </div>
+      </div>
+      <p class="note">“Custom MCP server” is the scalability entry point: any compliant server works from its doc + endpoint, no new code in Jack.</p>
+    </div>
+
+    <!-- 3. Add connection step 2 -->
+    <div class="card-shot">
+      <p class="shot-label"><span class="n">3</span><b>Add connection — transport</b> · auto-filled, editable</p>
+      <div class="win">
+        <div class="titlebar"><div class="tl"><i></i><i></i><i></i></div><span class="wtitle">Add Slack</span></div>
+        <div class="body">
+          <div class="steps"><div class="step done"></div><div class="step now"></div><div class="step"></div><div class="step"></div></div>
+          <div class="secthead">Connection type</div>
+          <div class="opt sel"><div class="radio"></div><div><div class="on">Remote (Streamable HTTP)</div><div class="od">Slack-hosted server · OAuth 2.1 · nothing to install</div></div></div>
+          <div class="opt"><div class="radio"></div><div><div class="on">Local (stdio subprocess)</div><div class="od">Runs <span class="mono">npx @modelcontextprotocol/server-slack</span> with a bot token</div></div></div>
+          <div class="label">Server URL</div>
+          <div class="field"><span class="mono">https://slack.com/api/mcp</span></div>
+          <div class="label">Workspace / Team ID <span style="color:var(--faint)">(not a secret)</span></div>
+          <div class="field"><span class="mono ph">T0123ABCD</span></div>
+          <div class="row" style="margin-top:16px"><span class="btn ghost">Back</span><span class="spacer"></span><span class="btn primary">Continue</span></div>
+        </div>
+      </div>
+      <p class="note">Catalog pre-fills everything; for a custom server the user sees stdio (command/args/env) or HTTP (URL) fields. Maps 1:1 to the <span class="mono">servers.json</span> descriptor.</p>
+    </div>
+
+    <!-- 4. Auth -->
+    <div class="card-shot">
+      <p class="shot-label"><span class="n">4</span><b>Add connection — authenticate</b> · token or OAuth</p>
+      <div class="win">
+        <div class="titlebar"><div class="tl"><i></i><i></i><i></i></div><span class="wtitle">Connect to Slack</span></div>
+        <div class="body">
+          <div class="steps"><div class="step done"></div><div class="step done"></div><div class="step now"></div><div class="step"></div></div>
+          <div class="opt sel"><div class="radio"></div><div><div class="on">Sign in with OAuth 2.1 (recommended)</div><div class="od">Opens your browser · scoped, revocable, auto-refreshing token</div></div></div>
+          <div class="opt"><div class="radio"></div><div><div class="on">Paste a bot token</div><div class="od">Stored only in your macOS Keychain — never on disk</div></div></div>
+          <div class="banner local" style="margin:6px 0 4px"><span class="bi">🔑</span><div>Whichever you choose, the credential lives in the <b>Keychain</b> under <span class="mono">autobot.secrets</span>. <span class="mono">servers.json</span> stores only a reference.</div></div>
+          <div class="row" style="margin-top:14px"><span class="btn ghost">Back</span><span class="spacer"></span><span class="btn primary">Connect with browser →</span></div>
+        </div>
+      </div>
+      <p class="note">Same two-choice screen for every server. OAuth runs the full spec flow (PKCE S256, dynamic registration, loopback redirect, resource indicator).</p>
+    </div>
+
+    <!-- 5. OAuth consent -->
+    <div class="card-shot">
+      <p class="shot-label"><span class="n">5</span><b>OAuth hand-off explainer</b> · shown before the browser opens</p>
+      <div class="win">
+        <div class="titlebar"><div class="tl"><i></i><i></i><i></i></div><span class="wtitle">Opening Slack…</span></div>
+        <div class="body">
+          <div style="text-align:center;padding:6px 0 2px;font-size:30px">💬 → 🌐</div>
+          <p style="text-align:center;color:var(--muted);font-size:13px;margin:8px 16px 14px">Jack will open Slack in your browser to sign in. It never sees your password.</p>
+          <div class="banner net"><span class="bi">↗</span><div><b>What leaves your Mac after this:</b> the text of messages you ask Jack to send or search. Audio and your memory profile stay on-device.</div></div>
+          <div class="secthead">Jack is requesting</div>
+          <div class="kv"><span class="k">Read channels &amp; messages</span><span class="pill read">read</span></div>
+          <div class="kv"><span class="k">Send messages on your behalf</span><span class="pill write">write</span></div>
+          <div class="row" style="margin-top:14px"><span class="btn ghost">Cancel</span><span class="spacer"></span><span class="btn primary">Open browser</span></div>
+        </div>
+      </div>
+      <p class="note">Discloses the exact data path and the requested scopes — the same disclosure standard already used for web search and the cloud LLM.</p>
+    </div>
+
+    <!-- 6. Connection detail -->
+    <div class="card-shot">
+      <p class="shot-label"><span class="n">6</span><b>Connection detail (Slack)</b> · tools, per-tool risk, danger zone</p>
+      <div class="win">
+        <div class="titlebar"><div class="tl"><i></i><i></i><i></i></div><span class="wtitle">Slack</span></div>
+        <div class="body">
+          <div class="row" style="margin-bottom:12px">
+            <div class="srv" style="margin:0;flex:1;border:0;background:transparent;padding:0">
+              <div class="ic">💬</div>
+              <div class="meta"><div class="name">Slack</div><div class="desc"><span class="statusdot on"></span>Connected · OAuth · token refreshes in 58 min</div></div>
+            </div>
+            <span class="btn sm ghost">Sign out</span>
+          </div>
+          <div class="banner net"><span class="bi">↗</span><div>This connection <b>sends data to slack.com</b>. Every call is recorded in your audit log.</div></div>
+          <div class="secthead">Tools · 7 <span style="color:var(--faint);text-transform:none;letter-spacing:0">— toggle off any you don’t want Jack to use</span></div>
+          <div class="win" style="box-shadow:none;border-radius:11px">
+            <div class="tool"><div class="tmeta"><div class="tn">slack_search_messages</div><div class="td">Search across channels</div></div><span class="pill read">read</span><div class="toggle on"></div></div>
+            <div class="tool"><div class="tmeta"><div class="tn">slack_read_channel</div><div class="td">Read recent messages</div></div><span class="pill read">read</span><div class="toggle on"></div></div>
+            <div class="tool"><div class="tmeta"><div class="tn">slack_send_message</div><div class="td">Post a message</div></div><span class="pill write">write</span><div class="toggle on"></div></div>
+            <div class="tool"><div class="tmeta"><div class="tn">slack_schedule_message</div><div class="td">Schedule a message</div></div><span class="pill write">write</span><div class="toggle"></div></div>
+          </div>
+          <div class="secthead">Danger zone</div>
+          <div class="row"><span class="btn danger sm">Remove connection</span><span class="spacer"></span><span class="btn ghost sm">Re-sync tools</span></div>
+        </div>
+      </div>
+      <p class="note">Risk pills are editable (read↔write↔destructive) and persist as <span class="mono">tool_risk_overrides</span>. Network tools are floored at <b>write</b> regardless of the server’s own hints.</p>
+    </div>
+
+    <!-- 7. Confirm card with egress -->
+    <div class="card-shot">
+      <p class="shot-label"><span class="n">7</span><b>Permission gate — confirm card</b> · new egress disclosure</p>
+      <div class="win confirm">
+        <div class="titlebar"><div class="tl"><i></i><i></i><i></i></div><span class="wtitle">Jack needs confirmation</span></div>
+        <div class="body">
+          <div class="ctitle">Send a message to <span style="color:var(--accent)">#eng-team</span>?</div>
+          <p style="color:var(--muted);font-size:12.5px;margin:2px 0 12px">“Deploy is green, shipping now 🚀”</p>
+          <div class="kv"><span class="k">Tool</span><span class="mono">slack_send_message</span></div>
+          <div class="kv"><span class="k">Connection</span><span class="srvbadge">💬 Slack</span></div>
+          <div class="kv"><span class="k">Risk</span><span class="pill write">write</span></div>
+          <div class="kv"><span class="k">Data path</span><span class="egress">↗ text sent to slack.com</span></div>
+          <div class="acts">
+            <span class="btn ghost">Deny</span>
+            <span class="btn">Allow once</span>
+            <span class="btn primary">Always allow</span>
+          </div>
+        </div>
+      </div>
+      <p class="note">Reuses the existing confirm-card / Confirmer protocol — adds the connection badge and an explicit “data path” row. A new <span class="mono">kind:"network"</span> tints it orange.</p>
+    </div>
+
+    <!-- 8. Chat drawer -->
+    <div class="card-shot">
+      <p class="shot-label"><span class="n">8</span><b>Chat drawer</b> · MCP steps badged with server + egress</p>
+      <div class="win drawer">
+        <div class="titlebar"><div class="tl"><i></i><i></i><i></i></div><span class="wtitle">Jack</span></div>
+        <div class="body chatlog">
+          <div class="msg user"><span class="bubble">Did anyone reply in #eng-team about the deploy?</span></div>
+          <div class="stepcard">
+            <div class="sr"><span class="chk ok">✓</span><span>Searched messages</span><span class="srvbadge">💬 Slack · search</span><span class="spacer"></span><span class="egress">↗</span></div>
+            <div class="sr"><span class="chk run">●</span><span>Reading thread…</span><span class="srvbadge">💬 Slack · read</span><span class="spacer"></span><span class="egress">↗ slack.com</span></div>
+          </div>
+          <div class="msg jack"><span class="bubble">Yes — Priya replied 4 min ago: “verified on staging, good to go.” Want me to post that you’re shipping?</span></div>
+        </div>
+      </div>
+      <p class="note">The existing StepEvent gains a <span class="mono">server</span> field. Each MCP step shows the connection badge and a small ↗ when it reaches the network — so the off-device moment is visible inline, not hidden.</p>
+    </div>
+
+    <!-- 9. Orb -->
+    <div class="card-shot">
+      <p class="shot-label"><span class="n">9</span><b>Orb</b> · subtle indicator while an off-device tool runs</p>
+      <div class="win">
+        <div class="titlebar"><div class="tl"><i></i><i></i><i></i></div><span class="wtitle">Jack</span></div>
+        <div class="orbwrap">
+          <div class="orb"><div class="ring"></div><div class="conn">↗</div></div>
+          <div class="orbcap">Reaching Slack…</div>
+        </div>
+      </div>
+      <p class="note">An orange ring + connector glyph appears only during a network-egress call, then fades. Pure visual feedback; it does not gate anything (the confirm card does that).</p>
+    </div>
+
+    <!-- 10. Privacy summary -->
+    <div class="card-shot">
+      <p class="shot-label"><span class="n">10</span><b>Settings → Privacy summary</b> · every off-device exit in one place</p>
+      <div class="win">
+        <div class="titlebar"><div class="tl"><i></i><i></i><i></i></div><span class="wtitle">Jack — Privacy</span></div>
+        <div class="body">
+          <div class="banner local" style="margin-bottom:14px"><span class="bi">🔒</span><div><b>By default, everything runs on your Mac.</b> The items below are the only ways data can leave it. All are opt-in.</div></div>
+          <div class="secthead">Active off-device exits · 3</div>
+          <div class="exit"><div class="ei">🔎</div><div class="et"><div class="en">Web search</div><div class="ed">Sends only your search query</div></div><div class="toggle on"></div></div>
+          <div class="exit"><div class="ei">🧠</div><div class="et"><div class="en">Cloud LLM (Anthropic)</div><div class="ed">Sends conversation + memory profile + tool results</div></div><div class="toggle on"></div></div>
+          <div class="exit"><div class="ei">💬</div><div class="et"><div class="en">Slack connection</div><div class="ed">Sends message + search text to slack.com</div></div><div class="toggle on"></div></div>
+          <div class="row" style="margin-top:6px"><span class="spacer"></span><span class="btn ghost sm">View audit log →</span></div>
+        </div>
+      </div>
+      <p class="note">A single honest inventory of egress reinforces the privacy-first promise, and turns MCP from a hidden risk into a governed, reviewable surface.</p>
+    </div>
+
+  </div>
+
+  <footer>Jack / autobot — MCP UI/UX design proposal · mockups only, not final visuals</footer>
+</div>
+</body>
+</html>

@@ -5,6 +5,53 @@
  *  chat.html. Use <chat-log id="log">…welcome markup…</chat-log>. */
 import { renderMarkdown } from "../../lib/markdown.js";
 import { openExternal } from "../../lib/tauri.js";
+import { daemon } from "../../lib/daemon.js";
+
+// MCP server map cache: {[id]: {label, icon, egress}}
+let _serverMap = {};
+
+/**
+ * Derive MCP tool info from a tool name by splitting on the first "__".
+ * If there's no "__", or the prefix is empty, or the prefix is not a key in serverMap,
+ * return null (built-in tool, no badge).
+ * Otherwise return {id, label, icon, egress, shortName}.
+ */
+export function mcpInfoForTool(tool, serverMap) {
+  if (!tool) return null; // defensive: no tool name
+  const idx = tool.indexOf("__");
+  if (idx === -1) return null; // no __ separator
+  const prefix = tool.substring(0, idx);
+  if (!prefix || !(prefix in serverMap)) return null; // empty prefix or not a known server
+  const server = serverMap[prefix];
+  return {
+    id: prefix,
+    label: server.label,
+    icon: server.icon || "🔌",
+    egress: server.egress === "network",
+    shortName: tool.substring(idx + 2),
+  };
+}
+
+/**
+ * Fetch and cache the MCP servers map.
+ */
+async function refreshServerMap() {
+  try {
+    const res = await daemon.mcpServers();
+    if (res && res.servers) {
+      _serverMap = {};
+      res.servers.forEach((srv) => {
+        _serverMap[srv.server] = {
+          label: srv.label,
+          icon: srv.label?.[0].toUpperCase() || "🔌", // fallback to first letter or plug emoji
+          egress: srv.egress,
+        };
+      });
+    }
+  } catch (e) {
+    // On fetch failure, stay graceful: _serverMap stays empty → no badges
+  }
+}
 
 export class ChatLog extends HTMLElement {
   connectedCallback() {
@@ -14,7 +61,12 @@ export class ChatLog extends HTMLElement {
     this.addEventListener("scroll", () => this.updateJump());
     this._bindChips(this); // wire the chips already in the DOM
     queueMicrotask(() => this._wireJump());
+    // Load initial server map on connection
+    refreshServerMap();
   }
+
+  // Exposed for external refresh (e.g., on mcp_status WS events)
+  _refreshServerMap = () => refreshServerMap();
 
   _wireJump() {
     const jump = document.getElementById("jump");
@@ -56,6 +108,9 @@ export class ChatLog extends HTMLElement {
     if (!this._emptyTpl) return;
     const n = this._emptyTpl.cloneNode(true);
     this.appendChild(n); this._bindChips(n);
+    // Reset and refresh the server map on new session
+    _serverMap = {};
+    refreshServerMap();
   }
   showInitializing() {
     this.innerHTML = '<div class="empty">'
@@ -106,7 +161,26 @@ export class ChatLog extends HTMLElement {
     }
     row.className = "row " + (m.status || "running");
     const suffix = m.status === "done" ? " ✓" : m.status === "failed" ? " ✗" : "…";
-    row.querySelector(".label").textContent = (m.label || m.tool) + suffix;
+    const label = row.querySelector(".label");
+    label.textContent = (m.label || m.tool) + suffix;
+
+    // Append MCP badge if applicable
+    const info = mcpInfoForTool(m.tool, _serverMap);
+    if (info) {
+      const badge = document.createElement("span");
+      badge.className = "srvbadge";
+      badge.textContent = info.icon + " " + info.label + " · " + info.shortName;
+      label.appendChild(badge);
+
+      // Append egress marker if network-egress
+      if (info.egress) {
+        const egress = document.createElement("span");
+        egress.className = "egress";
+        egress.textContent = "↗ " + info.id;
+        label.appendChild(egress);
+      }
+    }
+
     this.scrollTop = this.scrollHeight;
   }
   clearSteps() { if (this._stepTrace) { this._stepTrace.remove(); this._stepTrace = null; } }

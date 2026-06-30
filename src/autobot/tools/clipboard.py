@@ -73,6 +73,7 @@ def register_clipboard_tools(registry: ToolRegistry, runner: Runner | None = Non
             handler=lambda: read_clipboard(runner),
             risk=Risk.READ_ONLY,
             ack="Checking your clipboard.",
+            core=True,
         )
     )
     registry.register(

@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import contextlib
 import json
-from dataclasses import asdict, dataclass, fields, replace
+from dataclasses import asdict, dataclass, field, fields, replace
 from pathlib import Path
 from typing import Any
 
@@ -174,6 +174,37 @@ class Settings:
     web_provider: str = "auto"
     web_api_url: str = "https://q.searchspace.io/v1/search"
     web_backend: str = "duckduckgo,bing,brave,google"
+    # --- MCP integration (opt-in, off-device; the third disclosed exception) ---
+    # Master gate for the whole MCP subsystem, mirroring allow_web. Off by default;
+    # individual servers are still each opt-in via ~/.autobot/mcp/servers.json.
+    allow_mcp: bool = False
+    # --- tool selection / context budget ---
+    # Per-turn tool advertising is relevance-gated: a small always-on "core" set
+    # plus the top tools the ToolSelector judges relevant to the user's message,
+    # bounded by tool_budget. This keeps context (and cost, and a small model's
+    # tool-selection accuracy) from growing with the number of registered/MCP tools.
+    # tool_selection: "lexical" (on-device keyword ranking, default) or "all"
+    # (advertise every tool — the pre-optimization behavior, for debugging).
+    tool_budget: int = 20
+    tool_selection: str = "lexical"
+    # Tool names to force into / out of the core set without code edits.
+    tool_core_extra: list[str] = field(default_factory=list)
+    tool_core_remove: list[str] = field(default_factory=list)
+    # Local embedding model for tool_selection="embedding" (the EmbeddingToolSelector
+    # recall upgrade on the local path). Pulled via Ollama on first use (~270MB); it
+    # is NOT a base dependency and is never used unless tool_selection is "embedding".
+    # Embeddings run entirely on-device — only tool descriptions and the user query are
+    # embedded, locally, and nothing leaves the machine.
+    embedding_model: str = "nomic-embed-text"
+    # Anthropic-only: how the cloud path advertises tools. "auto" (default) uses
+    # Anthropic's server-side Tool Search Tool when the configured model supports it
+    # (gated built-ins marked defer_loading so connecting MCP servers add ~0 baseline
+    # tokens; the search tool loads them on demand) and otherwise advertises every
+    # tool. "on" forces native Tool Search regardless of the support table (to try a
+    # newer model). "off" always advertises every tool — the pre-optimization cloud
+    # behavior, for debugging/comparison. The local (Ollama) path is unaffected; it
+    # uses tool_selection instead.
+    anthropic_tool_search: str = "auto"
     # --- daemon (Phase 3c) ---
     daemon_host: str = "127.0.0.1"
     daemon_port: int = 8765

@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import json
 import re
+from collections.abc import Sequence
 from typing import TYPE_CHECKING, Any
 
 from autobot.config import Settings
@@ -25,7 +26,7 @@ from autobot.core.types import ToolCall, ToolExecutor
 from autobot.llm.ollama_llm import _SUMMARIZE_INSTRUCTION, system_prompt
 from autobot.logging_setup import get_logger
 from autobot.session_log import NullTranscript, Transcript
-from autobot.tools.registry import ToolRegistry
+from autobot.tools.registry import ToolRegistry, ToolSpec
 
 if TYPE_CHECKING:
     from autobot.memory.store import MemoryStore
@@ -58,6 +59,28 @@ _MODEL_WINDOWS: dict[str, int] = {
     "claude-opus-4-5": 200_000,
 }
 _MAX_TOKENS_RE = re.compile(r">\s*([0-9]+)\s*maximum")
+
+# Anthropic server-side Tool Search Tool (verified against SDK 0.109.2 —
+# ToolSearchToolBm25_20251119Param is in the standard messages.create tools union,
+# so no beta header is needed). The model discovers deferred tools by searching this
+# tool; deferred tool defs cost ~0 baseline tokens until loaded on demand.
+TOOL_SEARCH_TYPE = "tool_search_tool_bm25_20251119"
+TOOL_SEARCH_NAME = "tool_search_tool_bm25"
+# Models for which "auto" turns ON native tool search. All listed models support it
+# (Sonnet 4+, Opus 4+, Haiku 4.5+). The default model claude-haiku-4-5 is included so the
+# out-of-the-box cloud experience bounds context: deferred MCP tools cost ~0 baseline and
+# the model selects among a relevant few rather than the whole catalog. The tradeoff is a
+# small per-use cost (the server search + tool definitions loaded on demand as fresh,
+# uncached input) — now visible in the cost meter, which prices cache reads/writes. Set
+# anthropic_tool_search="off" to fall back to advertising all tools (cheapest on short
+# turns with a static, cache-friendly tool set); "on" forces search for any model.
+_TOOL_SEARCH_MODEL_PREFIXES: tuple[str, ...] = (
+    "claude-opus-4-8",
+    "claude-opus-4-7",
+    "claude-opus-4-6",
+    "claude-sonnet-4-6",
+    "claude-haiku-4-5",
+)
 
 
 def default_window_for(model: str) -> int:
@@ -92,16 +115,47 @@ def too_long_reply() -> str:
 # estimate* in the log — this is debugging signal, not billing. Add/adjust entries
 # as Anthropic's pricing changes; unknown models simply log tokens without a cost.
 _PRICING_USD_PER_MTOK: dict[str, tuple[float, float]] = {
+    # Keyed by model-id PREFIX so 4.x point releases match. Approximate list prices.
     "claude-haiku-4-5": (1.0, 5.0),
+    "claude-sonnet-4-6": (3.0, 15.0),
+    "claude-opus-4": (5.0, 25.0),
 }
+# Prompt-cache multipliers applied to the base INPUT rate (Anthropic): a 5-minute cache
+# write costs 1.25x, a cache read 0.1x (90% off). Pricing these matters because a large
+# static tool prefix is almost entirely cache_read/cache_write — omitting them made
+# "advertise all tools" look free while tool search's on-demand (uncached) tool loads
+# looked expensive, which is exactly backwards from real billing.
+_CACHE_WRITE_MULT = 1.25
+_CACHE_READ_MULT = 0.1
 
 
-def estimate_cost_usd(model: str, in_tokens: int, out_tokens: int) -> float | None:
-    """Rough USD cost for a call, or None if the model's price isn't known here."""
-    price = _PRICING_USD_PER_MTOK.get(model)
+def estimate_cost_usd(
+    model: str,
+    in_tokens: int,
+    out_tokens: int,
+    *,
+    cache_read: int = 0,
+    cache_write: int = 0,
+) -> float | None:
+    """Rough USD cost for a call, or None if the model's price isn't known here.
+
+    Prices fresh input and output at the model's list rate, plus prompt-cache tokens at
+    Anthropic's multipliers on the input rate (write 1.25x, read 0.1x). ``cache_read`` /
+    ``cache_write`` default to 0 so existing callers are unaffected; the daemon passes
+    them so the logged session cost reflects real billing rather than fresh tokens alone.
+    """
+    price = next(
+        (p for prefix, p in _PRICING_USD_PER_MTOK.items() if model.startswith(prefix)), None
+    )
     if price is None:
         return None
-    return in_tokens / 1_000_000 * price[0] + out_tokens / 1_000_000 * price[1]
+    in_rate, out_rate = price
+    return (
+        in_tokens / 1_000_000 * in_rate
+        + cache_write / 1_000_000 * in_rate * _CACHE_WRITE_MULT
+        + cache_read / 1_000_000 * in_rate * _CACHE_READ_MULT
+        + out_tokens / 1_000_000 * out_rate
+    )
 
 
 def _get(obj: Any, key: str) -> Any:
@@ -127,6 +181,79 @@ def to_anthropic_tools(schemas: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 "input_schema": fn.get("parameters", {"type": "object", "properties": {}}),
             }
         )
+    return tools
+
+
+def tool_search_supported(model: str, mode: str) -> bool:
+    """Whether to use Anthropic's native Tool Search Tool for ``model``.
+
+    Resolves the ``anthropic_tool_search`` setting: ``"off"`` never uses it,
+    ``"on"`` always does (to try a model not yet in the table), and ``"auto"``
+    enables it only for models known to support it (prefix match against
+    :data:`_TOOL_SEARCH_MODEL_PREFIXES`). Unknown ``mode`` is treated as ``"auto"``.
+    """
+    if mode == "off":
+        return False
+    if mode == "on":
+        return True
+    return any(model.startswith(p) for p in _TOOL_SEARCH_MODEL_PREFIXES)
+
+
+def partition_tools(specs: Sequence[ToolSpec]) -> tuple[list[ToolSpec], list[ToolSpec]]:
+    """Split specs into ``(core, gated)`` by :attr:`ToolSpec.core`.
+
+    Core tools are advertised to the cloud model normally; gated tools are deferred
+    (``defer_loading``) and discovered via tool search. This is the only place the
+    cloud path reads the tiering flag — it deliberately does not import the local
+    ``tools.selection`` module (the cloud path uses native server-side search, not the
+    client-side lexical selector).
+    """
+    core = [s for s in specs if s.core]
+    gated = [s for s in specs if not s.core]
+    return core, gated
+
+
+def _tool_param(spec: ToolSpec) -> dict[str, Any]:
+    """One Anthropic tool entry from a ToolSpec (without defer_loading / cache_control)."""
+    return {
+        "name": spec.name,
+        "description": spec.description,
+        "input_schema": spec.parameters or {"type": "object", "properties": {}},
+    }
+
+
+def assemble_anthropic_tools(
+    specs: Sequence[ToolSpec],
+    *,
+    tool_search: bool,
+    relevant: frozenset[str] = frozenset(),
+) -> list[dict[str, Any]]:
+    """Build the cloud ``tools`` payload: relevance-tiered + search + cached, or all tools.
+
+    When ``tool_search`` is ``False`` (disabled, or an unsupported model), returns every
+    tool exactly as before — the byte-for-byte legacy request. When ``True``: core tools
+    are advertised normally; gated tools whose name is in ``relevant`` (those matching
+    this turn's message) are ALSO advertised directly so the model can actually pick
+    them; the rest get ``defer_loading: True`` and are discovered on demand via the
+    appended, non-deferred Tool Search Tool. A ``cache_control`` ephemeral breakpoint is
+    stamped on the last tool.
+
+    Surfacing the relevant gated tools directly is the fix for deferred-only MCP tools
+    being invisible — which made the model fall back to a visible core tool (e.g. opening
+    a website) instead of using the MCP tool. The long tail stays deferred (~0 baseline
+    tokens) with the search tool as the recall net.
+    """
+    if not tool_search:
+        return to_anthropic_tools([s.to_schema() for s in specs])
+    core, gated = partition_tools(specs)
+    tools: list[dict[str, Any]] = [_tool_param(s) for s in core]
+    for s in gated:
+        param = _tool_param(s)
+        if s.name not in relevant:
+            param["defer_loading"] = True  # invisible until discovered via tool search
+        tools.append(param)
+    tools.append({"type": TOOL_SEARCH_TYPE, "name": TOOL_SEARCH_NAME})
+    tools[-1] = {**tools[-1], "cache_control": {"type": "ephemeral"}}
     return tools
 
 
@@ -313,8 +440,17 @@ class AnthropicLanguageModel:
         # an over-long prompt. So 200k, 1M, or a smaller model all just work. Needs
         # self._client, so resolve after it's set.
         self._window = self._resolve_window()
+        # Gate on model support (auto), or honor an explicit on/off. Pure decision —
+        # never raises — so a misconfigured flag degrades to advertise-all, never a
+        # startup crash. Logged as a bool only (no tokens/secrets).
+        self._tool_search = tool_search_supported(
+            settings.anthropic_model, settings.anthropic_tool_search
+        )
         _log.info(
-            "cloud LLM ready model=%s context_window=%d", settings.anthropic_model, self._window
+            "cloud LLM ready model=%s context_window=%d tool_search=%s",
+            settings.anthropic_model,
+            self._window,
+            self._tool_search,
         )
 
     def _resolve_window(self) -> int:
@@ -357,7 +493,9 @@ class AnthropicLanguageModel:
         model = self._settings.anthropic_model
         self._session_in += turn_in
         self._session_out += turn_out
-        cost = estimate_cost_usd(model, turn_in, turn_out)
+        cost = estimate_cost_usd(
+            model, turn_in, turn_out, cache_read=cache_read, cache_write=cache_write
+        )
         self._transcript.record_usage(turn_in, turn_out, cost)
         cost_str = f"{cost:.5f}" if cost is not None else "n/a"
         if cost is not None:
@@ -527,6 +665,35 @@ class AnthropicLanguageModel:
                 raise
         raise RuntimeError("prompt too long after trimming")
 
+    def _assemble_tools(self, query: str) -> list[dict[str, Any]]:
+        """Tools to advertise this turn: relevance-tiered + tool-search + cached, or all.
+
+        Reads the live registry, so MCP tools that connect/disconnect between turns are
+        reflected. When tool search is supported (see :meth:`__init__`), the gated tools
+        whose name/description matches ``query`` are surfaced directly (un-deferred) via
+        the same on-device lexical gate the local path uses — so the model actually picks
+        the relevant MCP tool instead of a visible core tool — while the long tail stays
+        deferred behind the search tool. Otherwise every tool is advertised (legacy).
+        """
+        relevant: frozenset[str] = frozenset()
+        if self._tool_search:
+            relevant = self._relevant_gated(query)
+        return assemble_anthropic_tools(
+            self._registry.specs(), tool_search=self._tool_search, relevant=relevant
+        )
+
+    def _relevant_gated(self, query: str) -> frozenset[str]:
+        """Gated tool names lexically relevant to ``query`` (to advertise un-deferred)."""
+        from autobot.tools.selection import LexicalToolSelector
+
+        selector = LexicalToolSelector(
+            self._registry,
+            budget=self._settings.tool_budget,
+            core_extra=frozenset(self._settings.tool_core_extra),
+            core_remove=frozenset(self._settings.tool_core_remove),
+        )
+        return frozenset(selector.search(query, limit=self._settings.tool_budget))
+
     def run_turn(self, user_text: str, execute: ToolExecutor) -> str:
         """Handle one turn end-to-end; tool calls run through ``execute`` (the gate).
 
@@ -537,7 +704,7 @@ class AnthropicLanguageModel:
         retries), so a long session can't get permanently stuck. A cache breakpoint on
         the last block caches tools + system + prior turns; per-turn we log usage.
         """
-        tools = to_anthropic_tools(self._registry.schemas())
+        tools = self._assemble_tools(user_text)
         overhead = (len(self._system()) + sum(len(str(t)) for t in tools)) // _CHARS_PER_TOKEN
         # Append-only: everything for this turn is added to the live history. On a
         # request failure we roll back to here so a half-built turn can't corrupt it.

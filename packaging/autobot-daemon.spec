@@ -25,6 +25,13 @@ hiddenimports: list = ["numpy", "anthropic", "ollama", "fastapi"]
 # importlib.resources can find it inside the frozen bundle.
 datas += [(os.path.join(_ROOT, "src", "autobot", "io", "silero_vad.onnx"), "autobot/io")]
 
+# Build-embedded OAuth client secrets (gitignored; absent in open-source/CI builds).
+# When present, ship it at the bundle root so client_secrets._candidate_paths() finds it
+# via sys._MEIPASS. Absent → no secret bundled (users supply their own app).
+_oauth_secrets = os.path.join(_ROOT, "secrets", "oauth_clients.json")
+if os.path.isfile(_oauth_secrets):
+    datas += [(_oauth_secrets, ".")]
+
 # Packages that carry native libs and/or data files PyInstaller won't find on its own.
 for _pkg in (
     "faster_whisper",

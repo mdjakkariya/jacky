@@ -82,3 +82,59 @@ def test_settings_is_immutable() -> None:
     settings = Settings()
     with pytest.raises(AttributeError):
         settings.llm_model = "other"  # type: ignore[misc]
+
+
+def test_allow_mcp_defaults_off() -> None:
+    assert Settings().allow_mcp is False
+
+
+def test_allow_mcp_overlays_from_file(tmp_path: Path) -> None:
+    path = tmp_path / "settings.json"
+    write_settings({"allow_mcp": True}, path)
+    assert Settings.load(path).allow_mcp is True
+
+
+def test_tool_selection_defaults() -> None:
+    s = Settings()
+    assert s.tool_budget == 20
+    assert s.tool_selection == "lexical"
+    assert s.tool_core_extra == []
+    assert s.tool_core_remove == []
+
+
+def test_tool_selection_overlays_from_file(tmp_path: Path) -> None:
+    path = tmp_path / "settings.json"
+    write_settings(
+        {
+            "tool_budget": 12,
+            "tool_selection": "all",
+            "tool_core_extra": ["slack__search"],
+            "tool_core_remove": ["disk_space"],
+        },
+        path,
+    )
+    s = Settings.load(path)
+    assert s.tool_budget == 12
+    assert s.tool_selection == "all"
+    assert s.tool_core_extra == ["slack__search"]
+    assert s.tool_core_remove == ["disk_space"]
+
+
+def test_anthropic_tool_search_defaults_auto() -> None:
+    assert Settings().anthropic_tool_search == "auto"
+
+
+def test_anthropic_tool_search_overlays_from_file(tmp_path: Path) -> None:
+    path = tmp_path / "settings.json"
+    write_settings({"anthropic_tool_search": "off"}, path)
+    assert Settings.load(path).anthropic_tool_search == "off"
+
+
+def test_embedding_model_default() -> None:
+    assert Settings().embedding_model == "nomic-embed-text"
+
+
+def test_embedding_model_overlays_from_file(tmp_path: Path) -> None:
+    path = tmp_path / "settings.json"
+    write_settings({"embedding_model": "mxbai-embed-large"}, path)
+    assert Settings.load(path).embedding_model == "mxbai-embed-large"

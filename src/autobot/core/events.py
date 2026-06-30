@@ -411,6 +411,20 @@ class EventBus:
             self._last_workspace = msg
         self._emit(msg)
 
+    def publish_mcp(self, payload: dict[str, object]) -> None:
+        """Forward an MCP status or auth event to all WebSocket clients.
+
+        A typed passthrough onto :meth:`_emit`. The worker already builds the
+        final wire dict (``{"type": "mcp_status", ...}`` for state changes,
+        ``{"type": "mcp_oauth", ...}`` for Phase 6 auth flows) — this method
+        just routes it through the fan-out without modification.
+
+        Args:
+            payload: The wire dict produced by :class:`~autobot.mcp.session.McpServerWorker`
+                or the OAuth handler; must contain at least ``{"type": str}``.
+        """
+        self._emit(payload)
+
     def _emit(self, message: dict[str, object]) -> None:
         with self._lock:
             targets = tuple(self._subscribers)

@@ -72,3 +72,107 @@ describe("on() dispatch", () => {
     expect(() => d._dispatch({ data: "not json" })).not.toThrow();
   });
 });
+
+describe("delete", () => {
+  it("sends DELETE request with no body", async () => {
+    const d = await freshDaemon();
+    global.fetch = vi.fn().mockResolvedValue({ json: async () => ({}) });
+    await d.delete("/mcp/servers/slack");
+    const [url, opts] = global.fetch.mock.calls[0];
+    expect(url).toBe("http://127.0.0.1:8765/mcp/servers/slack");
+    expect(opts.method).toBe("DELETE");
+    expect(opts.body).toBeUndefined();
+  });
+});
+
+describe("MCP methods", () => {
+  it("mcpServers() calls GET /mcp/servers", async () => {
+    const d = await freshDaemon();
+    global.fetch = vi.fn().mockResolvedValue({ json: async () => [] });
+    await d.mcpServers();
+    const [url] = global.fetch.mock.calls[0];
+    expect(url).toBe("http://127.0.0.1:8765/mcp/servers");
+  });
+  it("addMcpServer(descriptor) calls POST /mcp/servers with descriptor as body", async () => {
+    const d = await freshDaemon();
+    global.fetch = vi.fn().mockResolvedValue({ json: async () => ({}) });
+    await d.addMcpServer({ server: "s", label: "L" });
+    const [url, opts] = global.fetch.mock.calls[0];
+    expect(url).toBe("http://127.0.0.1:8765/mcp/servers");
+    expect(opts.method).toBe("POST");
+    expect(JSON.parse(opts.body)).toEqual({ server: "s", label: "L" });
+  });
+  it("removeMcpServer(id) calls DELETE /mcp/servers/{id}", async () => {
+    const d = await freshDaemon();
+    global.fetch = vi.fn().mockResolvedValue({ json: async () => ({}) });
+    await d.removeMcpServer("slack");
+    const [url, opts] = global.fetch.mock.calls[0];
+    expect(url).toBe("http://127.0.0.1:8765/mcp/servers/slack");
+    expect(opts.method).toBe("DELETE");
+  });
+  it("enableMcpServer(id) calls POST /mcp/servers/{id}/enable", async () => {
+    const d = await freshDaemon();
+    global.fetch = vi.fn().mockResolvedValue({ json: async () => ({}) });
+    await d.enableMcpServer("slack");
+    const [url, opts] = global.fetch.mock.calls[0];
+    expect(url).toBe("http://127.0.0.1:8765/mcp/servers/slack/enable");
+    expect(opts.method).toBe("POST");
+  });
+  it("disableMcpServer(id) calls POST /mcp/servers/{id}/disable", async () => {
+    const d = await freshDaemon();
+    global.fetch = vi.fn().mockResolvedValue({ json: async () => ({}) });
+    await d.disableMcpServer("slack");
+    const [url, opts] = global.fetch.mock.calls[0];
+    expect(url).toBe("http://127.0.0.1:8765/mcp/servers/slack/disable");
+    expect(opts.method).toBe("POST");
+  });
+  it("connectMcpServer(id) calls POST /mcp/servers/{id}/connect", async () => {
+    const d = await freshDaemon();
+    global.fetch = vi.fn().mockResolvedValue({ json: async () => ({}) });
+    await d.connectMcpServer("slack");
+    const [url, opts] = global.fetch.mock.calls[0];
+    expect(url).toBe("http://127.0.0.1:8765/mcp/servers/slack/connect");
+    expect(opts.method).toBe("POST");
+  });
+  it("testMcpServer(id) calls POST /mcp/servers/{id}/test", async () => {
+    const d = await freshDaemon();
+    global.fetch = vi.fn().mockResolvedValue({ json: async () => ({}) });
+    await d.testMcpServer("slack");
+    const [url, opts] = global.fetch.mock.calls[0];
+    expect(url).toBe("http://127.0.0.1:8765/mcp/servers/slack/test");
+    expect(opts.method).toBe("POST");
+  });
+  it("mcpTools(id) calls GET /mcp/servers/{id}/tools", async () => {
+    const d = await freshDaemon();
+    global.fetch = vi.fn().mockResolvedValue({ json: async () => [] });
+    await d.mcpTools("slack");
+    const [url] = global.fetch.mock.calls[0];
+    expect(url).toBe("http://127.0.0.1:8765/mcp/servers/slack/tools");
+  });
+  it("setMcpToolOverride(id, tool, patch) calls POST /mcp/servers/{id}/tools/{tool} with body", async () => {
+    const d = await freshDaemon();
+    global.fetch = vi.fn().mockResolvedValue({ json: async () => ({}) });
+    await d.setMcpToolOverride("slack", "search", { enabled: false });
+    const [url, opts] = global.fetch.mock.calls[0];
+    expect(url).toBe("http://127.0.0.1:8765/mcp/servers/slack/tools/search");
+    expect(opts.method).toBe("POST");
+    expect(JSON.parse(opts.body)).toEqual({ enabled: false });
+  });
+  it("mcpAuthStart(id) calls POST /mcp/servers/{id}/auth/start", async () => {
+    const d = await freshDaemon();
+    global.fetch = vi.fn().mockResolvedValue({ json: async () => ({}) });
+    await d.mcpAuthStart("slack");
+    const [url, opts] = global.fetch.mock.calls[0];
+    expect(url).toBe("http://127.0.0.1:8765/mcp/servers/slack/auth/start");
+    expect(opts.method).toBe("POST");
+  });
+  it("mcpSetToken(id, token) calls POST /secret with mcp.{id}.token name and value", async () => {
+    const d = await freshDaemon();
+    global.fetch = vi.fn().mockResolvedValue({ json: async () => ({}) });
+    await d.mcpSetToken("slack", "tok");
+    const [url, opts] = global.fetch.mock.calls[0];
+    expect(url).toBe("http://127.0.0.1:8765/secret");
+    expect(opts.method).toBe("POST");
+    expect(JSON.parse(opts.body)).toEqual({ name: "mcp.slack.token", value: "tok" });
+  });
+});
