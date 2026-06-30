@@ -1,0 +1,457 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Jack — Meeting minutes (prototype)</title>
+<style>
+/* ── Jack design tokens (mirrors ui/orb/styles/tokens.css) ───────────────── */
+:root{
+  color-scheme: light dark;
+  --bg:#ececec; --panel:#fff; --text:#1d1d1f; --muted:#86868b;
+  --line:rgba(0,0,0,.08); --field:#fff; --field-line:rgba(0,0,0,.18);
+  --accent:#0a84ff; --accent-bg:rgba(10,132,255,.14);
+  --danger:#d70015; --danger-bg:rgba(215,0,21,.12);
+  --bubble:rgba(0,0,0,.05); --seg:rgba(0,0,0,.06); --seg-active:#fff;
+  --ok:#2c9c4a; --warn:#b8860b; --warn-bg:rgba(184,134,11,.12);
+  --net:#e8740e; --net-bg:rgba(251,146,60,.14);
+  --note-bg:rgba(10,132,255,.08);
+  --them:#7c5cff; --them-bg:rgba(155,124,255,.16);
+  --stage:#d3d4d8;
+}
+@media (prefers-color-scheme: dark){:root{
+  --bg:#1e1e1e; --panel:#2a2a2c; --text:#f5f5f7; --muted:#98989d;
+  --line:rgba(255,255,255,.1); --field:#1c1c1e; --field-line:rgba(255,255,255,.15);
+  --accent:#0a84ff; --accent-bg:rgba(10,132,255,.22);
+  --danger:#ff6961; --danger-bg:rgba(255,69,58,.18);
+  --bubble:rgba(255,255,255,.08); --seg:rgba(255,255,255,.08); --seg-active:#48484a;
+  --ok:#5bd778; --warn:#e6b54a; --warn-bg:rgba(230,181,74,.16);
+  --net:#fb923c; --net-bg:rgba(251,146,60,.18);
+  --note-bg:rgba(10,132,255,.14);
+  --them:#b9a6ff; --them-bg:rgba(155,124,255,.2);
+  --stage:#101012;
+}}
+*{box-sizing:border-box}
+html,body{margin:0;height:100%}
+body{
+  font:13px/1.5 -apple-system,BlinkMacSystemFont,"SF Pro Text","Segoe UI",system-ui,sans-serif;
+  background:
+    radial-gradient(1200px 700px at 80% -10%, color-mix(in srgb,var(--accent) 14%,transparent), transparent),
+    var(--stage);
+  color:var(--text); display:flex; flex-direction:column; align-items:center; gap:14px;
+  padding:22px 16px 40px; min-height:100%;
+}
+
+/* ── preview chrome (controls below the device) ──────────────────────────── */
+.controls{display:flex;align-items:center;gap:10px;flex-wrap:wrap;justify-content:center}
+.replay{
+  font:inherit;font-size:12px;font-weight:500;cursor:pointer;border-radius:9px;padding:7px 14px;
+  border:.5px solid var(--field-line);background:color-mix(in srgb,var(--panel) 80%,transparent);
+  color:var(--muted);display:inline-flex;align-items:center;gap:7px;transition:color .12s,border-color .12s
+}
+.replay:hover{color:var(--text);border-color:var(--accent)}
+.modes{display:inline-flex;background:var(--seg);border-radius:8px;padding:2px}
+.modes button{border:none;background:transparent;color:var(--muted);font:inherit;font-size:12px;padding:5px 11px;border-radius:6px;cursor:pointer}
+.modes button.on{background:var(--seg-active);color:var(--text);font-weight:500;box-shadow:0 1px 2px rgba(0,0,0,.12)}
+
+/* ── stage: drawer + floating orb ────────────────────────────────────────── */
+.stage{position:relative;width:560px;max-width:100%;display:flex;justify-content:flex-end}
+
+.orb{
+  position:absolute;left:6px;bottom:8px;width:64px;height:64px;border-radius:50%;
+  background:radial-gradient(circle at 35% 30%, #6fb6ff, #0a84ff 60%, #064e9e);
+  box-shadow:0 8px 24px rgba(10,132,255,.45), inset 0 0 18px rgba(255,255,255,.35);
+  display:flex;align-items:center;justify-content:center;
+}
+.orb::after{content:"";position:absolute;inset:-7px;border-radius:50%;border:2.5px solid transparent}
+.orb.rec::after{border-color:var(--danger);animation:ring 1.6s infinite}
+.orb.rec.paused::after{animation:none;border-color:var(--warn)}
+.orb .glyph{width:26px;height:26px;color:#fff;opacity:.95}
+.orb .reclabel{
+  position:absolute;bottom:-22px;left:50%;transform:translateX(-50%);white-space:nowrap;
+  font-size:10.5px;font-weight:600;color:var(--danger);opacity:0;transition:opacity .3s
+}
+.orb.rec .reclabel{opacity:1}
+.orb.rec.paused .reclabel{color:var(--warn)}
+
+/* ── the chat drawer ─────────────────────────────────────────────────────── */
+.drawer{
+  width:380px;max-width:100%;height:640px;display:flex;flex-direction:column;
+  background:var(--bg);border:.5px solid var(--line);border-radius:14px;overflow:hidden;
+  box-shadow:0 24px 70px rgba(0,0,0,.4);
+}
+header{display:flex;align-items:center;justify-content:space-between;padding:10px 12px;border-bottom:.5px solid var(--line)}
+.hgroup{display:flex;align-items:center;gap:10px}
+header .x{border:none;background:transparent;color:var(--muted);font-size:16px;cursor:pointer;display:inline-flex;align-items:center}
+header .x svg{width:18px;height:18px}
+.seg{display:inline-flex;background:var(--seg);border-radius:8px;padding:2px}
+.seg button{border:none;background:transparent;color:var(--muted);font-size:12px;padding:4px 10px;border-radius:6px;cursor:pointer}
+.seg button.on{background:var(--seg-active);color:var(--text);font-weight:500;box-shadow:0 1px 2px rgba(0,0,0,.12)}
+.brand{font-size:13px;font-weight:600}
+.brand .spark{color:var(--accent)}
+
+.log{flex:1;overflow-y:auto;padding:16px 14px;display:flex;flex-direction:column;gap:11px;scroll-behavior:smooth}
+.log::-webkit-scrollbar{width:8px}
+.log::-webkit-scrollbar-thumb{background:var(--field-line);border-radius:4px}
+
+.bubble{max-width:84%;padding:9px 13px;border-radius:16px;font-size:13px;animation:rise .25s ease both}
+.me{align-self:flex-end;background:var(--accent-bg);color:var(--accent);border-top-right-radius:4px}
+.jack{align-self:flex-start;background:var(--bubble);color:var(--text);border-top-left-radius:4px}
+
+.empty{margin:auto;text-align:center;color:var(--muted);max-width:300px}
+.empty .mark{width:42px;height:42px;margin:0 auto 12px;border-radius:12px;display:flex;align-items:center;justify-content:center;background:var(--accent-bg);color:var(--accent)}
+.empty .mark svg{width:24px;height:24px}
+.empty h2{color:var(--text);font-size:17px;margin:0 0 6px}
+.empty p{margin:0 0 16px;font-size:12.5px}
+.chip{
+  width:100%;text-align:left;border:.5px solid var(--field-line);background:var(--panel);
+  border-radius:11px;padding:11px 12px;cursor:pointer;display:flex;align-items:center;gap:11px;color:var(--text);
+  transition:border-color .12s,background .12s
+}
+.chip:hover{border-color:var(--accent);background:var(--accent-bg)}
+.chip .ci{width:30px;height:30px;flex:none;border-radius:8px;background:var(--accent-bg);color:var(--accent);display:flex;align-items:center;justify-content:center}
+.chip .ci svg{width:17px;height:17px}
+.chip .cl{font-size:13px;font-weight:500;display:block}
+.chip .ce{font-size:11.5px;color:var(--muted)}
+
+/* confirm / permission card */
+.card{align-self:stretch;background:var(--panel);border:.5px solid var(--field-line);border-radius:12px;padding:13px 14px;animation:rise .25s ease both}
+.card .h{display:flex;align-items:center;gap:7px;font-size:13px;font-weight:600;margin-bottom:7px}
+.card .h svg{width:16px;height:16px}
+.card.warn .h{color:var(--accent)}
+.card .b{font-size:12.5px;color:var(--muted);line-height:1.5;margin-bottom:11px}
+.kv{display:flex;align-items:center;gap:8px;font-size:12px;padding:6px 0;border-top:.5px dashed var(--line)}
+.kv svg{width:15px;height:15px;color:var(--muted);flex:none}
+.kv .ptitle{color:var(--text);font-weight:500}
+.kv .psub{color:var(--muted);font-size:11px}
+.kv .pstate{margin-left:auto;font-size:11px;color:var(--ok);display:inline-flex;align-items:center;gap:4px;white-space:nowrap}
+.kv .pstate.need{color:var(--warn)}
+.kv .pstate.off{color:var(--danger)}
+.acts{display:flex;gap:8px;justify-content:flex-end;margin-top:12px}
+.btn{font:inherit;font-size:12px;padding:6px 14px;border-radius:8px;border:.5px solid var(--field-line);background:transparent;color:var(--text);cursor:pointer;display:inline-flex;align-items:center;gap:6px}
+.btn.primary{border:none;background:var(--accent);color:#fff}
+.btn.danger{border-color:var(--danger);background:var(--danger-bg);color:var(--danger)}
+
+/* recording card — STATUS only, no live transcript (transcribe-on-stop) */
+.rec-card{align-self:stretch;background:var(--panel);border:.5px solid var(--field-line);border-radius:12px;overflow:hidden;animation:rise .25s ease both}
+.rec-top{display:flex;align-items:center;gap:9px;padding:12px 14px}
+.rec-top .dot{width:9px;height:9px;border-radius:50%;background:var(--danger);animation:pulse 1.4s infinite}
+.rec-card.paused .rec-top .dot{background:var(--warn);animation:none}
+.rec-top .ttl{font-size:13px;font-weight:600}
+.rec-top .pill{font-size:10px;font-weight:700;letter-spacing:.3px;color:var(--warn);background:var(--warn-bg);padding:2px 7px;border-radius:6px;display:none}
+.rec-card.paused .rec-top .pill{display:inline-block}
+.rec-top .timer{margin-left:auto;font-variant-numeric:tabular-nums;font-size:13px;font-weight:600;color:var(--text)}
+.rec-body{border-top:.5px solid var(--line);padding:16px 14px 12px;display:flex;flex-direction:column;align-items:center;gap:12px}
+.wave{display:flex;align-items:center;gap:3px;height:46px}
+.wave i{width:3px;height:100%;border-radius:2px;background:var(--accent);transform-origin:center;transform:scaleY(.3);animation:wv 1s ease-in-out infinite}
+.rec-card.paused .wave i{animation-play-state:paused;background:var(--muted);opacity:.4}
+.caplegend{display:flex;align-items:center;gap:8px;font-size:11.5px;color:var(--muted);flex-wrap:wrap;justify-content:center}
+.who-dot{width:8px;height:8px;border-radius:50%;display:inline-block;margin-right:4px;vertical-align:middle}
+.who-dot.you{background:var(--accent)}
+.who-dot.them{background:var(--them)}
+.caplegend .sep{opacity:.5}
+.warnline{display:none;align-items:flex-start;gap:7px;font-size:11.5px;line-height:1.4;color:var(--warn);background:var(--warn-bg);border-radius:9px;padding:8px 10px;width:100%}
+.warnline svg{width:14px;height:14px;flex:none;margin-top:1px}
+.rec-card.miconly .warnline{display:flex}
+.rec-card.miconly .who-dot.them,.rec-card.miconly .them-label{opacity:.3;text-decoration:line-through}
+.rec-foot{display:flex;align-items:center;gap:10px;padding:11px 14px;border-top:.5px solid var(--line);flex-wrap:wrap}
+.rec-foot .note{display:inline-flex;align-items:center;gap:6px;font-size:11px;color:var(--muted);line-height:1.3;flex:1;min-width:140px}
+.rec-foot .note .ld{width:6px;height:6px;border-radius:50%;background:var(--ok);flex:none;animation:pulse 1.4s infinite}
+.rec-actions{display:flex;gap:8px;flex:none}
+
+/* processing */
+.steps{list-style:none;margin:8px 0 0;padding:0;display:flex;flex-direction:column;gap:10px}
+.steps li{display:flex;align-items:center;gap:9px;font-size:12.5px;color:var(--muted)}
+.steps li .ic{width:18px;height:18px;flex:none;border-radius:50%;border:2px solid var(--field-line);display:flex;align-items:center;justify-content:center}
+.steps li.done{color:var(--text)}
+.steps li.done .ic{border-color:var(--ok);background:var(--ok);color:#fff}
+.steps li.done .ic svg{width:11px;height:11px}
+.steps li.active{color:var(--text)}
+.steps li.active .ic{border-color:var(--accent);border-top-color:transparent;animation:spin .8s linear infinite}
+.steps li .meta{margin-left:auto;font-size:11px;color:var(--muted);font-variant-numeric:tabular-nums}
+
+/* minutes */
+.min{align-self:stretch;background:var(--panel);border:.5px solid var(--field-line);border-radius:12px;overflow:hidden;animation:rise .3s ease both}
+.min-h{padding:13px 14px;border-bottom:.5px solid var(--line)}
+.min-h .loc{display:inline-flex;align-items:center;gap:6px;font-size:11px;color:var(--muted);background:var(--field);border:.5px solid var(--field-line);padding:3px 9px 3px 8px;border-radius:7px;max-width:100%}
+.min-h .loc svg{width:13px;height:13px;color:var(--accent);flex:none}
+.min-h .loc .crumb{color:var(--text);font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.min-h .loc .crumb i{color:var(--muted);font-style:normal;margin:0 3px}
+.min-h .loc .ext{font-family:"SF Mono",ui-monospace,Menlo,monospace;color:var(--muted);padding-left:7px;border-left:.5px solid var(--field-line);flex:none}
+.min-h h3{margin:9px 0 3px;font-size:15px}
+.min-h .meta{font-size:11.5px;color:var(--muted);display:flex;flex-wrap:wrap;gap:4px 12px}
+.min-prev{padding:12px 14px 4px}
+.min-prev .st{display:flex;align-items:center;gap:7px;font-size:11px;font-weight:700;letter-spacing:.5px;text-transform:uppercase;color:var(--muted);margin-bottom:7px}
+.min-prev .st svg{width:14px;height:14px}
+.sum{position:relative;margin:0;font-size:12.5px;line-height:1.55;color:var(--text);
+  display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden}
+.sum::after{content:"";position:absolute;left:0;right:0;bottom:0;height:1.5em;
+  background:linear-gradient(transparent,var(--panel))}
+.stats{display:flex;flex-wrap:wrap;gap:7px;margin:12px 0 2px}
+.stat{display:inline-flex;align-items:center;gap:5px;font-size:11px;color:var(--muted);
+  background:var(--field);border:.5px solid var(--field-line);border-radius:7px;padding:4px 9px}
+.stat b{color:var(--text);font-weight:700;font-variant-numeric:tabular-nums}
+.aiprev{list-style:none;margin:12px 0 4px;padding:0;display:flex;flex-direction:column;gap:9px}
+.aiprev .more{font-size:11.5px;color:var(--accent);padding-left:24px}
+.ai{display:flex;gap:9px;align-items:flex-start;font-size:12.5px;line-height:1.4}
+.ai .box{width:15px;height:15px;flex:none;margin-top:1px;border-radius:4px;border:1.5px solid var(--field-line)}
+.ai .who{display:inline-block;font-size:10.5px;font-weight:700;color:var(--them);background:var(--them-bg);padding:0 6px;border-radius:5px;margin-left:6px}
+.min-foot{display:flex;gap:8px;padding:11px 14px;border-top:.5px solid var(--line);flex-wrap:wrap}
+.fbtn{flex:1;min-width:96px;border:.5px solid var(--field-line);background:var(--field);color:var(--text);font-size:11.5px;border-radius:8px;padding:8px;cursor:pointer;display:inline-flex;align-items:center;justify-content:center;gap:6px}
+.fbtn svg{width:14px;height:14px}
+.fbtn.primary{border-color:rgba(10,132,255,.5);background:var(--accent-bg);color:var(--accent)}
+
+.footer-in{padding:10px 12px;border-top:.5px solid var(--line)}
+.inbar{display:flex;align-items:center;gap:8px;background:var(--field);border:.5px solid var(--field-line);border-radius:12px;padding:7px 10px}
+.inbar input{flex:1;border:none;background:transparent;color:var(--text);font:inherit;outline:none}
+.inbar input::placeholder{color:var(--muted)}
+.inbar .send{width:28px;height:28px;border-radius:50%;border:none;background:var(--accent);color:#fff;font-size:15px;cursor:pointer;flex:none}
+
+@keyframes rise{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.35}}
+@keyframes spin{to{transform:rotate(360deg)}}
+@keyframes wv{0%,100%{transform:scaleY(.25)}50%{transform:scaleY(1)}}
+@keyframes ring{0%{transform:scale(1);opacity:.9}70%{transform:scale(1.18);opacity:0}100%{opacity:0}}
+.hidden{display:none!important}
+</style>
+</head>
+<body>
+  <div class="stage">
+    <div class="orb" id="orb">
+      <svg class="glyph" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l1.6 4.4L18 9l-4.4 1.6L12 15l-1.6-4.4L6 9l4.4-1.6z"/></svg>
+      <span class="reclabel">● REC</span>
+    </div>
+
+    <div class="drawer">
+      <header>
+        <div class="hgroup">
+          <span class="brand"><span class="spark">✦</span> Jack</span>
+        </div>
+        <div class="hgroup">
+          <div class="seg"><button>Voice</button><button class="on">Chat</button></div>
+          <button class="x" aria-label="Hide"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M18 6 6 18M6 6l12 12"/></svg></button>
+        </div>
+      </header>
+
+      <div class="log" id="log">
+        <div class="empty" id="empty">
+          <div class="mark"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l1.6 4.4L18 9l-4.4 1.6L12 15l-1.6-4.4L6 9l4.4-1.6z"/></svg></div>
+          <h2>Hey, I'm Jack</h2>
+          <p>On-device assistant. Try the meeting recorder.</p>
+          <button class="chip" id="startChip">
+            <span class="ci"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2a3 3 0 0 0-3 3v6a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3z"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></svg></span>
+            <span><span class="cl">Take minutes of this meeting</span><span class="ce">"Jack, record this call"</span></span>
+          </button>
+        </div>
+      </div>
+
+      <div class="footer-in">
+        <div class="inbar">
+          <input id="box" placeholder="Message Jack…" />
+          <button class="send" id="send">↑</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="controls">
+    <button class="replay" id="replay">↻ Replay preview</button>
+    <div class="modes" id="modes" title="Preview the far-end fallback">
+      <button class="on" data-mode="both">Both sides</button>
+      <button data-mode="mic">Mic-only fallback</button>
+    </div>
+  </div>
+
+<script>
+const log = document.getElementById('log');
+const empty = document.getElementById('empty');
+const orb = document.getElementById('orb');
+let timers = [];
+let MIC_ONLY = false;          // toggled by the "Mic-only fallback" mode button
+const after = (ms, fn) => { const t = setTimeout(fn, ms); timers.push(t); return t; };
+const clearAll = () => { timers.forEach(clearTimeout); timers = []; };
+const scroll = () => log.scrollTop = log.scrollHeight;
+const el = (html) => { const d = document.createElement('div'); d.innerHTML = html.trim(); return d.firstElementChild; };
+const add = (node) => { log.appendChild(node); scroll(); return node; };
+const fmt = s => String(Math.floor(s/60)).padStart(2,'0')+':'+String(s%60).padStart(2,'0');
+
+function reset(){
+  clearAll();
+  orb.classList.remove('rec','paused');
+  [...log.querySelectorAll(':scope > *')].forEach(n => { if(n!==empty) n.remove(); });
+  empty.classList.remove('hidden');
+}
+function bubble(cls, text){ return add(el(`<div class="bubble ${cls}">${text}</div>`)); }
+
+// ── flow: trigger → permission → recording (status) → stop → process → minutes
+function start(){
+  empty.classList.add('hidden');
+  clearAll();
+  bubble('me', 'Jack, take minutes of this meeting');
+  after(600, permission);
+}
+
+function permission(){
+  const intro = MIC_ONLY
+    ? "I'll record this call and write up the minutes when it ends — but I don't have Audio Capture yet, so I can only hear your side."
+    : "Sure — I'll record this call and write up the minutes when it ends. This captures your mic and the call's audio, all on your Mac.";
+  bubble('jack', intro);
+
+  // Audio Capture can't be pre-checked (no query API), so it shows "will ask" — or
+  // "not granted" in the mic-only fallback. Microphone is the one preflightable gate.
+  const acState = MIC_ONLY
+    ? `<span class="pstate off">✕ not granted</span>`
+    : `<span class="pstate need">will ask once</span>`;
+
+  after(500, () => {
+    const card = add(el(`
+      <div class="card warn">
+        <div class="h"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2a3 3 0 0 0-3 3v6a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3z"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></svg> Start recording this meeting?</div>
+        <div class="b">Everything stays on your Mac — audio is saved locally and transcribed when you stop. macOS shows its recording indicators while it runs.</div>
+        <div class="kv"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M12 2a3 3 0 0 0-3 3v6a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3z"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></svg><span><span class="ptitle">Microphone</span> <span class="psub">— your side</span></span><span class="pstate">✓ allowed</span></div>
+        <div class="kv"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M11 5 6 9H2v6h4l5 4z"/><path d="M15.5 8.5a5 5 0 0 1 0 7M19 5a9 9 0 0 1 0 14"/></svg><span><span class="ptitle">Audio Capture</span> <span class="psub">— participants</span></span>${acState}</div>
+        <div class="acts"><button class="btn">Not now</button><button class="btn primary" id="goRec">${MIC_ONLY ? 'Record my side' : 'Start recording'}</button></div>
+      </div>`));
+    card.querySelector('#goRec').onclick = () => { card.remove(); recording(); };
+    after(900, () => { const b=card.querySelector('#goRec'); if(b) b.click(); });
+  });
+}
+
+let recCard, timerEl, elapsed=0, recInt, paused=false;
+function recording(){
+  paused=false;
+  orb.classList.add('rec'); orb.classList.remove('paused');
+  const bars = Array.from({length:28}, () => {
+    const dur = (0.7 + Math.random()*0.7).toFixed(2);
+    const delay = (-Math.random()*1).toFixed(2);
+    return `<i style="animation-duration:${dur}s;animation-delay:${delay}s"></i>`;
+  }).join('');
+
+  recCard = add(el(`
+    <div class="rec-card${MIC_ONLY ? ' miconly' : ''}">
+      <div class="rec-top">
+        <span class="dot"></span><span class="ttl">Recording meeting</span>
+        <span class="pill">PAUSED</span><span class="timer" id="timer">00:00</span>
+      </div>
+      <div class="rec-body">
+        <div class="wave" id="wave">${bars}</div>
+        <div class="caplegend">
+          <span><span class="who-dot you"></span>You</span>
+          <span class="them-label"><span class="who-dot them"></span>Participants</span>
+          <span class="sep">·</span><span>English · on-device</span>
+        </div>
+        <div class="warnline">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"/><path d="M12 9v4M12 17h.01"/></svg>
+          <span>Capturing your side only — the other participants' audio isn't being recorded. You can grant Audio Capture in Settings and re-record.</span>
+        </div>
+      </div>
+      <div class="rec-foot">
+        <span class="note"><span class="ld"></span><span>Audio saved locally · transcribed when you stop</span></span>
+        <div class="rec-actions">
+          <button class="btn" id="pauseBtn">⏸ Pause</button>
+          <button class="btn danger" id="stopBtn">■ Stop &amp; summarize</button>
+        </div>
+      </div>
+    </div>`));
+
+  timerEl = recCard.querySelector('#timer'); elapsed=0;
+  recInt = setInterval(()=>{ if(!paused){ elapsed++; timerEl.textContent = fmt(elapsed); } }, 1000); timers.push(recInt);
+  recCard.querySelector('#pauseBtn').onclick = togglePause;
+  recCard.querySelector('#stopBtn').onclick = stop;
+
+  // auto-stop in the walkthrough
+  after(6500, ()=> { if(document.getElementById('stopBtn')) stop(); });
+}
+
+function togglePause(){
+  paused = !paused;
+  recCard.classList.toggle('paused', paused);
+  orb.classList.toggle('paused', paused);
+  recCard.querySelector('#pauseBtn').innerHTML = paused ? '▶ Resume' : '⏸ Pause';
+  recCard.querySelector('.note span:last-child').textContent =
+    paused ? 'Paused — audio is not being captured' : 'Audio saved locally · transcribed when you stop';
+}
+
+function stop(){
+  clearInterval(recInt);
+  orb.classList.remove('rec','paused');
+  const dur = fmt(elapsed||372);
+  if(recCard) recCard.remove();
+  bubble('jack', "Recording stopped. Transcribing the audio and writing your minutes…");
+
+  const streams = MIC_ONLY ? '1 stream' : '2 streams';
+  const proc = add(el(`
+    <div class="card">
+      <div class="h"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14 3v4a1 1 0 0 0 1 1h4"/><path d="M5 3h9l5 5v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2z"/></svg> Processing meeting</div>
+      <ul class="steps">
+        <li data-s="0"><span class="ic"></span> Finalizing the recording<span class="meta">${streams}</span></li>
+        <li data-s="1"><span class="ic"></span> Transcribing · English<span class="meta">on-device</span></li>
+        <li data-s="2"><span class="ic"></span> Writing minutes (summarize → reduce)<span class="meta">qwen3:8b</span></li>
+      </ul>
+    </div>`));
+  const lis = [...proc.querySelectorAll('li')];
+  const check = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M5 13l4 4L19 7"/></svg>';
+  const run = (i)=>{
+    if(i>=lis.length){ after(500, ()=> minutes(dur)); return; }
+    lis[i].classList.add('active');
+    after(1100, ()=>{ lis[i].classList.remove('active'); lis[i].classList.add('done'); lis[i].querySelector('.ic').innerHTML=check; run(i+1); });
+  };
+  after(500, ()=> run(0));
+}
+
+function minutes(dur){
+  const attendees = MIC_ONLY ? 'You only (mic-only)' : 'You + participants';
+  const miconlyNote = MIC_ONLY
+    ? `<div class="warnline" style="display:flex;margin:10px 0 0">
+         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"/><path d="M12 9v4M12 17h.01"/></svg>
+         <span>These minutes are from your side of the call only.</span></div>`
+    : '';
+  add(el(`
+    <div class="min">
+      <div class="min-h">
+        <span class="loc"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg><span class="crumb">Meetings<i>›</i>Weekly Sync</span><span class="ext">minutes.md</span></span>
+        <h3>Weekly Sync — Minutes</h3>
+        <div class="meta"><span>Jun 30, 2026</span><span>Duration ${dur}</span><span>${attendees}</span></div>
+      </div>
+      <div class="min-prev">
+        <div class="st"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6h16M4 12h16M4 18h10"/></svg> Summary</div>
+        <p class="sum">The team reviewed launch readiness. The release is targeted for the 14th, gated on completing the API documentation and resolving the onboarding blocker. A go/no-go decision was assigned, and a legal question was raised about the recording feature.</p>
+        <div class="stats">
+          <span class="stat"><b>2</b> decisions</span>
+          <span class="stat"><b>3</b> action items</span>
+          <span class="stat"><b>1</b> open question</span>
+        </div>
+        <ul class="aiprev">
+          <li class="ai"><span class="box"></span><span>Finish the API documentation by Thursday EOD<span class="who">Priya</span></span></li>
+          <li class="ai"><span class="box"></span><span>Own the go/no-go launch call<span class="who">You</span></span></li>
+          <li class="more">+1 more action item</li>
+        </ul>
+        ${miconlyNote}
+      </div>
+      <div class="min-foot">
+        <button class="fbtn primary"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14 3v4a1 1 0 0 0 1 1h4"/><path d="M5 3h9l5 5v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2z"/></svg> Open minutes</button>
+        <button class="fbtn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg> Reveal folder</button>
+        <button class="fbtn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg> Copy</button>
+      </div>
+    </div>`));
+  bubble('jack', "Done — minutes saved to your Meetings folder. Want me to drop the action items into Reminders, or save this to Notes?");
+  after(7000, () => { reset(); start(); });   // loop the preview
+}
+
+// ── controls ───────────────────────────────────────────────────────────────
+document.getElementById('replay').onclick = () => { reset(); start(); };
+document.getElementById('startChip').onclick = () => { clearAll(); start(); };
+document.getElementById('send').onclick = () => { const b=document.getElementById('box'); if(b.value.trim()){ b.value=''; clearAll(); start(); } };
+document.getElementById('box').addEventListener('keydown', e => { if(e.key==='Enter') document.getElementById('send').click(); });
+document.getElementById('modes').addEventListener('click', e => {
+  const btn = e.target.closest('button[data-mode]'); if(!btn) return;
+  [...e.currentTarget.children].forEach(b => b.classList.toggle('on', b===btn));
+  MIC_ONLY = btn.dataset.mode === 'mic';
+  reset(); start();
+});
+
+// Autoplay on load (homepage preview).
+window.addEventListener('load', () => after(700, start));
+</script>
+</body>
+</html>
