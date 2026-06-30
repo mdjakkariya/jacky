@@ -8,6 +8,7 @@ import json
 from collections.abc import Iterator
 from dataclasses import dataclass, field
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 from unittest.mock import patch
 
@@ -78,6 +79,42 @@ def test_tool_allowed_deny_glob_wins_over_allow() -> None:
 def test_tool_allowed_deny_without_allow() -> None:
     assert tool_allowed("dangerous", (), ("dang*",)) is False
     assert tool_allowed("safe", (), ("dang*",)) is True
+
+
+# ---------------------------------------------------------------------------
+# OAuth reload-refresh helper (_expire_loaded_token)
+# ---------------------------------------------------------------------------
+
+
+def test_expire_loaded_token_forces_refresh_when_refresh_present() -> None:
+    """A reloaded token with a refresh token is marked expired so the SDK refreshes."""
+    from autobot.mcp.session import _expire_loaded_token
+
+    ctx = SimpleNamespace(
+        current_tokens=SimpleNamespace(refresh_token="r1"), token_expiry_time=None
+    )
+    _expire_loaded_token(ctx)
+    assert ctx.token_expiry_time == 0.0  # forced expired -> triggers silent refresh
+
+
+def test_expire_loaded_token_noop_without_refresh_token() -> None:
+    """Without a refresh token there's nothing to refresh to — leave expiry untouched."""
+    from autobot.mcp.session import _expire_loaded_token
+
+    ctx = SimpleNamespace(
+        current_tokens=SimpleNamespace(refresh_token=None), token_expiry_time=123.0
+    )
+    _expire_loaded_token(ctx)
+    assert ctx.token_expiry_time == 123.0
+
+
+def test_expire_loaded_token_noop_without_tokens() -> None:
+    """No loaded tokens at all -> no change."""
+    from autobot.mcp.session import _expire_loaded_token
+
+    ctx = SimpleNamespace(current_tokens=None, token_expiry_time=5.0)
+    _expire_loaded_token(ctx)
+    assert ctx.token_expiry_time == 5.0
 
 
 def test_friendly_error_plain_exception_passthrough() -> None:

@@ -112,6 +112,22 @@ def _oauth_http_client_factory(
     return client
 
 
+def _expire_loaded_token(context: Any) -> None:
+    """Force a reloaded OAuth token that has a refresh token to look expired.
+
+    The mcp SDK loads tokens from storage on init but does NOT restore their expiry, so
+    ``is_token_valid()`` returns True for an actually-expired token. The SDK then sends
+    the stale token, gets a 401, and runs the FULL browser re-auth — it never refreshes
+    on a 401. Marking the loaded token expired makes the SDK take its silent pre-request
+    refresh path on reconnect instead. If the refresh then fails, the SDK falls back to
+    the browser flow exactly as before — so this only ever removes an unnecessary
+    re-authentication, never adds one. A no-op when there's no refresh token.
+    """
+    tokens = getattr(context, "current_tokens", None)
+    if tokens is not None and getattr(tokens, "refresh_token", None):
+        context.token_expiry_time = 0.0
+
+
 def tool_allowed(name: str, allow: tuple[str, ...], deny: tuple[str, ...]) -> bool:
     """Whether a tool name passes the server's allow/deny globs.
 
@@ -449,13 +465,26 @@ class McpServerWorker:
             self._emit_oauth_stage("callback_received")
             return result
 
-        return OAuthClientProvider(
+        # The SDK loads tokens but doesn't restore their expiry, so it sends a stale token,
+        # gets a 401, and re-authorizes via the BROWSER instead of refreshing. Wrap
+        # _initialize so a reloaded token is marked expired -> the SDK takes its silent
+        # refresh path on reconnect. Operate through an explicitly Any-typed handle so
+        # this wrap doesn't depend on whether mypy resolves the SDK class concretely.
+        provider: Any = OAuthClientProvider(
             server_url=self._cfg.url or "",
             client_metadata=metadata,
             storage=storage,
             redirect_handler=redirect_handler,
             callback_handler=callback_handler,
         )
+        _orig_initialize = provider._initialize
+
+        async def _initialize_then_expire() -> None:
+            await _orig_initialize()
+            _expire_loaded_token(provider.context)
+
+        provider._initialize = _initialize_then_expire
+        return provider
 
     def _emit_oauth_stage(self, stage: str) -> None:
         """Publish an mcp_oauth event for the UI (never raises).
