@@ -8,7 +8,7 @@ import numpy as np
 import pytest
 
 from autobot.config import Settings
-from autobot.core.types import AudioClip, Risk, State, ToolCall, ToolResult, Transcription
+from autobot.core.types import AudioClip, Risk, Segment, State, ToolCall, ToolResult, Transcription
 from autobot.orchestrator.state_machine import (
     InvalidTransitionError,
     Orchestrator,
@@ -51,6 +51,19 @@ class _FakeSTT:
 
     def transcribe(self, _audio: AudioClip) -> Transcription:
         return Transcription(text=self._text, confidence=0.9)
+
+    def transcribe_segments(
+        self,
+        audio: AudioClip,
+        *,
+        language: str = "en",
+        vad_filter: bool = True,
+        condition_on_previous_text: bool = False,
+        initial_prompt: str | None = None,
+    ) -> list[Segment]:
+        if not self._text:
+            return []
+        return [Segment(text=self._text, start=0.0, end=1.0)]
 
 
 class _ToolingLLM:
@@ -340,6 +353,21 @@ class _GrowingSTT:
         self.calls += 1
         text = "remind me to" if self.calls == 1 else "remind me to call mom"
         return Transcription(text=text, confidence=0.9)
+
+    def transcribe_segments(
+        self,
+        audio: AudioClip,
+        *,
+        language: str = "en",
+        vad_filter: bool = True,
+        condition_on_previous_text: bool = False,
+        initial_prompt: str | None = None,
+    ) -> list[Segment]:
+        self.calls += 1
+        text = "remind me to" if self.calls == 1 else "remind me to call mom"
+        if not text:
+            return []
+        return [Segment(text=text, start=0.0, end=1.0)]
 
 
 def test_incomplete_utterance_triggers_reopen_and_retranscribe() -> None:

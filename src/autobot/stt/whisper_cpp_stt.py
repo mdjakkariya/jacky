@@ -20,7 +20,7 @@ from __future__ import annotations
 from typing import Any
 
 from autobot.config import Settings
-from autobot.core.types import AudioClip, Transcription
+from autobot.core.types import AudioClip, Segment, Transcription
 from autobot.logging_setup import get_logger
 
 _log = get_logger("stt")
@@ -85,3 +85,15 @@ class WhisperCppSTT:
         except TypeError:
             segments = self._model.transcribe(audio, language="en")
         return transcription_from_segments(segments)
+
+    def transcribe_segments(
+        self,
+        audio: AudioClip,
+        *,
+        language: str = "en",
+        vad_filter: bool = True,
+        condition_on_previous_text: bool = False,
+        initial_prompt: str | None = None,
+    ) -> list[Segment]:
+        """Transcribe a clip into timestamped segments; see the interface for the contract."""
+        raise NotImplementedError("transcribe_segments is not yet implemented")

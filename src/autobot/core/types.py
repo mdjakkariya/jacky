@@ -57,6 +57,20 @@ class Transcription:
 
 
 @dataclass(frozen=True, slots=True)
+class Segment:
+    """One timestamped span of recognized speech (seconds from the stream start)."""
+
+    text: str
+    """The recognized text for this span, stripped. Never empty in a returned list."""
+
+    start: float
+    """Start time in seconds, relative to the start of the transcribed audio."""
+
+    end: float
+    """End time in seconds, relative to the start of the transcribed audio."""
+
+
+@dataclass(frozen=True, slots=True)
 class ToolCall:
     """A model's request to invoke a named tool with arguments."""
 

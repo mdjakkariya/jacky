@@ -17,7 +17,7 @@ from typing import TYPE_CHECKING, Protocol, runtime_checkable
 
 if TYPE_CHECKING:
     # Imported only for type checking so this module stays runtime-light.
-    from autobot.core.types import AudioClip, ToolExecutor, Transcription
+    from autobot.core.types import AudioClip, Segment, ToolExecutor, Transcription
     from autobot.tools.registry import ToolSpec
 
 
@@ -51,6 +51,24 @@ class SpeechToText(Protocol):
 
         Returns:
             A :class:`~autobot.core.types.Transcription`.
+        """
+        ...
+
+    def transcribe_segments(
+        self,
+        audio: AudioClip,
+        *,
+        language: str = "en",
+        vad_filter: bool = True,
+        condition_on_previous_text: bool = False,
+        initial_prompt: str | None = None,
+    ) -> list[Segment]:
+        """Transcribe a clip into timestamped :class:`Segment`s (English only).
+
+        Used for long-form meeting audio, where the two streams must be merged by
+        time. ``vad_filter`` skips silence; ``condition_on_previous_text=False``
+        keeps one bad window from poisoning later ones. Segments are returned in
+        time order with empty spans dropped.
         """
         ...
 
