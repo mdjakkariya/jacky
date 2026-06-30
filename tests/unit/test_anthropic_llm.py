@@ -482,6 +482,13 @@ def test_estimate_cost_usd_unknown_model_ignores_cache() -> None:
     assert estimate_cost_usd("future", 100, 100, cache_read=100, cache_write=100) is None
 
 
+def test_estimate_cost_usd_prices_sonnet_and_opus() -> None:
+    # Pricing is keyed by model-id prefix, so Sonnet/Opus (and point releases) are priced
+    # instead of showing "n/a". Sonnet $3/$15, Opus $5/$25 per MTok.
+    assert estimate_cost_usd("claude-sonnet-4-6", 1_000_000, 1_000_000) == 18.0
+    assert estimate_cost_usd("claude-opus-4-8", 1_000_000, 1_000_000) == 30.0
+
+
 def test_context_usage_reports_session_price_for_priced_model() -> None:
     # Default model (claude-haiku-4-5) is in the pricing table: 1M in @ $1 + 1M out @ $5 = $6.
     resp = SimpleNamespace(
@@ -739,3 +746,37 @@ def test_assemble_fallback_advertises_all_without_defer_or_search() -> None:
     assert all("defer_loading" not in t for t in tools)  # legacy: no deferral
     assert all(t.get("type") != TOOL_SEARCH_TYPE for t in tools)  # no search tool
     assert all("cache_control" not in t for t in tools)  # legacy request unchanged
+
+
+def test_assemble_surfaces_relevant_gated_undeferred() -> None:
+    # Gated tools named in `relevant` are advertised DIRECTLY (so the model can use them);
+    # the rest stay deferred behind the search tool. Core is always direct.
+    tools = assemble_anthropic_tools(
+        [_spec("battery", core=True), _spec("slack__send"), _spec("github__list")],
+        tool_search=True,
+        relevant=frozenset({"slack__send"}),
+    )
+    by_name = {t.get("name"): t for t in tools}
+    assert "defer_loading" not in by_name["slack__send"]  # relevant -> directly usable
+    assert by_name["github__list"]["defer_loading"] is True  # not relevant -> deferred
+    assert "defer_loading" not in by_name["battery"]  # core -> always direct
+    assert TOOL_SEARCH_NAME in by_name  # search tool kept as recall net
+
+
+def test_run_turn_surfaces_query_relevant_gated_tool_undeferred() -> None:
+    # The fix for "it only opens but never uses MCP": a gated tool whose name/description
+    # matches the user's message is surfaced un-deferred, so the model actually picks it
+    # rather than a visible core tool. "send a slack message" matches slack__send.
+    resp = SimpleNamespace(
+        content=[_block(type="text", text="ok")],
+        usage=SimpleNamespace(input_tokens=5, output_tokens=2),
+    )
+    model = AnthropicLanguageModel(
+        Settings(llm_provider="anthropic", anthropic_model="claude-opus-4-8"),
+        _tiered_registry(),
+        client=FakeClient([resp]),
+    )
+    model.run_turn("send a slack message", lambda c: ToolResult(name=c.name, content=""))
+    by_name = {t.get("name"): t for t in model._client.messages.calls[0]["tools"]}
+    assert "defer_loading" not in by_name["slack__send"]  # surfaced by relevance
+    assert TOOL_SEARCH_NAME in by_name  # search tool still present as recall net
