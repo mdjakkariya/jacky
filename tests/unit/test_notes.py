@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from autobot.core.types import Risk
-from autobot.tools.notes import NotesTools, register_notes_tools
+from autobot.tools.notes import NotesTools, _render_html, register_notes_tools
 from autobot.tools.registry import ToolRegistry
 
 
@@ -22,15 +22,50 @@ class FakeRunner:
 # --- note() upsert -------------------------------------------------------
 
 
-def test_note_create_branch_passes_title_text_and_empty_folder() -> None:
+def test_note_create_branch_passes_name_bodies_and_empty_folder() -> None:
     runner = FakeRunner((0, "created"))
     tools = NotesTools(runner)
     msg = tools.note("buy milk", "2% gallon")
     argv = runner.calls[-1]
     assert argv[0] == "osascript" and argv[1] == "-e"
-    # title, text, folder("") are the three trailing data args.
-    assert argv[-3:] == ["buy milk", "2% gallon", ""]
+    # data args: name (raw, for matching), create-body (HTML), append-fragment, folder.
+    name, create_body, append_fragment, folder = argv[-4:]
+    assert name == "buy milk"
+    assert folder == ""
+    assert "<b>buy milk</b>" in create_body  # title becomes the first (name) line
+    assert "<div>2% gallon</div>" in create_body
+    assert append_fragment == "<div>2% gallon</div>"
     assert "buy milk" in msg and "Created" in msg
+
+
+# --- _render_html (markdown-lite -> Notes HTML) --------------------------
+
+
+def test_render_html_headings() -> None:
+    assert _render_html("# Title") == "<h1>Title</h1>"
+    assert _render_html("## Overview") == "<h2>Overview</h2>"
+    assert _render_html("### Step") == "<h3>Step</h3>"
+
+
+def test_render_html_bullets_grouped_into_list() -> None:
+    assert _render_html("- a\n- b") == "<ul><li>a</li><li>b</li></ul>"
+    assert _render_html("* a") == "<ul><li>a</li></ul>"
+
+
+def test_render_html_bold_inline() -> None:
+    assert _render_html("**Email**: x") == "<div><b>Email</b>: x</div>"
+
+
+def test_render_html_escapes_special_chars() -> None:
+    assert _render_html("a < b & c") == "<div>a &lt; b &amp; c</div>"
+
+
+def test_render_html_preserves_line_breaks_as_divs() -> None:
+    assert _render_html("line1\nline2") == "<div>line1</div><div>line2</div>"
+
+
+def test_render_html_blank_line_closes_list() -> None:
+    assert _render_html("- a\n\ntext") == "<ul><li>a</li></ul><div>text</div>"
 
 
 def test_note_append_branch_reports_append() -> None:

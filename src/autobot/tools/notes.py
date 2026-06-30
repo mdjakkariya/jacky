@@ -22,6 +22,8 @@ unit-tested without spawning ``osascript`` or touching the real Notes database.
 
 from __future__ import annotations
 
+import html as _htmllib
+import re
 from collections.abc import Callable
 
 from autobot.core.types import Risk
@@ -37,19 +39,69 @@ Runner = Callable[[list[str]], RunResult]
 
 _MAX_LIST = 50  # cap how many notes we read back to the model
 
+_BULLET = re.compile(r"^\s*[-*]\s+(.*)$")
+_HEADING = re.compile(r"^(#{1,3})\s+(.*)$")
+_BOLD = re.compile(r"\*\*(.+?)\*\*")
+
+
+def _inline(text: str) -> str:
+    """HTML-escape ``text`` then render ``**bold**`` spans as ``<b>…</b>``."""
+    return _BOLD.sub(r"<b>\1</b>", _htmllib.escape(text))
+
+
+def _render_html(text: str) -> str:
+    """Render lightweight markdown to the HTML body Notes.app expects.
+
+    Notes bodies are HTML, where newlines are whitespace and ``#``/``-``/``**`` are
+    literal characters — so raw markdown collapses into one cluttered run. This
+    converts the structure the model tends to produce — ATX headings (``#``/``##``/
+    ``###``), dash/asterisk bullet lists, ``**bold**``, and blank-line paragraph
+    breaks — into ``<h1>``/``<ul>``/``<b>``/``<div>`` tags, and HTML-escapes the rest
+    so plain text keeps its line breaks.
+    """
+    out: list[str] = []
+    in_list = False
+    for raw in text.split("\n"):
+        stripped = raw.strip()
+        if not stripped:
+            if in_list:
+                out.append("</ul>")
+                in_list = False
+            continue
+        bullet = _BULLET.match(raw)
+        if bullet:
+            if not in_list:
+                out.append("<ul>")
+                in_list = True
+            out.append(f"<li>{_inline(bullet.group(1).strip())}</li>")
+            continue
+        if in_list:
+            out.append("</ul>")
+            in_list = False
+        heading = _HEADING.match(stripped)
+        if heading:
+            level = len(heading.group(1))
+            out.append(f"<h{level}>{_inline(heading.group(2).strip())}</h{level}>")
+            continue
+        out.append(f"<div>{_inline(stripped)}</div>")
+    if in_list:
+        out.append("</ul>")
+    return "".join(out)
+
 
 # --- AppleScript (title/text/folder/query are always run-args, never spliced) ---
 
-# Upsert by title within an optional folder. argv: 1=title, 2=text, 3=folder ("" =
-# default). Appends a paragraph to an existing same-named note, else creates one
-# (title as a bold heading so the note's name matches on the next upsert). `name is`
-# is a case-insensitive exact match (AppleScript ignores case by default). Returns
-# "created" or "appended".
+# Upsert by title within an optional folder. argv: 1=name (raw, for matching),
+# 2=create-body (full HTML for a new note), 3=append-fragment (HTML appended to an
+# existing note), 4=folder ("" = default). The HTML is built in Python (see
+# `_render_html`) so this script only stores it. `name is` is a case-insensitive
+# exact match (AppleScript ignores case by default). Returns "created"/"appended".
 _UPSERT = (
     "on run argv\n"
     "set theName to item 1 of argv\n"
-    "set theText to item 2 of argv\n"
-    "set theFolder to item 3 of argv\n"
+    "set theCreate to item 2 of argv\n"
+    "set theAppend to item 3 of argv\n"
+    "set theFolder to item 4 of argv\n"
     'tell application "Notes"\n'
     'if theFolder is "" then\n'
     "set existing to (notes whose name is theName)\n"
@@ -59,14 +111,13 @@ _UPSERT = (
     "end if\n"
     "if existing is not {} then\n"
     "set n to item 1 of existing\n"
-    'set body of n to (body of n) & "<div>" & theText & "</div>"\n'
+    "set body of n to (body of n) & theAppend\n"
     'set verb to "appended"\n'
     "else\n"
-    'set b to "<div><b>" & theName & "</b></div><div>" & theText & "</div>"\n'
     'if theFolder is "" then\n'
-    "make new note with properties {body:b}\n"
+    "make new note with properties {body:theCreate}\n"
     "else\n"
-    "make new note at folder theFolder with properties {body:b}\n"
+    "make new note at folder theFolder with properties {body:theCreate}\n"
     "end if\n"
     'set verb to "created"\n'
     "end if\n"
@@ -238,7 +289,11 @@ class NotesTools:
         if not body:
             return f"What would you like the note “{name}” to say?"
         fld = (folder or "").strip()
-        rc, out = self._run(["osascript", "-e", _UPSERT, name, body, fld])
+        # Notes bodies are HTML — render the text so headings/lists/line breaks
+        # survive. The first line is the title (bold) so the note's name matches it.
+        fragment = _render_html(body)
+        create_body = f"<div><b>{_inline(name)}</b></div>{fragment}"
+        rc, out = self._run(["osascript", "-e", _UPSERT, name, create_body, fragment, fld])
         if rc != 0:
             return self._fail(out, f"I couldn't save the note “{name}”")
         appended = out.strip().lower() == "appended"
@@ -340,9 +395,12 @@ class NotesTools:
                     "'add … to my <name> note'. Put the note's name in `title` and the "
                     "content in `text`. If the user names the note ('my shopping note'), "
                     "use that as `title`; otherwise derive a short 3-5 word title from "
-                    "the content. If a note with that title already exists, this APPENDS "
-                    "a line to it; otherwise it creates a new one. Pass `folder` only "
-                    "when the user names a folder (e.g. 'in my Work folder')."
+                    "the content. Do NOT repeat the title inside `text` — it's added as "
+                    "the heading automatically. `text` may use simple markdown — headings "
+                    "(#, ##, ###), dash bullet lists, and **bold** — which is rendered for "
+                    "display; keep it light. If a note with that title already exists, "
+                    "this APPENDS to it; otherwise it creates a new one. Pass `folder` "
+                    "only when the user names a folder (e.g. 'in my Work folder')."
                 ),
                 parameters={
                     "type": "object",
