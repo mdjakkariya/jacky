@@ -20,6 +20,16 @@ from autobot.logging_setup import get_logger
 _log = get_logger("stt")
 
 
+def segments_from_faster_whisper(raw: object) -> list[Segment]:
+    """Map faster-whisper segment objects to :class:`Segment`s, dropping empties."""
+    out: list[Segment] = []
+    for seg in raw or []:  # type: ignore[attr-defined]
+        text = str(getattr(seg, "text", "") or "").strip()
+        if text:
+            out.append(Segment(text=text, start=float(seg.start), end=float(seg.end)))
+    return out
+
+
 class FasterWhisperSTT:
     """Transcribes short English command clips with faster-whisper."""
 
@@ -86,5 +96,18 @@ class FasterWhisperSTT:
         condition_on_previous_text: bool = False,
         initial_prompt: str | None = None,
     ) -> list[Segment]:
-        """Transcribe a clip into timestamped segments; see the interface for the contract."""
-        raise NotImplementedError("transcribe_segments is not yet implemented")
+        """Long-form transcription into timestamped segments; see the interface."""
+        if audio.size == 0:
+            return []
+        prompt = initial_prompt if initial_prompt is not None else self._settings.stt_prompt or None
+        segments, _info = self._model.transcribe(
+            audio,
+            language="en",  # English-only: never autodetect, never translate
+            beam_size=self._settings.stt_beam_size,
+            vad_filter=vad_filter,
+            condition_on_previous_text=condition_on_previous_text,
+            initial_prompt=prompt,
+        )
+        result = segments_from_faster_whisper(segments)
+        _log.debug("transcribe_segments engine=faster_whisper segments=%d", len(result))
+        return result
