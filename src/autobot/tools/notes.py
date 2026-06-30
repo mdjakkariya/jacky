@@ -77,6 +77,9 @@ _UPSERT = (
 
 # List notes (optionally of one folder, optionally name-filtered). argv: 1=folder
 # (""=all), 2=query (""=all). One row per note: name TAB folder TAB modification-date.
+# We iterate folders and read the folder name from the outer loop rather than asking
+# each note for `container of n` — that property fails to coerce to text in Notes
+# (error -1700), and the outer-loop name is free anyway.
 _LIST = (
     "on run argv\n"
     "set theFolder to item 1 of argv\n"
@@ -84,15 +87,19 @@ _LIST = (
     'set out to ""\n'
     'tell application "Notes"\n'
     'if theFolder is "" then\n'
-    "set ns to notes\n"
+    "set fs to folders\n"
     "else\n"
-    "set ns to notes of folder theFolder\n"
+    "set fs to (folders whose name is theFolder)\n"
     "end if\n"
-    "repeat with n in ns\n"
+    "repeat with f in fs\n"
+    "set fn to name of f\n"
+    'if fn is not "Recently Deleted" then\n'
+    "repeat with n in (notes of f)\n"
     "set nm to name of n\n"
     'if theQuery is "" or (nm contains theQuery) then\n'
-    "set out to out & nm & tab & (name of container of n) & tab & "
-    "(modification date of n as string) & linefeed\n"
+    "set out to out & nm & tab & fn & tab & (modification date of n as string) & linefeed\n"
+    "end if\n"
+    "end repeat\n"
     "end if\n"
     "end repeat\n"
     "end tell\n"
@@ -155,13 +162,15 @@ _DELETE = (
     "end run"
 )
 
-# List folder names in the default account, one per line.
+# List folder names in the default account, one per line (the "Recently Deleted"
+# system folder is skipped — it isn't a real organizing destination).
 _FOLDERS = (
     "on run argv\n"
     'set out to ""\n'
     'tell application "Notes"\n'
     "repeat with f in folders\n"
-    "set out to out & (name of f) & linefeed\n"
+    "set fn to name of f\n"
+    'if fn is not "Recently Deleted" then set out to out & fn & linefeed\n'
     "end repeat\n"
     "end tell\n"
     "return out\n"
