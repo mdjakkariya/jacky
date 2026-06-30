@@ -75,6 +75,56 @@ _UPSERT = (
     "end run"
 )
 
+# List notes (optionally of one folder, optionally name-filtered). argv: 1=folder
+# (""=all), 2=query (""=all). One row per note: name TAB folder TAB modification-date.
+_LIST = (
+    "on run argv\n"
+    "set theFolder to item 1 of argv\n"
+    "set theQuery to item 2 of argv\n"
+    'set out to ""\n'
+    'tell application "Notes"\n'
+    'if theFolder is "" then\n'
+    "set ns to notes\n"
+    "else\n"
+    "set ns to notes of folder theFolder\n"
+    "end if\n"
+    "repeat with n in ns\n"
+    "set nm to name of n\n"
+    'if theQuery is "" or (nm contains theQuery) then\n'
+    "set out to out & nm & tab & (name of container of n) & tab & "
+    "(modification date of n as string) & linefeed\n"
+    "end if\n"
+    "end repeat\n"
+    "end tell\n"
+    "return out\n"
+    "end run"
+)
+
+# Read one note's text (no HTML). argv: 1=title. Returns plaintext or "NONE".
+_READ = (
+    "on run argv\n"
+    "set theName to item 1 of argv\n"
+    'tell application "Notes"\n'
+    "set ns to (notes whose name is theName)\n"
+    'if ns is {} then return "NONE"\n'
+    "return plaintext of (item 1 of ns)\n"
+    "end tell\n"
+    "end run"
+)
+
+# List folder names in the default account, one per line.
+_FOLDERS = (
+    "on run argv\n"
+    'set out to ""\n'
+    'tell application "Notes"\n'
+    "repeat with f in folders\n"
+    "set out to out & (name of f) & linefeed\n"
+    "end repeat\n"
+    "end tell\n"
+    "return out\n"
+    "end run"
+)
+
 # Spoken when macOS blocks access — Jack can't flip this switch, only the user can.
 _PERMISSION_HINT = (
     "I need permission to use Notes. macOS should be asking — please allow it for the "
@@ -146,6 +196,52 @@ class NotesTools:
             return f"Added that to your “{name}” note."
         return f"Created a note “{name}”{where}."
 
+    def list_notes(self, query: str | None = None, folder: str | None = None) -> str:
+        """List notes (name + folder + modified date), optionally filtered."""
+        q = (query or "").strip()
+        fld = (folder or "").strip()
+        rc, out = self._run(["osascript", "-e", _LIST, fld, q])
+        if rc != 0:
+            return self._fail(out, "I couldn't read your notes")
+        rows = [ln for ln in out.splitlines() if ln.strip()]
+        if not rows:
+            scope = f" matching “{q}”" if q else ""
+            return f"You have no notes{scope}."
+        items: list[str] = []
+        for line in rows[:_MAX_LIST]:
+            name, _, rest = line.partition("\t")
+            fname, _, modified = rest.partition("\t")
+            tail = f" [{fname.strip()}, modified {modified.strip()}]" if rest else ""
+            items.append(f"{name.strip()}{tail}")
+        more = len(rows) - _MAX_LIST
+        suffix = f", and {more} more" if more > 0 else ""
+        _log.info("notes listed count=%d query=%r folder=%r", len(rows), q, fld)
+        return "Your notes: " + "; ".join(items) + suffix + "."
+
+    def read_note(self, title: str) -> str:
+        """Read back the plain text of the note named ``title``."""
+        name = (title or "").strip()
+        if not name:
+            return "Which note would you like me to read?"
+        rc, out = self._run(["osascript", "-e", _READ, name])
+        if rc != 0:
+            return self._fail(out, f"I couldn't read the note “{name}”")
+        if out.strip() == "NONE":
+            return f"I don't see a note called “{name}”."
+        _log.info("note read title=%r", name)
+        return out.strip()
+
+    def list_folders(self) -> str:
+        """List the user's Notes folders."""
+        rc, out = self._run(["osascript", "-e", _FOLDERS])
+        if rc != 0:
+            return self._fail(out, "I couldn't read your Notes folders")
+        names = [ln.strip() for ln in out.splitlines() if ln.strip()]
+        if not names:
+            return "You have no Notes folders."
+        _log.info("folders listed count=%d", len(names))
+        return "Your folders: " + ", ".join(names) + "."
+
     def specs(self) -> list[ToolSpec]:
         """Return the tool specs with risk levels for the permission gate."""
         return [
@@ -183,6 +279,70 @@ class NotesTools:
                 risk=Risk.WRITE,
                 requires=AUTOMATION,
                 ack="Saving that note.",
+            ),
+            ToolSpec(
+                name="list_notes",
+                description=(
+                    "List the user's notes from the macOS Notes app (name, folder, and "
+                    "when each was last modified). Cues: 'what notes do I have', 'show my "
+                    "notes', 'list my notes in <folder>', 'which notes are old/stale'. "
+                    "Pass `query` to filter by title words and/or `folder` to scope to one "
+                    "folder; omit both to list everything. Use this before moving or "
+                    "deleting notes so you can show the user exactly which notes match."
+                ),
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "query": {
+                            "type": "string",
+                            "description": "Optional title words to filter by.",
+                        },
+                        "folder": {
+                            "type": "string",
+                            "description": "Optional folder name to scope to.",
+                        },
+                    },
+                    "required": [],
+                },
+                handler=self.list_notes,
+                risk=Risk.READ_ONLY,
+                requires=AUTOMATION,
+                ack="Checking your notes.",
+            ),
+            ToolSpec(
+                name="read_note",
+                description=(
+                    "Read back the text of one note by name. Cues: 'what's in my <name> "
+                    "note', 'read my <name> note', 'what does my shopping note say'. "
+                    "Matches a note whose name is `title` (case-insensitive)."
+                ),
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "title": {
+                            "type": "string",
+                            "description": "The note's name, e.g. 'shopping'.",
+                        }
+                    },
+                    "required": ["title"],
+                },
+                handler=self.read_note,
+                risk=Risk.READ_ONLY,
+                requires=AUTOMATION,
+                ack="Reading that note.",
+            ),
+            ToolSpec(
+                name="list_folders",
+                description=(
+                    "List the folders in the macOS Notes app. Cues: 'what note folders do "
+                    "I have', 'show my Notes folders'. Useful before moving a note so you "
+                    "pick an existing folder name."
+                ),
+                parameters={"type": "object", "properties": {}, "required": []},
+                handler=self.list_folders,
+                risk=Risk.READ_ONLY,
+                requires=AUTOMATION,
+                ack="Checking your folders.",
             ),
         ]
 
