@@ -9,6 +9,8 @@ from __future__ import annotations
 from types import SimpleNamespace
 from typing import Any
 
+import pytest
+
 from autobot.config import Settings
 from autobot.core.types import ToolCall, ToolResult
 from autobot.llm.anthropic_llm import (
@@ -455,6 +457,29 @@ def test_estimate_cost_usd_known_model() -> None:
 
 def test_estimate_cost_usd_unknown_model_returns_none() -> None:
     assert estimate_cost_usd("some-future-model", 100, 100) is None
+
+
+def test_estimate_cost_usd_includes_cache_pricing() -> None:
+    # Cache tokens are billed on the INPUT rate: write = 1.25x, read = 0.1x. With Haiku
+    # ($1 in / $5 out per MTok), 1M of each component: fresh in $1 + out $5 + write $1.25
+    # + read $0.10 = $7.35. Omitting cache made an all-tools-cached prefix look free.
+    cost = estimate_cost_usd(
+        "claude-haiku-4-5",
+        1_000_000,
+        1_000_000,
+        cache_read=1_000_000,
+        cache_write=1_000_000,
+    )
+    assert cost == pytest.approx(7.35)
+
+
+def test_estimate_cost_usd_cache_defaults_to_zero() -> None:
+    # Back-compat: callers that pass no cache args price only fresh input + output.
+    assert estimate_cost_usd("claude-haiku-4-5", 1_000_000, 1_000_000) == 6.0
+
+
+def test_estimate_cost_usd_unknown_model_ignores_cache() -> None:
+    assert estimate_cost_usd("future", 100, 100, cache_read=100, cache_write=100) is None
 
 
 def test_context_usage_reports_session_price_for_priced_model() -> None:

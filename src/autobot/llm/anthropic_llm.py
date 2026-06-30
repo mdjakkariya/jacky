@@ -66,10 +66,15 @@ _MAX_TOKENS_RE = re.compile(r">\s*([0-9]+)\s*maximum")
 # tool; deferred tool defs cost ~0 baseline tokens until loaded on demand.
 TOOL_SEARCH_TYPE = "tool_search_tool_bm25_20251119"
 TOOL_SEARCH_NAME = "tool_search_tool_bm25"
-# Claude models known to support server-side tool search (prefix match, like
-# _MODEL_WINDOWS). "auto" mode enables tool search only for these; an unlisted model
-# (e.g. the default claude-haiku-4-5) safely advertises all tools instead. Extend
-# this as Anthropic adds support; "on" in settings forces it for a model not yet here.
+# Models for which "auto" turns ON native tool search. This is a COST/POLICY choice,
+# not a pure capability one: Haiku 4.5 also *supports* tool search, but with prompt
+# caching a static tool set is cheap to carry (the whole prefix is re-read at 0.1x),
+# whereas tool search adds per-use cost — the server search plus tool definitions loaded
+# on demand as fresh, uncached input. So "auto" enables it only where the context-size
+# and tool-selection-accuracy win clearly outweighs that (large catalogs on the bigger
+# models). Set anthropic_tool_search="on" to force it for any model — worth it on Haiku
+# when you connect many MCP servers or hold long conversations (tool defs would otherwise
+# crowd out history). Adjust this list as the tradeoff shifts.
 _TOOL_SEARCH_MODEL_PREFIXES: tuple[str, ...] = (
     "claude-opus-4-8",
     "claude-opus-4-7",
@@ -112,14 +117,40 @@ def too_long_reply() -> str:
 _PRICING_USD_PER_MTOK: dict[str, tuple[float, float]] = {
     "claude-haiku-4-5": (1.0, 5.0),
 }
+# Prompt-cache multipliers applied to the base INPUT rate (Anthropic): a 5-minute cache
+# write costs 1.25x, a cache read 0.1x (90% off). Pricing these matters because a large
+# static tool prefix is almost entirely cache_read/cache_write — omitting them made
+# "advertise all tools" look free while tool search's on-demand (uncached) tool loads
+# looked expensive, which is exactly backwards from real billing.
+_CACHE_WRITE_MULT = 1.25
+_CACHE_READ_MULT = 0.1
 
 
-def estimate_cost_usd(model: str, in_tokens: int, out_tokens: int) -> float | None:
-    """Rough USD cost for a call, or None if the model's price isn't known here."""
+def estimate_cost_usd(
+    model: str,
+    in_tokens: int,
+    out_tokens: int,
+    *,
+    cache_read: int = 0,
+    cache_write: int = 0,
+) -> float | None:
+    """Rough USD cost for a call, or None if the model's price isn't known here.
+
+    Prices fresh input and output at the model's list rate, plus prompt-cache tokens at
+    Anthropic's multipliers on the input rate (write 1.25x, read 0.1x). ``cache_read`` /
+    ``cache_write`` default to 0 so existing callers are unaffected; the daemon passes
+    them so the logged session cost reflects real billing rather than fresh tokens alone.
+    """
     price = _PRICING_USD_PER_MTOK.get(model)
     if price is None:
         return None
-    return in_tokens / 1_000_000 * price[0] + out_tokens / 1_000_000 * price[1]
+    in_rate, out_rate = price
+    return (
+        in_tokens / 1_000_000 * in_rate
+        + cache_write / 1_000_000 * in_rate * _CACHE_WRITE_MULT
+        + cache_read / 1_000_000 * in_rate * _CACHE_READ_MULT
+        + out_tokens / 1_000_000 * out_rate
+    )
 
 
 def _get(obj: Any, key: str) -> Any:
@@ -453,7 +484,9 @@ class AnthropicLanguageModel:
         model = self._settings.anthropic_model
         self._session_in += turn_in
         self._session_out += turn_out
-        cost = estimate_cost_usd(model, turn_in, turn_out)
+        cost = estimate_cost_usd(
+            model, turn_in, turn_out, cache_read=cache_read, cache_write=cache_write
+        )
         self._transcript.record_usage(turn_in, turn_out, cost)
         cost_str = f"{cost:.5f}" if cost is not None else "n/a"
         if cost is not None:
