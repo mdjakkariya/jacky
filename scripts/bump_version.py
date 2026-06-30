@@ -78,9 +78,12 @@ def _bump(version: str, root: Path = _ROOT) -> None:
         path.write_text(set_version(path.read_text(), pattern, template, version))
         print(f"updated {rel} -> {version}")
     print(
-        f"\nNext (commit is up to you):\n"
-        f"  git add -A && git commit -m 'release v{version}'\n"
-        f"  git tag v{version} && git push origin main --tags"
+        f"\nNext (the bump lands via a PR — main is protected):\n"
+        f"  git switch -c release/v{version} && git add -A"
+        f" && git commit -m 'chore(release): v{version}'\n"
+        f"  git push -u origin release/v{version} && gh pr create --fill"
+        f"   # merge once checks pass\n"
+        f"  git switch main && git pull && git tag v{version} && git push origin v{version}"
     )
 
 
