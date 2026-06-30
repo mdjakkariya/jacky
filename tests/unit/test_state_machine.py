@@ -363,11 +363,7 @@ class _GrowingSTT:
         condition_on_previous_text: bool = False,
         initial_prompt: str | None = None,
     ) -> list[Segment]:
-        self.calls += 1
-        text = "remind me to" if self.calls == 1 else "remind me to call mom"
-        if not text:
-            return []
-        return [Segment(text=text, start=0.0, end=1.0)]
+        raise NotImplementedError
 
 
 def test_incomplete_utterance_triggers_reopen_and_retranscribe() -> None:
