@@ -140,3 +140,27 @@ def test_fingerprint_is_stable_and_sensitive() -> None:
     c = FakeTool(name="t", description="CHANGED", inputSchema={"type": "object"})
     assert adapter.fingerprint(a) == adapter.fingerprint(b)
     assert adapter.fingerprint(a) != adapter.fingerprint(c)
+
+
+def test_fingerprint_is_order_insensitive_for_lists() -> None:
+    # A server may return list-valued schema fields (required/enum/...) in a different
+    # order across connects; that benign reordering must NOT change the fingerprint
+    # (otherwise it false-triggers rug-pull re-consent every restart).
+    a = FakeTool(
+        name="t",
+        description="d",
+        inputSchema={"type": "object", "required": ["alpha", "beta", "gamma"]},
+    )
+    b = FakeTool(
+        name="t",
+        description="d",
+        inputSchema={"type": "object", "required": ["gamma", "alpha", "beta"]},
+    )
+    assert adapter.fingerprint(a) == adapter.fingerprint(b)
+
+
+def test_fingerprint_order_insensitive_for_nested_object_lists() -> None:
+    # Reordering a list of sub-schemas (e.g. anyOf) is also benign.
+    a = FakeTool(name="t", inputSchema={"anyOf": [{"type": "string"}, {"type": "number"}]})
+    b = FakeTool(name="t", inputSchema={"anyOf": [{"type": "number"}, {"type": "string"}]})
+    assert adapter.fingerprint(a) == adapter.fingerprint(b)

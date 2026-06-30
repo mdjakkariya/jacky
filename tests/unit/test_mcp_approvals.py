@@ -42,6 +42,35 @@ def test_round_trip_fingerprints_and_spawn_approvals(tmp_path: Path) -> None:
     )
 
 
+def test_round_trip_risks(tmp_path: Path) -> None:
+    """save/load preserves the per-tool risks map."""
+    p = tmp_path / "approved.json"
+    af = ApprovalsFile(
+        fingerprints={"srv": {"srv__t": "fp"}},
+        risks={"srv": {"srv__t": "write"}},
+    )
+    save_approvals(af, p)
+    assert load_approvals(p).risks == {"srv": {"srv__t": "write"}}
+
+
+def test_load_old_file_without_risks_defaults_empty(tmp_path: Path) -> None:
+    """A pre-``risks`` approved.json (no risks key) loads with an empty risks map."""
+    p = tmp_path / "approved.json"
+    p.write_text(json.dumps({"fingerprints": {"srv": {"srv__t": "fp"}}}), encoding="utf-8")
+    loaded = load_approvals(p)
+    assert loaded.fingerprints == {"srv": {"srv__t": "fp"}}
+    assert loaded.risks == {}
+
+
+def test_record_fingerprints_with_risks_persists_both(tmp_path: Path) -> None:
+    """record_fingerprints(..., risks=...) writes the risk alongside the fingerprint."""
+    p = tmp_path / "approved.json"
+    record_fingerprints("srv", {"srv__t": "fp"}, p, risks={"srv__t": "destructive"})
+    loaded = load_approvals(p)
+    assert loaded.fingerprints["srv"]["srv__t"] == "fp"
+    assert loaded.risks["srv"]["srv__t"] == "destructive"
+
+
 # ---------------------------------------------------------------------------
 # load_approvals edge cases
 # ---------------------------------------------------------------------------

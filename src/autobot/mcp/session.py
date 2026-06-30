@@ -535,10 +535,13 @@ class McpServerWorker:
         Fingerprint gating runs for every allowed tool:
 
         - Fingerprint unchanged vs approved.json → register normally.
-        - Fingerprint changed (rug-pull) → block (do not register); mark
-          ``pending_reconsent=True`` in ``_all_tools``; emit ``mcp_tool_changed``.
-        - New tool (not in approved.json) → auto-register and baseline its
-          fingerprint in approved.json.
+        - Fingerprint changed but risk NOT elevated (benign edit / list reorder /
+          server update) → auto-re-baseline and register; log it.
+        - Fingerprint changed AND risk elevated (read-only → write/destructive — a
+          genuine rug-pull) → block (do not register); mark ``pending_reconsent=True``
+          in ``_all_tools``; emit ``mcp_tool_changed``.
+        - New tool (not in approved.json) → auto-register and baseline its fingerprint
+          and risk in approved.json.
 
         Denied tools are skipped before fingerprinting, exactly as before.
         """
@@ -550,10 +553,12 @@ class McpServerWorker:
         }
         network = self._cfg.egress == "network"
 
-        # Load approved fingerprints for this server.
+        # Load approved fingerprints + risks for this server (rug-pull gating).
         approvals = load_approvals(self._approvals_path)
         approved_fps = approvals.fingerprints.get(self._cfg.id, {})
+        approved_risks = approvals.risks.get(self._cfg.id, {})
         new_fps: dict[str, str] = {}
+        new_risks: dict[str, str] = {}
         reconsent_names: list[str] = []
         reconsent_bare: set[str] = set()  # bare tool names for _all_tools lookup
 
@@ -564,29 +569,52 @@ class McpServerWorker:
                 continue
             reg_name = adapter.namespaced(self._cfg.id, tool.name)
             fp = adapter.fingerprint(tool)
-            if reg_name in approved_fps:
-                if approved_fps[reg_name] != fp:
-                    # Rug-pull detected: fingerprint changed since approval.
+            risk = adapter.risk_for(tool, floor=floor, overrides=overrides)
+            risk_name = risk.name.lower()
+            if reg_name in approved_fps and approved_fps[reg_name] == fp:
+                # Unchanged. Backfill the risk if this is a pre-``risks`` approved.json
+                # entry, so a future change can be judged.
+                if reg_name not in approved_risks:
+                    new_risks[reg_name] = risk_name
+            elif reg_name in approved_fps:
+                # Definition changed since approval. Block ONLY if the change ELEVATES
+                # risk (a genuine rug-pull, e.g. read-only -> write/destructive). A benign
+                # edit at the same-or-lower risk is auto-re-baselined, so a legitimate
+                # server update doesn't block the tool forever. An unknown old risk
+                # (pre-``risks`` file) is treated as benign — the one-time migration.
+                old_name = approved_risks.get(reg_name)
+                old_risk = adapter.risk_from_name(old_name) if old_name else None
+                if old_risk is not None and risk > old_risk:
                     reconsent_names.append(reg_name)
                     reconsent_bare.add(tool.name)
                     _log.warning(
-                        "mcp tool fingerprint changed server=%s tool=%s"
+                        "mcp tool risk elevated server=%s tool=%s %s->%s"
                         " — blocking pending re-consent",
                         self._cfg.id,
                         reg_name,
+                        old_risk.name.lower(),
+                        risk_name,
                     )
                     continue  # do NOT add to desired
-                # Fingerprint unchanged — allow through (fall through to desired insert)
-            else:
-                # New tool: auto-approve; baseline its fingerprint.
                 new_fps[reg_name] = fp
+                new_risks[reg_name] = risk_name
+                _log.info(
+                    "mcp tool definition updated server=%s tool=%s — re-baselined (risk=%s)",
+                    self._cfg.id,
+                    reg_name,
+                    risk_name,
+                )
+            else:
+                # New tool: auto-approve; baseline its fingerprint + risk.
+                new_fps[reg_name] = fp
+                new_risks[reg_name] = risk_name
 
             desired[reg_name] = ToolSpec(
                 name=reg_name,
                 description=tool.description or "",
                 parameters=minify_schema(adapter.params_from_input_schema(tool.inputSchema)),
                 handler=self._make_handler(tool.name),
-                risk=adapter.risk_for(tool, floor=floor, overrides=overrides),
+                risk=risk,
                 network=network,
             )
 
@@ -613,9 +641,9 @@ class McpServerWorker:
         self._registered = list(desired)
         self._tool_count = len(desired)
 
-        # Persist new-tool fingerprints and emit events.
-        if new_fps:
-            record_fingerprints(self._cfg.id, new_fps, self._approvals_path)
+        # Persist baselined/re-baselined fingerprints + risks and emit events.
+        if new_fps or new_risks:
+            record_fingerprints(self._cfg.id, new_fps, self._approvals_path, risks=new_risks)
         if reconsent_names:
             self._emit_event(
                 {

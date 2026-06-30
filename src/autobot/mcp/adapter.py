@@ -119,12 +119,31 @@ def risk_from_name(name: str | None, default: Risk = Risk.WRITE) -> Risk:
     return _RISK_BY_NAME.get(name.strip().lower(), default)
 
 
+def _canonicalize(obj: Any) -> Any:
+    """Normalize a value for hashing so semantically-equal schemas hash the same.
+
+    Dict key order is handled by ``sort_keys`` at dump time, but JSON arrays are not —
+    and a server may return list-valued schema fields (``required``, ``enum``, ``type``,
+    ``anyOf`` …) in a different order across connects. That benign reordering would
+    otherwise change the fingerprint and false-trigger rug-pull re-consent on every
+    restart, so lists are sorted by their canonical form (works for scalars and nested
+    objects alike).
+    """
+    if isinstance(obj, dict):
+        return {k: _canonicalize(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        items = [_canonicalize(x) for x in obj]
+        return sorted(items, key=lambda x: json.dumps(x, sort_keys=True, default=str))
+    return obj
+
+
 def fingerprint(tool: _ToolLike) -> str:
     """Return a stable SHA-256 over a tool's identity-defining fields.
 
     Covers name, description, input schema, and annotation hints — so a server that
     silently redefines an approved tool ("rug pull") yields a different fingerprint,
-    which the manager uses to force re-consent.
+    which the manager uses to force re-consent. The payload is canonicalized first
+    (:func:`_canonicalize`) so list reordering doesn't change the hash.
     """
     ann = tool.annotations
     ann_dict = (
@@ -143,5 +162,5 @@ def fingerprint(tool: _ToolLike) -> str:
         "inputSchema": tool.inputSchema,
         "annotations": ann_dict,
     }
-    blob = json.dumps(payload, sort_keys=True, default=str)
+    blob = json.dumps(_canonicalize(payload), sort_keys=True, default=str)
     return hashlib.sha256(blob.encode("utf-8")).hexdigest()

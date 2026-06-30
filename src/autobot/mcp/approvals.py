@@ -9,8 +9,13 @@ Schema::
 
     {
         "fingerprints": {"<server_id>": {"<namespaced_tool>": "<sha256>"}},
+        "risks": {"<server_id>": {"<namespaced_tool>": "<risk_name>"}},
         "spawn_approvals": {"<server_id>": {"command": "...", "args": [...], "approved_at": "..."}},
     }
+
+``risks`` records the risk class the tool had when approved, so a later fingerprint
+change can be judged: a benign edit (same-or-lower risk) is auto-re-baselined, while a
+change that *elevates* risk is held for re-consent.
 """
 
 from __future__ import annotations
@@ -39,6 +44,7 @@ class ApprovalsFile:
     """In-memory view of approved.json."""
 
     fingerprints: dict[str, dict[str, str]] = field(default_factory=dict)
+    risks: dict[str, dict[str, str]] = field(default_factory=dict)
     spawn_approvals: dict[str, SpawnApproval] = field(default_factory=dict)
 
 
@@ -55,6 +61,10 @@ def load_approvals(path: str | Path = DEFAULT_APPROVALS_PATH) -> ApprovalsFile:
     for sid, tools in (data.get("fingerprints") or {}).items():
         if isinstance(tools, dict):
             fps[str(sid)] = {str(k): str(v) for k, v in tools.items()}
+    risks: dict[str, dict[str, str]] = {}
+    for sid, tools in (data.get("risks") or {}).items():
+        if isinstance(tools, dict):
+            risks[str(sid)] = {str(k): str(v) for k, v in tools.items()}
     spawns: dict[str, SpawnApproval] = {}
     for sid, rec in (data.get("spawn_approvals") or {}).items():
         if isinstance(rec, dict) and rec.get("command"):
@@ -63,7 +73,7 @@ def load_approvals(path: str | Path = DEFAULT_APPROVALS_PATH) -> ApprovalsFile:
                 args=[str(a) for a in (rec.get("args") or [])],
                 approved_at=str(rec.get("approved_at", "")),
             )
-    return ApprovalsFile(fingerprints=fps, spawn_approvals=spawns)
+    return ApprovalsFile(fingerprints=fps, risks=risks, spawn_approvals=spawns)
 
 
 def save_approvals(af: ApprovalsFile, path: str | Path = DEFAULT_APPROVALS_PATH) -> None:
@@ -72,6 +82,7 @@ def save_approvals(af: ApprovalsFile, path: str | Path = DEFAULT_APPROVALS_PATH)
     p.parent.mkdir(parents=True, exist_ok=True)
     payload: dict[str, Any] = {
         "fingerprints": af.fingerprints,
+        "risks": af.risks,
         "spawn_approvals": {
             sid: {
                 "command": sp.command,
@@ -90,10 +101,14 @@ def record_fingerprints(
     server_id: str,
     tool_fingerprints: dict[str, str],
     path: str | Path = DEFAULT_APPROVALS_PATH,
+    *,
+    risks: dict[str, str] | None = None,
 ) -> None:
-    """Merge ``tool_fingerprints`` into approved.json for ``server_id``."""
+    """Merge ``tool_fingerprints`` (and optional per-tool ``risks``) into approved.json."""
     af = load_approvals(path)
     af.fingerprints.setdefault(server_id, {}).update(tool_fingerprints)
+    if risks:
+        af.risks.setdefault(server_id, {}).update(risks)
     save_approvals(af, path)
 
 

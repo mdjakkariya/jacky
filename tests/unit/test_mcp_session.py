@@ -461,8 +461,8 @@ def test_sync_tools_unchanged_fingerprint_registers_tool(tmp_path: Path) -> None
     assert at["search"]["pending_reconsent"] is False
 
 
-def test_sync_tools_changed_fingerprint_blocks_and_emits_event(tmp_path: Path) -> None:
-    """Fingerprint change blocks registration and emits mcp_tool_changed event."""
+def test_sync_tools_risk_elevation_blocks_and_emits_event(tmp_path: Path) -> None:
+    """A changed fingerprint that ELEVATES risk is blocked and emits mcp_tool_changed."""
     approval_path = tmp_path / "approved.json"
     tool = _FakeTool(
         name="deploy",
@@ -470,8 +470,14 @@ def test_sync_tools_changed_fingerprint_blocks_and_emits_event(tmp_path: Path) -
         inputSchema={"type": "object", "properties": {}},
     )
     reg_name = adapter.namespaced("srv", tool.name)
-    # Pre-seed with a DIFFERENT fingerprint (rug-pull scenario)
-    record_fingerprints("srv", {reg_name: "completely_wrong_fingerprint"}, approval_path)
+    # Seed a DIFFERENT fingerprint AND a LOWER approved risk than the tool now has
+    # (server default_risk is "write", so a read_only baseline = a genuine elevation).
+    record_fingerprints(
+        "srv",
+        {reg_name: "completely_wrong_fingerprint"},
+        approval_path,
+        risks={reg_name: "read_only"},
+    )
 
     events: list[dict[str, Any]] = []
     loop = asyncio.new_event_loop()
@@ -492,6 +498,41 @@ def test_sync_tools_changed_fingerprint_blocks_and_emits_event(tmp_path: Path) -
     # all_tools entry has pending_reconsent True
     at = {t["name"]: t for t in worker.all_tools()}
     assert at["deploy"]["pending_reconsent"] is True
+
+
+def test_sync_tools_benign_change_rebaselines_and_registers(tmp_path: Path) -> None:
+    """A changed fingerprint that does NOT elevate risk is re-baselined and registered.
+
+    The common case: a server schema update, or the one-time migration when the
+    fingerprint algorithm changes and no risk was recorded. The tool must keep working,
+    not be blocked forever (the bug this fixes — GitHub's issue_read et al).
+    """
+    approval_path = tmp_path / "approved.json"
+    tool = _FakeTool(
+        name="issue_read",
+        description="Read an issue",
+        inputSchema={"type": "object", "properties": {"id": {"type": "string"}}},
+    )
+    reg_name = adapter.namespaced("srv", tool.name)
+    # Seed a stale fingerprint with NO recorded risk (pre-``risks`` file / migration).
+    record_fingerprints("srv", {reg_name: "stale_fp"}, approval_path)
+
+    events: list[dict[str, Any]] = []
+    loop = asyncio.new_event_loop()
+    try:
+        worker = _make_sync_worker(loop, approvals_path=approval_path, on_event=events.append)
+        session = _FakeSession([tool])
+        asyncio.run(worker._sync_tools(session))
+    finally:
+        loop.close()
+
+    assert reg_name in worker._registered  # re-baselined + registered, NOT blocked
+    assert not any(e.get("type") == "mcp_tool_changed" for e in events)  # benign: no block
+    loaded = load_approvals(approval_path)
+    assert loaded.fingerprints["srv"][reg_name] == adapter.fingerprint(tool)  # fp updated
+    assert loaded.risks["srv"][reg_name] == "write"  # risk recorded (server default floor)
+    at = {t["name"]: t for t in worker.all_tools()}
+    assert at["issue_read"]["pending_reconsent"] is False
 
 
 def test_sync_tools_new_tool_registers_and_writes_fingerprint(tmp_path: Path) -> None:
@@ -584,7 +625,8 @@ def test_sync_tools_mixed_scenario(tmp_path: Path) -> None:
     reg_changed = adapter.namespaced("srv", tool_changed.name)
     reg_new = adapter.namespaced("srv", tool_new.name)
 
-    # Seed: ok has matching fp; changed has wrong fp; new is absent
+    # Seed: ok has matching fp; changed has wrong fp + a LOWER risk (so its change is a
+    # genuine risk elevation -> blocked); new is absent.
     record_fingerprints(
         "srv",
         {
@@ -592,6 +634,7 @@ def test_sync_tools_mixed_scenario(tmp_path: Path) -> None:
             reg_changed: "stale_wrong_fingerprint",
         },
         approval_path,
+        risks={reg_changed: "read_only"},
     )
 
     events: list[dict[str, Any]] = []
