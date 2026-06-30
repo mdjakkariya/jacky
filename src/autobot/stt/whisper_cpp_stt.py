@@ -37,6 +37,35 @@ def _seg_text(segment: Any) -> str:
     return str(getattr(segment, "text", "") or "")
 
 
+def _seg_time(segment: Any, key_cs: str, key_s: str) -> float:
+    """Read a segment time in seconds, accepting centisecond ints (t0/t1) or seconds."""
+    if isinstance(segment, dict):
+        cs = segment.get(key_cs, None)
+        if cs is not None:
+            return float(cs) / 100.0  # whisper.cpp t0/t1 are centiseconds
+        return float(segment.get(key_s, 0.0) or 0.0)
+    cs = getattr(segment, key_cs, None)
+    if cs is not None:
+        return float(cs) / 100.0  # whisper.cpp t0/t1 are centiseconds
+    return float(getattr(segment, key_s, 0.0) or 0.0)
+
+
+def segments_from_cpp(raw: Any) -> list[Segment]:
+    """Map whisper.cpp segments to :class:`Segment`s, dropping empties."""
+    out: list[Segment] = []
+    for seg in raw or []:
+        text = _seg_text(seg).strip()
+        if text:
+            out.append(
+                Segment(
+                    text=text,
+                    start=_seg_time(seg, "t0", "start"),
+                    end=_seg_time(seg, "t1", "end"),
+                )
+            )
+    return out
+
+
 def transcription_from_segments(segments: Any) -> Transcription:
     """Join whisper.cpp segments into a :class:`Transcription`.
 
@@ -95,5 +124,25 @@ class WhisperCppSTT:
         condition_on_previous_text: bool = False,
         initial_prompt: str | None = None,
     ) -> list[Segment]:
-        """Transcribe a clip into timestamped segments; see the interface for the contract."""
-        raise NotImplementedError("transcribe_segments is not yet implemented")
+        """Long-form transcription into timestamped segments; see the interface.
+
+        The `language` parameter is accepted for :class:`~autobot.core.interfaces.SpeechToText`
+        protocol parity, but transcription is always pinned to English (``language="en"``)
+        per project constraints. Whisper.cpp's Python binding has no ``vad_filter`` or
+        ``condition_on_previous_text`` support, so those are accepted and ignored for
+        protocol parity.
+        """
+        if audio.size == 0:
+            return []
+        prompt = initial_prompt if initial_prompt is not None else (self._settings.stt_prompt or "")
+        try:
+            segments = (
+                self._model.transcribe(audio, language="en", initial_prompt=prompt)
+                if prompt
+                else self._model.transcribe(audio, language="en")
+            )
+        except TypeError:
+            segments = self._model.transcribe(audio, language="en")
+        result = segments_from_cpp(segments)
+        _log.debug("transcribe_segments engine=whisper_cpp segments=%d", len(result))
+        return result
