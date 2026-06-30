@@ -165,3 +165,35 @@ def test_move_note_registers_as_write() -> None:
     registry = ToolRegistry()
     register_notes_tools(registry, FakeRunner())
     assert registry.get("move_note").risk is Risk.WRITE  # type: ignore[union-attr]
+
+
+# --- delete_note ---------------------------------------------------------
+
+
+def test_delete_note_reports_count_and_titles() -> None:
+    runner = FakeRunner((0, "2\tPasta recipe\nCake recipe\n"))
+    tools = NotesTools(runner)
+    msg = tools.delete_note("recipe")
+    assert runner.calls[-1][-1] == "recipe"
+    assert "Pasta recipe" in msg and "Cake recipe" in msg
+    assert "2" in msg
+
+
+def test_delete_note_no_match_says_so() -> None:
+    runner = FakeRunner((0, "0\t"))
+    tools = NotesTools(runner)
+    assert "recipe" in tools.delete_note("recipe").lower()
+
+
+def test_delete_note_blank_query_asks() -> None:
+    runner = FakeRunner((0, "0\t"))
+    tools = NotesTools(runner)
+    msg = tools.delete_note("   ")
+    assert "?" in msg
+    assert runner.calls == []
+
+
+def test_delete_note_registers_as_destructive() -> None:
+    registry = ToolRegistry()
+    register_notes_tools(registry, FakeRunner())
+    assert registry.get("delete_note").risk is Risk.DESTRUCTIVE  # type: ignore[union-attr]

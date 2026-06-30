@@ -133,6 +133,28 @@ _MOVE = (
     "end run"
 )
 
+# Delete every note whose name contains argv[1]. References are captured into `ns`
+# first, then deleted, so the collection isn't mutated mid-iteration. Returns
+# count TAB (one deleted title per line).
+_DELETE = (
+    "on run argv\n"
+    "set theQuery to item 1 of argv\n"
+    'set out to ""\n'
+    "set cnt to 0\n"
+    'tell application "Notes"\n'
+    "set ns to (notes whose name contains theQuery)\n"
+    "repeat with n in ns\n"
+    "set out to out & (name of n) & linefeed\n"
+    "set cnt to cnt + 1\n"
+    "end repeat\n"
+    "repeat with n in ns\n"
+    "delete n\n"
+    "end repeat\n"
+    "end tell\n"
+    "return (cnt as string) & tab & out\n"
+    "end run"
+)
+
 # List folder names in the default account, one per line.
 _FOLDERS = (
     "on run argv\n"
@@ -268,6 +290,24 @@ class NotesTools:
         if created:
             return f"Moved “{name}” into a new folder “{fld}”."
         return f"Moved “{name}” to “{fld}”."
+
+    def delete_note(self, query: str) -> str:
+        """Delete every note whose title contains ``query`` (matches reported back)."""
+        q = (query or "").strip()
+        if not q:
+            return "Which notes would you like me to delete?"
+        rc, out = self._run(["osascript", "-e", _DELETE, q])
+        if rc != 0:
+            return self._fail(out, f"I couldn't delete notes matching “{q}”")
+        _, _, rest = out.partition("\t")
+        titles = [ln.strip() for ln in rest.splitlines() if ln.strip()]
+        count = len(titles)
+        _log.info("notes deleted count=%d query=%r", count, q)
+        if count == 0:
+            return f"No notes match “{q}”, so I didn't delete anything."
+        listed = ", ".join(f"“{t}”" for t in titles)
+        plural = "note" if count == 1 else "notes"
+        return f"Deleted {count} {plural}: {listed}."
 
     def list_folders(self) -> str:
         """List the user's Notes folders."""
@@ -409,6 +449,36 @@ class NotesTools:
                 risk=Risk.READ_ONLY,
                 requires=AUTOMATION,
                 ack="Checking your folders.",
+            ),
+            ToolSpec(
+                name="delete_note",
+                description=(
+                    "Permanently delete notes from the macOS Notes app whose title "
+                    "contains `query` (they go to Recently Deleted). Destructive — the "
+                    "user is asked to confirm first. Cues: 'delete my <name> note', "
+                    "'clean up my <X> notes', 'get rid of the notes about Y'. IMPORTANT: "
+                    "this can match MULTIPLE notes at once. Before calling it, call "
+                    "list_notes with the same words and tell the user exactly which note "
+                    "titles match, and only delete after they agree. For 'stale/old' "
+                    "notes, use the modified dates from list_notes to decide which."
+                ),
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "query": {
+                            "type": "string",
+                            "description": "Title words; every note containing them is deleted.",
+                        }
+                    },
+                    "required": ["query"],
+                },
+                handler=self.delete_note,
+                risk=Risk.DESTRUCTIVE,
+                requires=AUTOMATION,
+                confirm_prompt=(
+                    "🗑️ Permanently delete the matching notes? They go to Recently Deleted."
+                ),
+                ack="Deleting those notes.",
             ),
         ]
 
