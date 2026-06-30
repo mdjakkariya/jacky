@@ -134,3 +134,34 @@ def test_read_tools_register_as_read_only() -> None:
     assert registry.get("list_notes").risk is Risk.READ_ONLY  # type: ignore[union-attr]
     assert registry.get("read_note").risk is Risk.READ_ONLY  # type: ignore[union-attr]
     assert registry.get("list_folders").risk is Risk.READ_ONLY  # type: ignore[union-attr]
+
+
+# --- move_note -----------------------------------------------------------
+
+
+def test_move_note_existing_folder() -> None:
+    runner = FakeRunner((0, "OK\tno"))  # createdFolder = "no"
+    tools = NotesTools(runner)
+    msg = tools.move_note("pasta recipe", "Recipes")
+    assert runner.calls[-1][-2:] == ["pasta recipe", "Recipes"]
+    assert "Recipes" in msg
+    assert "new folder" not in msg.lower()
+
+
+def test_move_note_creates_folder_is_announced() -> None:
+    runner = FakeRunner((0, "OK\tyes"))  # createdFolder = "yes"
+    tools = NotesTools(runner)
+    msg = tools.move_note("pasta recipe", "Recipes")
+    assert "new folder" in msg.lower() and "Recipes" in msg
+
+
+def test_move_note_missing_note_says_so() -> None:
+    runner = FakeRunner((0, "NONE"))
+    tools = NotesTools(runner)
+    assert "pasta recipe" in tools.move_note("pasta recipe", "Recipes").lower()
+
+
+def test_move_note_registers_as_write() -> None:
+    registry = ToolRegistry()
+    register_notes_tools(registry, FakeRunner())
+    assert registry.get("move_note").risk is Risk.WRITE  # type: ignore[union-attr]

@@ -112,6 +112,27 @@ _READ = (
     "end run"
 )
 
+# Move the first note named argv[1] into folder argv[2], creating the folder if
+# absent. Returns "NONE" if no such note, else "OK" TAB ("yes"|"no") where the flag
+# says whether the folder was newly created.
+_MOVE = (
+    "on run argv\n"
+    "set theName to item 1 of argv\n"
+    "set theFolder to item 2 of argv\n"
+    'tell application "Notes"\n'
+    "set ns to (notes whose name is theName)\n"
+    'if ns is {} then return "NONE"\n'
+    'set createdFolder to "no"\n'
+    "if not (exists folder theFolder) then\n"
+    "make new folder with properties {name:theFolder}\n"
+    'set createdFolder to "yes"\n'
+    "end if\n"
+    "move (item 1 of ns) to folder theFolder\n"
+    'return "OK" & tab & createdFolder\n'
+    "end tell\n"
+    "end run"
+)
+
 # List folder names in the default account, one per line.
 _FOLDERS = (
     "on run argv\n"
@@ -231,6 +252,23 @@ class NotesTools:
         _log.info("note read title=%r", name)
         return out.strip()
 
+    def move_note(self, title: str, folder: str) -> str:
+        """Move the note named ``title`` into ``folder`` (creating it if needed)."""
+        name = (title or "").strip()
+        fld = (folder or "").strip()
+        if not name or not fld:
+            return "Tell me which note to move and which folder to put it in."
+        rc, out = self._run(["osascript", "-e", _MOVE, name, fld])
+        if rc != 0:
+            return self._fail(out, f"I couldn't move the note “{name}”")
+        if out.strip() == "NONE":
+            return f"I don't see a note called “{name}”."
+        created = out.partition("\t")[2].strip() == "yes"
+        _log.info("note moved title=%r folder=%r new_folder=%s", name, fld, created)
+        if created:
+            return f"Moved “{name}” into a new folder “{fld}”."
+        return f"Moved “{name}” to “{fld}”."
+
     def list_folders(self) -> str:
         """List the user's Notes folders."""
         rc, out = self._run(["osascript", "-e", _FOLDERS])
@@ -330,6 +368,34 @@ class NotesTools:
                 risk=Risk.READ_ONLY,
                 requires=AUTOMATION,
                 ack="Reading that note.",
+            ),
+            ToolSpec(
+                name="move_note",
+                description=(
+                    "Move a note into a folder in the macOS Notes app, creating the "
+                    "folder if it doesn't exist. Cues: 'move my <name> note to <folder>', "
+                    "'file the <name> note under <folder>', 'organize … into …'. Matches "
+                    "the note whose name is `title`. To move several notes, call this once "
+                    "per note (use list_notes first to find them)."
+                ),
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "title": {
+                            "type": "string",
+                            "description": "The note's name to move.",
+                        },
+                        "folder": {
+                            "type": "string",
+                            "description": "Destination folder name (created if missing).",
+                        },
+                    },
+                    "required": ["title", "folder"],
+                },
+                handler=self.move_note,
+                risk=Risk.WRITE,
+                requires=AUTOMATION,
+                ack="Moving that note.",
             ),
             ToolSpec(
                 name="list_folders",
