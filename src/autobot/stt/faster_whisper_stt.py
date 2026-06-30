@@ -96,7 +96,12 @@ class FasterWhisperSTT:
         condition_on_previous_text: bool = False,
         initial_prompt: str | None = None,
     ) -> list[Segment]:
-        """Long-form transcription into timestamped segments; see the interface."""
+        """Long-form transcription into timestamped segments; see the interface.
+
+        The ``language`` parameter is accepted for :class:`SpeechToText` protocol
+        parity but is always pinned to English regardless of the argument value
+        (English-only is a project constraint; see module docstring).
+        """
         if audio.size == 0:
             return []
         prompt = initial_prompt if initial_prompt is not None else self._settings.stt_prompt or None
