@@ -105,11 +105,11 @@
 <section class="strip" id="privacy"><div class="wrap">
   <p class="eyebrow">Privacy by design</p>
   <h2>Nothing leaves your machine</h2>
-  <p class="lead">Everything runs locally on your Mac. The only two off-device features are opt-in, off by default, and clearly disclosed.</p>
+  <p class="lead">Everything runs locally on your Mac. The few off-device features are opt-in, off by default, and clearly disclosed — and every off-device send is shown and confirmed first.</p>
   <div class="three">
     <div class="c"><div class="ic"><svg class="ico" viewBox="0 0 24 24"><path d="M3 11l9-7 9 7M5 10v10h14V10"/></svg></div><h3>Runs locally</h3><p>Speech, the language model (Ollama), memory and actions all run on-device. No cloud account needed.</p></div>
     <div class="c"><div class="ic"><svg class="ico" viewBox="0 0 24 24"><path d="M12 3l8 3v6c0 5-3.5 8-8 9-4.5-1-8-4-8-9V6z"/><path d="M9 12l2 2 4-4"/></svg></div><h3>Permission gate</h3><p>Every action is risk-classified. Read-only runs through; destructive asks first; all of it is audited.</p></div>
-    <div class="c"><div class="ic"><svg class="ico" viewBox="0 0 24 24"><path d="M17 18a4 4 0 0 0 0-8 6 6 0 0 0-11.6 2A3.5 3.5 0 0 0 6 18z"/></svg></div><h3>Two opt-in exceptions</h3><p>Web search sends only the query; optional Claude cloud mode sends the conversation — never audio, never actions.</p></div>
+    <div class="c"><div class="ic"><svg class="ico" viewBox="0 0 24 24"><path d="M17 18a4 4 0 0 0 0-8 6 6 0 0 0-11.6 2A3.5 3.5 0 0 0 6 18z"/></svg></div><h3>Opt-in exceptions</h3><p>Each off by default and disclosed: web search sends only the query, optional Claude cloud mode sends the conversation, and remote MCP servers you connect send their requests. Never audio, never actions you didn’t approve.</p></div>
   </div>
 </div></section>
 
@@ -123,6 +123,7 @@
     <div class="feat"><div class="ic"><svg class="ico" viewBox="0 0 24 24"><path d="M12 3l8 3v6c0 5-3.5 8-8 9-4.5-1-8-4-8-9V6z"/></svg></div><h3>Acts through tools</h3><p>The model plans; the permission gate executes. It never runs an action blindly — and it’s audited.</p></div>
     <div class="feat"><div class="ic"><svg class="ico" viewBox="0 0 24 24"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg></div><h3>System &amp; memory</h3><p>Check battery, Wi-Fi and disk. Remembers your name and preferences — stored locally.</p></div>
     <div class="feat"><div class="ic"><svg class="ico" viewBox="0 0 24 24"><rect x="6" y="6" width="12" height="12" rx="2"/><path d="M9 2v2M15 2v2M9 20v2M15 20v2M2 9h2M2 15h2M20 9h2M20 15h2"/></svg></div><h3>Local or cloud LLM</h3><p>Fully local on Ollama by default, or switch to Claude. Your choice, clearly disclosed.</p></div>
+    <div class="feat"><div class="ic"><svg class="ico" viewBox="0 0 24 24"><path d="M9 2v6M15 2v6M7 8h10v3a5 5 0 0 1-10 0zM12 16v6"/></svg></div><h3>Connect MCP servers</h3><p>Plug in GitHub, Notion, Slack and more over the Model Context Protocol. Their tools run through the same permission gate — local servers stay on-device; remote ones are disclosed and confirmed.</p></div>
   </div>
 </div></section>
 
@@ -136,7 +137,7 @@
     <span class="arrow"><svg class="ico" viewBox="0 0 24 24"><path d="M5 12h14m0 0l-5-5m5 5l-5 5"/></svg></span>
     <div class="node"><div class="k">Gate</div><div class="v">Permission check<small>risk · confirm · audit</small></div></div>
     <span class="arrow"><svg class="ico" viewBox="0 0 24 24"><path d="M5 12h14m0 0l-5-5m5 5l-5 5"/></svg></span>
-    <div class="node"><div class="k">Act</div><div class="v">Tools &amp; reply<small>apps · files · speech</small></div></div>
+    <div class="node"><div class="k">Act</div><div class="v">Tools &amp; reply<small>apps · files · MCP · speech</small></div></div>
   </div>
   <p class="boundary">— all of this happens on your Mac —</p>
 </div></section>
