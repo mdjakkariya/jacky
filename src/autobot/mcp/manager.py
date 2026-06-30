@@ -123,6 +123,15 @@ class McpManager:
                 # best-effort: cancel() interrupts a waiting Future but cannot stop a
                 # running coroutine; the real shutdown path is the loop.stop() in shutdown().
                 future.cancel()
+            except KeyboardInterrupt:
+                # A repeated Ctrl+C landed inside this blocking wait. KeyboardInterrupt
+                # is a BaseException (NOT caught by ``except Exception`` below), so
+                # without this clause it would escape and crash the daemon mid-shutdown
+                # with a traceback. Cancel the wait and continue — we are already exiting.
+                _log.warning(
+                    "mcp shutdown interrupted server=%s; cancelling and continuing", server_id
+                )
+                future.cancel()
             except Exception:  # an unexpected worker error must not break shutdown
                 _log.exception("mcp worker raised on disconnect server=%s", server_id)
                 # best-effort: cancel() interrupts a waiting Future but cannot stop a
@@ -134,10 +143,18 @@ class McpManager:
 
         Safe before ``start()`` and across restart cycles: the loop is closed so its
         file descriptors / executor are released, and a later ``start()`` builds a
-        fresh one (so a reloadable manager can stop and restart cleanly).
+        fresh one (so a reloadable manager can stop and restart cleanly). Resilient to a
+        repeated Ctrl+C: every blocking wait tolerates ``KeyboardInterrupt`` so an
+        impatient second interrupt hurries cleanup along instead of crashing it.
         """
         with self._lock:
+            workers = list(self._workers.values())
             server_ids = list(self._workers)
+        # Signal every worker FIRST so their transports tear down concurrently; otherwise
+        # each disconnect's wait serializes (up to timeout x N servers) — the slowness
+        # that tempts an impatient second Ctrl+C in the first place.
+        for worker in workers:
+            worker.request_shutdown()
         for server_id in server_ids:
             self.disconnect(server_id, timeout=timeout)
         with self._lock:
@@ -146,7 +163,10 @@ class McpManager:
             if loop is not None:
                 loop.call_soon_threadsafe(loop.stop)
         if thread is not None:
-            thread.join(timeout=timeout)
+            try:
+                thread.join(timeout=timeout)
+            except KeyboardInterrupt:
+                _log.warning("mcp shutdown interrupted while stopping the loop thread; continuing")
         with self._lock:
             if loop is not None and not loop.is_closed():
                 loop.close()

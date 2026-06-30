@@ -36,6 +36,45 @@ def test_shutdown_without_start_is_noop() -> None:
     McpManager({}, ToolRegistry()).shutdown()  # no exception
 
 
+def test_shutdown_tolerates_keyboardinterrupt_during_worker_wait() -> None:
+    """A second Ctrl+C landing in the blocking worker-wait must not crash shutdown.
+
+    Reproduces the daemon crash: a repeated SIGINT interrupts ``future.result()``
+    mid-shutdown, raising ``KeyboardInterrupt`` (a ``BaseException``, not caught by
+    ``except Exception``). Shutdown must instead cancel that wait and complete cleanly.
+    """
+
+    class _KIFuture:
+        def __init__(self) -> None:
+            self.cancelled = False
+
+        def result(self, timeout: float | None = None) -> None:
+            raise KeyboardInterrupt
+
+        def cancel(self) -> bool:
+            self.cancelled = True
+            return True
+
+    class _FakeWorker:
+        def __init__(self) -> None:
+            self.shutdown_requested = False
+
+        def request_shutdown(self) -> None:
+            self.shutdown_requested = True
+
+    mgr = McpManager({}, ToolRegistry())
+    fut = _KIFuture()
+    worker = _FakeWorker()
+    mgr._workers["x"] = worker  # type: ignore[assignment]
+    mgr._futures["x"] = fut  # type: ignore[assignment]
+
+    mgr.shutdown(timeout=0.1)  # must NOT propagate KeyboardInterrupt
+
+    assert worker.shutdown_requested is True  # worker was signalled
+    assert fut.cancelled is True  # the interrupted wait was cancelled
+    assert mgr._workers == {}  # workers drained — cleanup completed
+
+
 def test_connect_bad_server_degrades_to_error_without_crashing() -> None:
     reg = ToolRegistry()
     mgr = McpManager({"bad": _cfg("bad", enabled=True)}, reg)

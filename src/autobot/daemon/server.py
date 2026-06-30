@@ -617,7 +617,12 @@ def run_daemon(
             uvicorn.run(app, host=host, port=port, log_level="warning", lifespan="off")
     finally:
         if mcp_provider is not None:
-            mcp_provider.shutdown()
+            # Suppress a stray Ctrl+C during MCP teardown so the daemon still exits
+            # cleanly (reaching the "stopped" line) instead of dumping a traceback.
+            # The manager already tolerates KeyboardInterrupt internally; this is the
+            # last-resort guard for any wait it doesn't cover.
+            with contextlib.suppress(KeyboardInterrupt):
+                mcp_provider.shutdown()
     print("\n[daemon] stopped.")
 
 
