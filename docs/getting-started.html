@@ -45,6 +45,7 @@
     <a href="#config">Configuration</a>
     <a href="#permissions">Permissions</a>
     <a href="#web">Web search</a>
+    <a href="#mcp">Connect tools (MCP)</a>
     <a href="#source">Build from source</a>
     <a href="#debug">Logs &amp; debugging</a>
     <a href="#troubleshooting">Troubleshooting</a>
@@ -52,7 +53,7 @@
 
   <article class="article">
     <h1>Getting started</h1>
-    <p class="intro">Jack is a privacy-first, on-device voice &amp; chat assistant for macOS. Everything runs locally — no audio, text, or memory leaves your machine, except two opt-in, clearly-disclosed features (web search and an optional cloud LLM).</p>
+    <p class="intro">Jack is a privacy-first, on-device voice &amp; chat assistant for macOS. Everything runs locally — no audio, text, or memory leaves your machine, except a few opt-in, clearly-disclosed features (web search, an optional cloud LLM, and any remote MCP servers you connect).</p>
 
     <h2 id="install">Install</h2>
     <p>Grab the latest <code>.dmg</code> from <a class="ln" href="https://github.com/mdjakkariya/jacky/releases">GitHub Releases</a> — a single, self-contained app (the orb + chat drawer plus the embedded engine). Voice models download on demand the first time you enable voice, so the app stays small. Drag <b>Jack</b> to Applications.</p>
@@ -107,6 +108,16 @@
 
     <h2 id="web">Web search (optional, off-device)</h2>
     <p>Off by default. When enabled, it sends only your search <i>query</i> to a provider; the local LLM summarizes the results. Enable it with <code>"allow_web": true</code> in settings (or the Settings → Capabilities toggle).</p>
+
+    <h2 id="mcp">Connect tools (MCP)</h2>
+    <p>Jack speaks the <a class="ln" href="https://modelcontextprotocol.io">Model Context Protocol</a>, so you can extend it with external tool servers — GitHub, Notion, Slack, a local filesystem server, or your own. Their tools show up alongside Jack’s built-ins and run through the same permission gate. MCP is off until you turn it on.</p>
+    <p><b>Add one</b> in Settings → <b>Connections</b>: pick a server from the catalog (or add a custom one), choose how it connects — <b>local</b> (a stdio process on your Mac) or <b>remote</b> (an HTTP server) — and sign in with <b>OAuth</b> or paste an <b>access token</b>. Tokens go in the macOS Keychain, never on disk.</p>
+    <ul>
+      <li><b>On-device vs. off-device</b> — local (stdio) servers run entirely on your Mac. Remote servers send their requests off-device, so they’re marked with a ↗ badge, listed in Settings → <b>Privacy</b>, and a write to one asks before it sends.</li>
+      <li><b>Per-tool control</b> — the connection detail lists every tool with its risk; switch off any you don’t want Jack to use. If a connected tool’s definition later changes in a way that raises its risk, Jack holds it for your re-consent.</li>
+      <li><b>Stays fast</b> — Jack advertises only the tools relevant to your request, so connecting several servers doesn’t bloat the prompt or slow a simple ask.</li>
+    </ul>
+    <p>Server definitions live in <code>~/.autobot/mcp/servers.json</code> (config only — secrets stay in the Keychain). Enable MCP and manage connections from Settings → Connections.</p>
 
     <h2 id="source">Build from source</h2>
     <p>For developers on Apple Silicon (tested on MacBook Air M2, macOS 15): install <a class="ln" href="https://docs.astral.sh/uv/">uv</a> and Ollama, then:</p>
