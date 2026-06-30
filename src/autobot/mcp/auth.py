@@ -29,9 +29,13 @@ import webbrowser
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any, cast
 
+from autobot.logging_setup import get_logger
+
 if TYPE_CHECKING:
     from autobot.mcp.config import McpServerConfig
     from autobot.secrets import Runner
+
+_log = get_logger("mcp")
 
 
 def stdio_env_for(
@@ -126,11 +130,22 @@ class KeychainTokenStorage:
 
         raw = get_secret(self._token_key, self._runner)
         if raw is None:
+            _log.info("oauth token absent in keychain key=%s", self._token_key)
             return None
         try:
-            return cast(object, OAuthToken.model_validate(json.loads(raw)))
+            tok = OAuthToken.model_validate(json.loads(raw))
         except Exception:
+            _log.warning("oauth token in keychain unparseable key=%s", self._token_key)
             return None
+        # Lifecycle seam: a present refresh_token + finite expires_in means the SDK
+        # should refresh silently rather than re-authorize. No token VALUES are logged.
+        _log.info(
+            "oauth token loaded key=%s has_refresh=%s expires_in=%s",
+            self._token_key,
+            bool(getattr(tok, "refresh_token", None)),
+            getattr(tok, "expires_in", None),
+        )
+        return cast(object, tok)
 
     async def set_tokens(self, tokens: object) -> None:
         """Persist an OAuthToken to the Keychain as JSON.
@@ -146,6 +161,14 @@ class KeychainTokenStorage:
 
         raw = tokens.model_dump_json()  # type: ignore[attr-defined]
         set_secret(self._token_key, raw, self._runner)
+        # A persist after a "token loaded (expired)" means a refresh succeeded (silent,
+        # no browser). If a browser redirect happens with no persist in between, the
+        # refresh path failed. Value never logged — only presence of a refresh token.
+        _log.info(
+            "oauth token persisted key=%s has_refresh=%s",
+            self._token_key,
+            bool(getattr(tokens, "refresh_token", None)),
+        )
 
     async def get_client_info(self) -> object | None:
         """Return the stored OAuthClientInformationFull, or None.
@@ -162,6 +185,7 @@ class KeychainTokenStorage:
         if self._client_id is not None:
             from mcp.shared.auth import OAuthClientInformationFull  # lazy
 
+            _log.info("oauth client pre-registered (skipping DCR) key=%s", self._client_key)
             # OAuthClientInformationFull.redirect_uris expects list[AnyUrl]; cast to Any
             # so mypy doesn't reject the plain string — pydantic coerces it at runtime.
             redirect_uris_any: Any = [self._redirect_uri]
@@ -186,11 +210,15 @@ class KeychainTokenStorage:
 
         raw = get_secret(self._client_key, self._runner)
         if raw is None:
+            _log.info("oauth client info absent key=%s — will register new", self._client_key)
             return None
         try:
-            return cast(object, OAuthClientInformationFull.model_validate(json.loads(raw)))
+            info = OAuthClientInformationFull.model_validate(json.loads(raw))
         except Exception:
+            _log.warning("oauth client info in keychain unparseable key=%s", self._client_key)
             return None
+        _log.info("oauth client info loaded key=%s", self._client_key)
+        return cast(object, info)
 
     async def set_client_info(self, info: object) -> None:
         """Persist OAuthClientInformationFull to the Keychain.
