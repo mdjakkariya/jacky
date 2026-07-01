@@ -59,13 +59,22 @@ class _StreamWriter:
         self._paused.clear()
 
     def stop(self) -> None:
-        """Signal stop, close the source, join the thread, and close the writer."""
+        """Signal stop, close the source, and join the thread.
+
+        The writer is closed by ``_run``'s ``finally`` block on thread exit.
+        If the join times out the WAV header is repaired by ``_finalize`` before
+        reading, so the file is still recoverable.
+        """
         self._stopped.set()
         close = getattr(self._source, "close", None)
         if callable(close):
             close()
         self._thread.join(timeout=3)
-        self._writer.close()
+        if self._thread.is_alive():
+            _log.warning(
+                "writer thread did not stop in time path=%s; WAV header will be repaired on read",
+                self._writer,
+            )
 
     def recorded_s(self) -> float:
         """Return recorded audio duration in seconds."""

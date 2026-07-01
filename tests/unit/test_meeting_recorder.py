@@ -208,3 +208,84 @@ def test_resummarize_no_meetings(tmp_path: Path) -> None:
     )
     result = rec.resummarize(None)
     assert "no meeting" in result.lower()
+
+
+def test_resummarize_without_transcript_rebuilds_from_wavs(tmp_path: Path) -> None:
+    """Resummarize rebuilds transcript.md from WAVs when transcript.md is absent."""
+    rec = _recorder(tmp_path, far_ok=True)
+
+    # Run a full meeting (keep_audio=True so WAVs are preserved)
+    rec.start("Design Review")
+    rec.stop()
+
+    meetings = list(Path(tmp_path).iterdir())
+    assert meetings, "no meeting folder created"
+    meeting_dir = meetings[0]
+    meeting_id = meeting_dir.name
+
+    # Delete transcript.md to force the WAV-rebuild path
+    transcript_path = meeting_dir / "transcript.md"
+    assert transcript_path.exists(), "transcript.md should exist after stop()"
+    transcript_path.unlink()
+    assert not transcript_path.exists()
+
+    result = rec.resummarize(meeting_id)
+    assert "rebuilt" in result.lower() or meeting_id in result
+
+    # Both transcript.md and minutes.md must exist after rebuilding
+    assert transcript_path.exists(), "transcript.md should be rebuilt from WAVs"
+    assert (meeting_dir / "minutes.md").exists(), "minutes.md should be written"
+
+
+def test_finalize_interrupted_recovers_recording_state(tmp_path: Path) -> None:
+    """finalize_interrupted() recovers a meeting left mid-flight (state='recording')."""
+    store = MeetingStore(str(tmp_path))
+    tr = MeetingTranscriber(cast("object", _FakeSTT()), chunk_s=30.0, overlap_s=3.0, stt_prompt="")  # type: ignore[arg-type]
+
+    # Manually create a meeting folder that looks like it was interrupted mid-recording
+    from autobot.meeting.wav import WavWriter
+
+    meeting_id = "2026-01-01-1200-interrupted"
+    meeting_dir = Path(tmp_path) / meeting_id
+    meeting_dir.mkdir()
+
+    # Write a minimal near.wav so the transcriber has something to read
+    near_wav_path = str(meeting_dir / "near.wav")
+    writer = WavWriter(near_wav_path)
+    import numpy as np
+
+    writer.append(np.full(512, 0.05, dtype=np.float32))
+    writer.close()
+
+    # Write a manifest in state="recording" (simulates a crash)
+    manifest_data = {
+        "id": meeting_id,
+        "title": "Interrupted Meeting",
+        "started_at": "2026-01-01T12:00:00",
+        "state": "recording",
+        "mic_only": True,
+        "far_stream": {"status": "unavailable"},
+        "pauses": [],
+    }
+    paths = store._paths(meeting_id)
+    store.write_manifest(paths, manifest_data)
+
+    # Build a fresh recorder — simulates a restart after crash
+    rec = MeetingRecorder(
+        store,
+        tr,
+        _fake_summarizer(),
+        near_branch_factory=lambda: _FakeBranch(0),
+        far_source_factory=lambda: _FakeFar(0),
+        keep_audio=True,
+    )
+
+    recovered = rec.finalize_interrupted()
+    assert meeting_id in recovered, "meeting should be recovered"
+
+    # Manifest must now be state="done"
+    manifest = store.read_manifest(str(meeting_dir))
+    assert manifest.get("state") == "done", f"expected state=done, got {manifest.get('state')}"
+
+    # minutes.md must exist
+    assert (meeting_dir / "minutes.md").exists(), "minutes.md should be written after recovery"
