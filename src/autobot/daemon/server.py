@@ -616,10 +616,25 @@ def create_app(
     app.add_api_route("/session/new", post_new_session, methods=["POST"])
     app.add_api_route("/voice/status", get_voice_status, methods=["GET"])
     app.add_api_route("/voice/download", post_voice_download, methods=["POST"])
-    app.add_api_route("/meeting/start", lambda r: post_meeting("start", r), methods=["POST"])
-    app.add_api_route("/meeting/stop", lambda r: post_meeting("stop", r), methods=["POST"])
-    app.add_api_route("/meeting/pause", lambda r: post_meeting("pause", r), methods=["POST"])
-    app.add_api_route("/meeting/resume", lambda r: post_meeting("resume", r), methods=["POST"])
+
+    # Named, Request-typed handlers (NOT `lambda r: ...` — an untyped lambda param
+    # makes FastAPI treat `r` as a required query param and 422 every POST).
+    async def _post_meeting_start(request: Request) -> dict[str, Any]:
+        return await post_meeting("start", request)
+
+    async def _post_meeting_stop(request: Request) -> dict[str, Any]:
+        return await post_meeting("stop", request)
+
+    async def _post_meeting_pause(request: Request) -> dict[str, Any]:
+        return await post_meeting("pause", request)
+
+    async def _post_meeting_resume(request: Request) -> dict[str, Any]:
+        return await post_meeting("resume", request)
+
+    app.add_api_route("/meeting/start", _post_meeting_start, methods=["POST"])
+    app.add_api_route("/meeting/stop", _post_meeting_stop, methods=["POST"])
+    app.add_api_route("/meeting/pause", _post_meeting_pause, methods=["POST"])
+    app.add_api_route("/meeting/resume", _post_meeting_resume, methods=["POST"])
     app.add_api_route("/meeting/status", get_meeting_status, methods=["GET"])
     app.add_api_route("/meeting/list", get_meeting_list, methods=["GET"])
     app.add_api_route("/meeting/last", get_meeting_last, methods=["GET"])
