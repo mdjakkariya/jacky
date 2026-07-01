@@ -5,7 +5,6 @@ import { daemon } from "../../lib/daemon.js";
 import { copyText } from "../../lib/clipboard.js";
 
 // ── SVG snippets (inline; no external assets) ──────────────────────────────
-const SVG_MIC = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2a3 3 0 0 0-3 3v6a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3z"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></svg>';
 const SVG_WARN = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"/><path d="M12 9v4M12 17h.01"/></svg>';
 const SVG_FILE = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14 3v4a1 1 0 0 0 1 1h4"/><path d="M5 3h9l5 5v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2z"/></svg>';
 const SVG_FOLDER = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>';
@@ -316,7 +315,11 @@ export function renderMinutes(log, r) {
   const loc = document.createElement("span"); loc.className = "loc";
   loc.innerHTML = SVG_FOLDER;
   const crumb = document.createElement("span"); crumb.className = "crumb";
-  crumb.innerHTML = "Meetings<i>›</i>" + (title || "Meeting");
+  crumb.textContent = "Meetings";
+  const _sep = document.createElement("i");
+  _sep.textContent = "›";
+  crumb.appendChild(_sep);
+  crumb.appendChild(document.createTextNode(title || "Meeting"));
   const ext = document.createElement("span"); ext.className = "ext";
   ext.textContent = "minutes.md";
   loc.appendChild(crumb);
@@ -456,10 +459,8 @@ export function renderMeeting(log, m) {
   if (state === "recording" || state === "paused") {
     const card = getOrCreateRecCard(log, m);
     updateRecCard(card, m);
-    // Start/continue the timer only if not already running and not paused
-    if (card._mtgTimerId == null) {
-      startTimer(card, m.elapsed_s || 0);
-    }
+    // Re-seed the timer from server elapsed_s on each event
+    startTimer(card, Math.floor(m.elapsed_s || 0));
     return;
   }
 
@@ -482,7 +483,7 @@ export function renderMeeting(log, m) {
 
     daemon.meetingLast().then((r) => {
       if (r && r.ok) renderMinutes(log, r);
-    });
+    }).catch(() => {});
     return;
   }
 
