@@ -35,6 +35,7 @@ UNKNOWN = "unknown"
 MICROPHONE = "microphone"
 ACCESSIBILITY = "accessibility"
 AUTOMATION = "automation"
+AUDIO_CAPTURE = "audio_capture"
 
 # Bundle IDs Jack sends Apple Events to (for the native Automation check). Only the
 # ones present on the machine matter; missing apps are skipped.
@@ -52,16 +53,19 @@ _PANE = {
     MICROPHONE: _PRIVACY + "Microphone",
     ACCESSIBILITY: _PRIVACY + "Accessibility",
     AUTOMATION: _PRIVACY + "Automation",
+    AUDIO_CAPTURE: _PRIVACY + "ScreenCapture",
 }
 _LABEL = {
     MICROPHONE: "Microphone",
     ACCESSIBILITY: "Accessibility",
     AUTOMATION: "Automation",
+    AUDIO_CAPTURE: "Audio Capture",
 }
 _WHY = {
     MICROPHONE: "Needed for Jack to hear you.",
     ACCESSIBILITY: "Lets Jack show, hide, minimize, and list your app windows.",
     AUTOMATION: "Lets Jack control apps — close browser tabs, quit apps, empty the Trash.",
+    AUDIO_CAPTURE: "Lets Jack capture the other participants' audio during a meeting.",
 }
 
 # Runtime overrides learned from actual tool outcomes (e.g. a -1743 denial). Wins
