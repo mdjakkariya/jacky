@@ -237,6 +237,37 @@ def test_resummarize_without_transcript_rebuilds_from_wavs(tmp_path: Path) -> No
     assert (meeting_dir / "minutes.md").exists(), "minutes.md should be written"
 
 
+def test_near_source_close_called_after_stop(tmp_path: Path) -> None:
+    """The near-branch source's close() is called when the meeting stops (mic released)."""
+    store = MeetingStore(str(tmp_path))
+    tr = MeetingTranscriber(cast("object", _FakeSTT()), chunk_s=30.0, overlap_s=3.0, stt_prompt="")  # type: ignore[arg-type]
+
+    close_called = False
+
+    class _TrackingBranch:
+        """Fake branch that tracks whether close() was called."""
+
+        def frames(self):  # type: ignore[no-untyped-def]
+            yield from [np.full(512, 0.1, dtype=np.float32) for _ in range(4)]
+
+        def close(self) -> None:
+            nonlocal close_called
+            close_called = True
+
+    rec = MeetingRecorder(
+        store,
+        tr,
+        _fake_summarizer(),
+        near_branch_factory=lambda: _TrackingBranch(),
+        far_source_factory=lambda: _FakeFar(4),
+        keep_audio=True,
+    )
+    rec.start("CloseTest")
+    rec.stop()
+
+    assert close_called, "near source's close() must be called after meeting stop (mic released)"
+
+
 def test_finalize_interrupted_recovers_recording_state(tmp_path: Path) -> None:
     """finalize_interrupted() recovers a meeting left mid-flight (state='recording')."""
     store = MeetingStore(str(tmp_path))
@@ -289,3 +320,64 @@ def test_finalize_interrupted_recovers_recording_state(tmp_path: Path) -> None:
 
     # minutes.md must exist
     assert (meeting_dir / "minutes.md").exists(), "minutes.md should be written after recovery"
+
+
+def test_finalize_interrupted_terminal_on_summarizer_failure(tmp_path: Path) -> None:
+    """finalize_interrupted() marks state=done even when the summarizer raises.
+
+    This ensures a crashed meeting is never re-processed on subsequent startups
+    (no infinite retry when the LLM is offline at startup time).
+    """
+    store = MeetingStore(str(tmp_path))
+    tr = MeetingTranscriber(cast("object", _FakeSTT()), chunk_s=30.0, overlap_s=3.0, stt_prompt="")  # type: ignore[arg-type]
+
+    def _raising_complete(prompt: str) -> str:
+        raise RuntimeError("LLM offline")
+
+    failing_summarizer = MeetingSummarizer(complete=_raising_complete, max_chars=8000)
+
+    from autobot.meeting.wav import WavWriter
+
+    meeting_id = "2026-01-01-1300-summarizer-fail"
+    meeting_dir = Path(tmp_path) / meeting_id
+    meeting_dir.mkdir()
+
+    near_wav_path = str(meeting_dir / "near.wav")
+    writer = WavWriter(near_wav_path)
+    writer.append(np.full(512, 0.05, dtype=np.float32))
+    writer.close()
+
+    manifest_data = {
+        "id": meeting_id,
+        "title": "SummaryFail Meeting",
+        "started_at": "2026-01-01T13:00:00",
+        "state": "recording",
+        "mic_only": True,
+        "far_stream": {"status": "unavailable"},
+        "pauses": [],
+    }
+    paths = store._paths(meeting_id)
+    store.write_manifest(paths, manifest_data)
+
+    rec = MeetingRecorder(
+        store,
+        tr,
+        failing_summarizer,
+        near_branch_factory=lambda: _FakeBranch(0),
+        far_source_factory=lambda: _FakeFar(0),
+        keep_audio=True,
+    )
+
+    recovered = rec.finalize_interrupted()
+    assert meeting_id in recovered, "meeting must still appear in recovered list"
+
+    # Manifest MUST be state="done" even though summary raised.
+    manifest = store.read_manifest(str(meeting_dir))
+    assert manifest.get("state") == "done", (
+        f"expected state=done after summary failure, got {manifest.get('state')}"
+    )
+
+    # A fallback minutes.md must exist (not empty).
+    minutes_path = meeting_dir / "minutes.md"
+    assert minutes_path.exists(), "fallback minutes.md must be written on summary failure"
+    assert minutes_path.read_text(encoding="utf-8").strip(), "fallback minutes.md must not be empty"

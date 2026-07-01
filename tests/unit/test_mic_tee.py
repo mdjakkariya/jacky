@@ -70,6 +70,32 @@ def test_branch_started_idempotent_start_and_branch_receives_frames() -> None:
     assert got == [0, 1, 2, 3]
 
 
+def test_branch_close_closes_tee_and_source() -> None:
+    """_Branch.close() closes the owning FrameTee and releases the underlying source."""
+    import threading
+
+    closed = threading.Event()
+
+    class _ClosableSource:
+        def frames(self):  # type: ignore[no-untyped-def]
+            closed.wait()  # block until closed
+
+        def close(self) -> None:
+            closed.set()
+
+    src = _ClosableSource()
+    tee = FrameTee(src)
+    branch = tee.branch_started()
+
+    # branch.close() must propagate through to the source's close().
+    branch.close()
+    assert closed.is_set(), "source.close() must be called when branch.close() is called"
+    # The owner thread must have exited after close.
+    if tee._thread is not None:
+        tee._thread.join(timeout=2)
+        assert not tee._thread.is_alive(), "owner thread must stop after branch.close()"
+
+
 def _take(branch: object, n: int) -> list[AudioClip]:
     out: list[AudioClip] = []
     for f in branch.frames():  # type: ignore[attr-defined]

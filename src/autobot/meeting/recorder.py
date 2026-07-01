@@ -393,12 +393,41 @@ class MeetingRecorder:
             return f"Could not re-summarize the meeting: {exc}"
 
     def _recover_one(self, meeting_id: str) -> None:
+        """Recover one interrupted meeting from disk; always terminal (never re-raises).
+
+        Guards all failure modes so a crashed meeting is never re-processed on
+        subsequent startups:
+        - Missing near.wav: writes a minimal transcript/minutes noting no audio.
+        - Summarizer failure: writes a fallback minutes.md and still flips to done.
+        - Any other error in this method is caught by the caller and logged.
+
+        Args:
+            meeting_id: The meeting folder name to recover.
+        """
         paths = self._store._paths(meeting_id)
         manifest = self._store.read_manifest(paths.dir)
         mic_only = bool(manifest.get("mic_only", False))
         near_p = Path(paths.near_wav)
-        if near_p.exists():
-            repair_header(paths.near_wav)
+        title = str(manifest.get("title", "Meeting"))
+        date = str(manifest.get("started_at", ""))[:10]
+
+        if not near_p.exists():
+            # No audio file — write minimal artifacts and mark done so it's never retried.
+            _log.warning("recovery: near.wav missing id=%s; writing stub files", meeting_id)
+            stub_transcript = f"# {title}\n\n_No audio file found; cannot transcribe._\n"
+            Path(paths.transcript_md).write_text(stub_transcript, encoding="utf-8")
+            stub_minutes = (
+                f"# {title}\n\n_Recovery failed: near.wav was not found. "
+                "No transcript or summary is available._\n"
+            )
+            Path(paths.minutes_md).write_text(stub_minutes, encoding="utf-8")
+            data = dict(manifest)
+            data["state"] = "done"
+            self._store.write_manifest(paths, data)
+            _log.info("meeting recovered (no audio) id=%s", meeting_id)
+            return
+
+        repair_header(paths.near_wav)
         far: str | None = None
         far_p = Path(paths.far_wav)
         if not mic_only and far_p.exists():
@@ -406,14 +435,24 @@ class MeetingRecorder:
             far = paths.far_wav
         transcript = self._transcriber.build(paths.near_wav, far, mic_only=mic_only)
         Path(paths.transcript_md).write_text(transcript, encoding="utf-8")
-        minutes = self._summarizer.summarize(
-            transcript,
-            title=str(manifest.get("title", "Meeting")),
-            date=str(manifest.get("started_at", ""))[:10],
-            duration="recovered",
-            mic_only=mic_only,
-        )
+        try:
+            minutes = self._summarizer.summarize(
+                transcript,
+                title=title,
+                date=date,
+                duration="recovered",
+                mic_only=mic_only,
+            )
+        except Exception as exc:
+            _log.exception("recovery summary failed id=%s", meeting_id)
+            minutes = (
+                f"# {title}\n\n_Summary unavailable ({exc}). "
+                "Transcript saved; run 'summarize the last meeting' to rebuild._\n"
+            )
         Path(paths.minutes_md).write_text(minutes, encoding="utf-8")
+        # Always flip to done — even on summary failure — so this meeting is
+        # never re-processed on the next startup (prevents infinite retry when
+        # the LLM is offline at startup time).
         data = dict(manifest)
         data["state"] = "done"
         self._store.write_manifest(paths, data)

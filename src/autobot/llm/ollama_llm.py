@@ -457,7 +457,6 @@ class OllamaLanguageModel:
             The model's reply text, stripped of leading/trailing whitespace.
         """
         model = self._settings.llm_model
-        think_on = "qwen3" in model and self._settings.llm_think
         kwargs: dict[str, Any] = {
             "model": model,
             "messages": [{"role": "user", "content": prompt}],
@@ -470,7 +469,6 @@ class OllamaLanguageModel:
                 response = self._client.chat(**kwargs)
         else:
             response = self._client.chat(**kwargs)
-        _ = think_on  # resolved above; unused in the no-think branch
         return str(message_content(_get(response, "message"))).strip()
 
     def _final_answer_no_tools(self, messages: list[dict[str, Any]]) -> str:

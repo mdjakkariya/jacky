@@ -26,7 +26,8 @@ _QUEUE_MAX = 256  # ~8s of 32ms frames; ample headroom for a prompt consumer
 class _Branch:
     """One subscriber's view of the shared frame stream."""
 
-    def __init__(self) -> None:
+    def __init__(self, tee: FrameTee) -> None:
+        self._tee = tee
         self._q: queue.Queue[AudioClip | None] = queue.Queue(maxsize=_QUEUE_MAX)
 
     def _offer(self, frame: AudioClip | None) -> None:
@@ -53,6 +54,15 @@ class _Branch:
             except queue.Empty:
                 return
 
+    def close(self) -> None:
+        """Close the owning :class:`FrameTee` and release the underlying mic source.
+
+        Intended for the single-consumer meeting case: the recorder calls this when
+        a meeting stops, tearing down the entire tee (owner thread + mic) so the
+        microphone is released immediately after capture ends.
+        """
+        self._tee.close()
+
 
 class FrameTee:
     """Owns the mic ``FrameSource`` and fans its frames to branches."""
@@ -65,7 +75,7 @@ class FrameTee:
 
     def branch(self) -> _Branch:
         """Create a new subscriber branch (call before :meth:`start`)."""
-        b = _Branch()
+        b = _Branch(self)
         self._branches.append(b)
         return b
 
@@ -75,6 +85,7 @@ class FrameTee:
             return
         self._thread = threading.Thread(target=self._run, name="frame-tee", daemon=True)
         self._thread.start()
+        _log.debug("frame tee started source=%s", type(self._source).__name__)
 
     def branch_started(self) -> _Branch:
         """Create a new branch and ensure the tee is running (idempotent).
@@ -113,3 +124,4 @@ class FrameTee:
             self._thread = None
         for b in self._branches:
             b._offer(None)
+        _log.debug("frame tee closed source=%s", type(self._source).__name__)

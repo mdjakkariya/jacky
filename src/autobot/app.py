@@ -640,24 +640,20 @@ def build(
 
         syscap_bin = ensure_syscap(_os.environ.get("AUTOBOT_SYSCAP_DIR"))
 
-        # The near-branch factory builds its own MicFrameSource wrapped in a
-        # FrameTee for each meeting. This is the documented fallback path: the
-        # turn loop keeps its own audio source (the lazy voice I/O), and the
-        # meeting recorder opens a separate, short-lived mic stream only while a
-        # meeting is active. On macOS two input streams on the same device coexist
-        # normally. This avoids reworking LazyVoiceIO's internal mic wiring, which
-        # would be fragile (the built AudioSource embeds the raw FrameSource and
-        # there is no accessor to extract or replace it).
-        _meeting_tee: FrameTee | None = None
-
+        # The near-branch factory opens a FRESH MicFrameSource wrapped in a new
+        # FrameTee on every call (i.e. every meeting start). This is intentional:
+        # each meeting gets its own short-lived mic stream, opened when the meeting
+        # starts and released as soon as it stops. _StreamWriter.stop() calls
+        # branch.close() → tee.close() → mic.close(), so the hardware resource is
+        # freed immediately after capture ends and no tee accumulates dead branches
+        # across meetings. On macOS two input streams on the same device coexist
+        # normally, so a simultaneous turn-loop mic and meeting mic are fine.
         def _near_branch() -> object:
-            nonlocal _meeting_tee
-            if _meeting_tee is None:
-                from autobot.io.listening import MicFrameSource
+            from autobot.io.listening import MicFrameSource
 
-                mic = MicFrameSource(settings)
-                _meeting_tee = FrameTee(mic)
-            return _meeting_tee.branch_started()
+            mic = MicFrameSource(settings)
+            tee = FrameTee(mic)
+            return tee.branch_started()
 
         def _far_source() -> CoreAudioTapSource:
             if not syscap_bin:
