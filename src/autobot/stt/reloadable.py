@@ -16,7 +16,7 @@ import threading
 from collections.abc import Callable
 
 from autobot.core.interfaces import SpeechToText
-from autobot.core.types import AudioClip, Transcription
+from autobot.core.types import AudioClip, Segment, Transcription
 from autobot.logging_setup import get_logger
 
 _log = get_logger("stt")
@@ -42,8 +42,8 @@ class ReloadableSTT:
             self._dirty = True
         _log.info("stt marked for reload")
 
-    def transcribe(self, audio: AudioClip) -> Transcription:
-        """Build/reload the model on first use or after a settings change, then transcribe."""
+    def _ensure(self) -> SpeechToText:
+        """Build/reload the model on first use or after a settings change."""
         with self._lock:
             if self._inner is None or self._dirty:
                 first = self._inner is None
@@ -52,8 +52,29 @@ class ReloadableSTT:
                     _log.info("stt model loaded" if first else "stt reloaded from updated settings")
                 except Exception as exc:
                     if self._inner is None:
-                        raise  # can't transcribe without any model — let the turn error out
+                        raise
                     _log.warning("stt reload failed, keeping current: %s", exc)
                 self._dirty = False
-            inner = self._inner
-        return inner.transcribe(audio)
+            return self._inner
+
+    def transcribe(self, audio: AudioClip) -> Transcription:
+        """Build/reload the model on first use or after a settings change, then transcribe."""
+        return self._ensure().transcribe(audio)
+
+    def transcribe_segments(
+        self,
+        audio: AudioClip,
+        *,
+        language: str = "en",
+        vad_filter: bool = True,
+        condition_on_previous_text: bool = False,
+        initial_prompt: str | None = None,
+    ) -> list[Segment]:
+        """Long-form transcription; same reload semantics as :meth:`transcribe`."""
+        return self._ensure().transcribe_segments(
+            audio,
+            language=language,
+            vad_filter=vad_filter,
+            condition_on_previous_text=condition_on_previous_text,
+            initial_prompt=initial_prompt,
+        )

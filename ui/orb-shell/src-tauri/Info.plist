@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- TCC usage strings — required for the bundled app (and its engine sidecar) to
+	     access the microphone and capture system/participant audio for meeting
+	     minutes. Without these macOS silently denies access and meetings can't
+	     record at all. Merged into the generated Info.plist by Tauri at build time. -->
+	<key>NSMicrophoneUsageDescription</key>
+	<string>Jack records your microphone to take meeting minutes. Audio is transcribed on-device and never leaves your Mac.</string>
+	<key>NSAudioCaptureUsageDescription</key>
+	<string>Jack captures the other participants' audio during a meeting so they're included in the minutes. Audio is transcribed on-device and never leaves your Mac.</string>
+</dict>
+</plist>

@@ -815,6 +815,32 @@ class AnthropicLanguageModel:
         self._history.append({"role": "assistant", "content": [_block_to_dict(b) for b in content]})
         return text_from_content(content) or "Sorry, that took too many steps."
 
+    def complete(self, prompt: str, *, temperature: float = 0.0) -> str:
+        """One-shot completion via the Anthropic Messages API (no tools).
+
+        A single non-conversational call — no history, no tools, no executor. Used by
+        the meeting summarizer and similar batch tasks that need a plain LLM completion
+        rather than a full interactive turn.
+
+        Args:
+            prompt: The full prompt to send.
+            temperature: Sampling temperature; 0.0 for deterministic output.
+
+        Returns:
+            The model's reply text, stripped of leading/trailing whitespace.
+        """
+        resp = self._client.messages.create(
+            model=self._settings.anthropic_model,
+            max_tokens=self._settings.anthropic_max_tokens,
+            temperature=temperature,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        return "".join(
+            _get(block, "text") or ""
+            for block in (_get(resp, "content") or [])
+            if _get(block, "type") == "text"
+        ).strip()
+
     def new_session(self) -> None:
         """Discard all conversation history and start a fresh session.
 

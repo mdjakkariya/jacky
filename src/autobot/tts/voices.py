@@ -50,3 +50,33 @@ def ensure_voice(voice_path: str, bundled_dir: str | None) -> None:
         _log.info("seeded default voice from bundle -> %s", target)
     else:
         _log.warning("no bundled voice at %s; TTS will be silent until one is added", src)
+
+
+def ensure_syscap(bundled_dir: str | None) -> str | None:
+    """Locate the bundled ``autobot-syscap`` binary, seeding it on first run.
+
+    The orb app passes ``AUTOBOT_SYSCAP_DIR`` pointing at its bundled binaries
+    (Tauri extracts the target-triple-suffixed sidecar there). Returns the path to
+    a runnable binary, or ``None`` if it isn't available (dev runs degrade to
+    mic-only far-end capture).
+
+    Args:
+        bundled_dir: Directory containing the bundled ``autobot-syscap`` binary,
+            or ``None`` (e.g. a source run without the Tauri bundle).
+
+    Returns:
+        Absolute path to a runnable ``autobot-syscap`` binary, or ``None``.
+    """
+    target = Path("~/.autobot/bin/autobot-syscap").expanduser()
+    if target.exists():
+        return str(target)
+    if not bundled_dir:
+        return None
+    src = Path(bundled_dir).expanduser() / "autobot-syscap"
+    if not src.exists():
+        return None
+    target.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(src, target)
+    target.chmod(0o755)
+    _log.info("seeded autobot-syscap from bundle -> %s", target)
+    return str(target)

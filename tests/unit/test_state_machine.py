@@ -8,7 +8,7 @@ import numpy as np
 import pytest
 
 from autobot.config import Settings
-from autobot.core.types import AudioClip, Risk, State, ToolCall, ToolResult, Transcription
+from autobot.core.types import AudioClip, Risk, Segment, State, ToolCall, ToolResult, Transcription
 from autobot.orchestrator.state_machine import (
     InvalidTransitionError,
     Orchestrator,
@@ -52,6 +52,19 @@ class _FakeSTT:
     def transcribe(self, _audio: AudioClip) -> Transcription:
         return Transcription(text=self._text, confidence=0.9)
 
+    def transcribe_segments(
+        self,
+        audio: AudioClip,
+        *,
+        language: str = "en",
+        vad_filter: bool = True,
+        condition_on_previous_text: bool = False,
+        initial_prompt: str | None = None,
+    ) -> list[Segment]:
+        if not self._text:
+            return []
+        return [Segment(text=self._text, start=0.0, end=1.0)]
+
 
 class _ToolingLLM:
     """An LLM stub that always asks to run one tool, via the executor."""
@@ -59,6 +72,9 @@ class _ToolingLLM:
     def run_turn(self, user_text: str, execute) -> str:  # type: ignore[no-untyped-def]
         result = execute(ToolCall(name="create_file", arguments={"path": "x"}))
         return f"done: {result.content}"
+
+    def complete(self, prompt: str, *, temperature: float = 0.0) -> str:
+        return ""
 
 
 class _RecordingGate:
@@ -145,6 +161,9 @@ def test_turn_sets_delivery_mode_voice_then_chat() -> None:
 
         def run_turn(self, user_text: str, execute) -> str:  # type: ignore[no-untyped-def]
             return "ok"
+
+        def complete(self, prompt: str, *, temperature: float = 0.0) -> str:
+            return ""
 
     llm = _DeliveryLLM()
     orch = Orchestrator(
@@ -341,6 +360,17 @@ class _GrowingSTT:
         text = "remind me to" if self.calls == 1 else "remind me to call mom"
         return Transcription(text=text, confidence=0.9)
 
+    def transcribe_segments(
+        self,
+        audio: AudioClip,
+        *,
+        language: str = "en",
+        vad_filter: bool = True,
+        condition_on_previous_text: bool = False,
+        initial_prompt: str | None = None,
+    ) -> list[Segment]:
+        raise NotImplementedError
+
 
 def test_incomplete_utterance_triggers_reopen_and_retranscribe() -> None:
     from autobot.orchestrator.wake_gate import PassThroughGate
@@ -365,6 +395,9 @@ def test_incomplete_utterance_triggers_reopen_and_retranscribe() -> None:
 class _EchoLLM:
     def run_turn(self, user_text: str, execute) -> str:  # type: ignore[no-untyped-def]
         return user_text
+
+    def complete(self, prompt: str, *, temperature: float = 0.0) -> str:
+        return ""
 
 
 def test_awake_true_after_addressed_turn_false_when_ignored() -> None:
@@ -557,6 +590,9 @@ def test_voice_and_chat_turns_do_not_interleave_state() -> None:
             release.wait(timeout=5)
             return user_text
 
+        def complete(self, prompt: str, *, temperature: float = 0.0) -> str:
+            return ""
+
     orch = Orchestrator(
         settings=Settings(interaction_mode="voice"),
         audio=_FakeAudio(),
@@ -644,6 +680,9 @@ class _DismissLLM:
         execute(ToolCall(name="dismiss", arguments={}))
         return ""
 
+    def complete(self, prompt: str, *, temperature: float = 0.0) -> str:
+        return ""
+
 
 def _chat_orch(llm: object) -> Orchestrator:
     from autobot.orchestrator.wake_gate import PassThroughGate
@@ -668,6 +707,9 @@ def test_chat_turn_never_returns_empty_reply() -> None:
 
     class _SilentLLM:
         def run_turn(self, user_text: str, execute) -> str:  # type: ignore[no-untyped-def]
+            return ""
+
+        def complete(self, prompt: str, *, temperature: float = 0.0) -> str:
             return ""
 
     # A non-dismiss empty reply -> a neutral acknowledgement.
@@ -863,6 +905,9 @@ def test_voice_cue_dedupes_repeated_phrases_within_a_turn() -> None:
             execute(ToolCall(name="create_file", arguments={"path": "a"}))
             execute(ToolCall(name="create_file", arguments={"path": "b"}))
             return "done"
+
+        def complete(self, prompt: str, *, temperature: float = 0.0) -> str:
+            return ""
 
     tts = _RecordingTTS()
     orch = Orchestrator(

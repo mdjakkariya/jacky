@@ -86,6 +86,7 @@ def create_app(
     on_new_session: Any | None = None,
     on_action: Any | None = None,
     mcp_provider: McpProvider | None = None,
+    on_meeting: Any | None = None,
 ) -> Any:
     """Build the FastAPI app: the event stream plus the Settings-view API.
 
@@ -107,6 +108,10 @@ def create_app(
         mcp_provider: Optional MCP provider (wired by the daemon). The /mcp/* routes
             resolve the live manager through it, and /settings flips it on/off when
             ``allow_mcp`` changes — so MCP can be enabled at runtime with no restart.
+        on_meeting: Optional callable ``(action: str, payload: dict) -> object``
+            dispatching meeting actions (``start``/``stop``/``pause``/``resume``/
+            ``status``/``list``/``last``/``reveal``) to the recorder. When ``None``,
+            all /meeting/* routes return ``{"ok": False, "error": "meetings disabled"}``.
 
     Returns:
         A FastAPI app: ``/healthz``, WebSocket ``/ws``, the settings API, and
@@ -425,6 +430,55 @@ def create_app(
             on_confirm_answer(str(value))
         return {"ok": True}
 
+    # --------------------------------------------------------------- Meeting
+    # All /meeting/* handlers check on_meeting is not None and return a graceful
+    # error when meetings are disabled (allow_meetings=False). Blocking recorder
+    # calls are run via asyncio.to_thread so the event loop stays responsive.
+
+    _meeting_disabled: dict[str, object] = {"ok": False, "error": "meetings disabled"}
+
+    async def post_meeting(action: str, request: Request) -> dict[str, Any]:
+        """Dispatch a meeting write action (start/stop/pause/resume) off the loop."""
+        if on_meeting is None:
+            return _meeting_disabled
+        payload: object = {}
+        if action in ("start", "reveal"):
+            payload = await request.json()
+        reply = await asyncio.to_thread(
+            on_meeting, action, payload if isinstance(payload, dict) else {}
+        )
+        return {"ok": True, "reply": reply}
+
+    async def get_meeting_status() -> dict[str, Any]:
+        """Return the recorder's current status snapshot."""
+        if on_meeting is None:
+            return {"status": {"active": False}}
+        status = await asyncio.to_thread(on_meeting, "status", {})
+        return {"status": status}
+
+    async def get_meeting_list() -> dict[str, Any]:
+        """Return a list of recent meeting summaries."""
+        if on_meeting is None:
+            return {"meetings": []}
+        meetings = await asyncio.to_thread(on_meeting, "list", {})
+        return {"meetings": meetings}
+
+    async def get_meeting_last() -> dict[str, Any]:
+        """Return the most recent finished meeting's minutes, or ``{"ok": False}``.
+
+        The front-end calls this when a ``meeting`` event with ``state:"done"``
+        arrives, to render a minutes card.  Returns ``{"ok": True, ...}`` with the
+        payload from ``recorder.last_minutes()`` when a finished meeting exists,
+        or ``{"ok": False}`` when meetings are disabled or no finished meeting is
+        found.
+        """
+        if on_meeting is None:
+            return {"ok": False}
+        payload = await asyncio.to_thread(on_meeting, "last", {})
+        if isinstance(payload, dict):
+            return {"ok": True, **payload}
+        return {"ok": False}
+
     # ------------------------------------------------------------------ MCP
     # All /mcp/* handlers check mcp is not None and return a graceful error
     # when MCP is disabled (allow_mcp=False). Blocking manager calls are run
@@ -562,6 +616,32 @@ def create_app(
     app.add_api_route("/session/new", post_new_session, methods=["POST"])
     app.add_api_route("/voice/status", get_voice_status, methods=["GET"])
     app.add_api_route("/voice/download", post_voice_download, methods=["POST"])
+
+    # Named, Request-typed handlers (NOT `lambda r: ...` — an untyped lambda param
+    # makes FastAPI treat `r` as a required query param and 422 every POST).
+    async def _post_meeting_start(request: Request) -> dict[str, Any]:
+        return await post_meeting("start", request)
+
+    async def _post_meeting_stop(request: Request) -> dict[str, Any]:
+        return await post_meeting("stop", request)
+
+    async def _post_meeting_pause(request: Request) -> dict[str, Any]:
+        return await post_meeting("pause", request)
+
+    async def _post_meeting_resume(request: Request) -> dict[str, Any]:
+        return await post_meeting("resume", request)
+
+    async def _post_meeting_reveal(request: Request) -> dict[str, Any]:
+        return await post_meeting("reveal", request)
+
+    app.add_api_route("/meeting/start", _post_meeting_start, methods=["POST"])
+    app.add_api_route("/meeting/stop", _post_meeting_stop, methods=["POST"])
+    app.add_api_route("/meeting/pause", _post_meeting_pause, methods=["POST"])
+    app.add_api_route("/meeting/resume", _post_meeting_resume, methods=["POST"])
+    app.add_api_route("/meeting/reveal", _post_meeting_reveal, methods=["POST"])
+    app.add_api_route("/meeting/status", get_meeting_status, methods=["GET"])
+    app.add_api_route("/meeting/list", get_meeting_list, methods=["GET"])
+    app.add_api_route("/meeting/last", get_meeting_last, methods=["GET"])
     app.add_api_route("/mcp/servers", get_mcp_servers, methods=["GET"])
     app.add_api_route("/mcp/servers", post_mcp_servers, methods=["POST"])
     app.add_api_route("/mcp/servers/{server_id}", delete_mcp_server, methods=["DELETE"])
@@ -587,6 +667,7 @@ def run_daemon(
     on_new_session: Any | None = None,
     on_action: Any | None = None,
     mcp_provider: McpProvider | None = None,
+    on_meeting: Any | None = None,
 ) -> None:
     """Run the daemon server (blocking) on ``host:port``.
 
@@ -594,6 +675,7 @@ def run_daemon(
     design, and a non-loopback bind would expose the engine on the network.
     ``on_change`` is invoked after a settings/secret update so the engine can pick
     it up live; ``on_confirm_answer`` delivers a clicked Yes/No to the engine.
+    ``on_meeting`` dispatches /meeting/* HTTP actions to the MeetingRecorder.
     """
     if host not in {"127.0.0.1", "localhost", "::1"}:
         raise ValueError(f"daemon must bind loopback only, got host={host!r}")
@@ -611,6 +693,7 @@ def run_daemon(
         on_new_session=on_new_session,
         on_action=on_action,
         mcp_provider=mcp_provider,
+        on_meeting=on_meeting,
     )
     try:
         with contextlib.suppress(KeyboardInterrupt):

@@ -230,6 +230,10 @@ function init() {
       deactivateEgressRing();
     }
   });
+  daemon.on("meeting", (m) => {
+    const active = ["recording", "paused", "transcribing", "summarizing"].includes(m.state);
+    if (renderer) renderer.setMeetingState({ active, paused: m.state === "paused", elapsedS: m.elapsed_s || 0 });
+  });
   daemon.on("mcp_status", () => refreshServerMap());
   daemon.onOpen(() => { conn.textContent = ""; refreshServerMap(); });
   daemon.onClose(() => { conn.textContent = "reconnecting…"; });

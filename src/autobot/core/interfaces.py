@@ -13,11 +13,12 @@ satisfies the contract with ``isinstance``.
 
 from __future__ import annotations
 
+from collections.abc import Iterator
 from typing import TYPE_CHECKING, Protocol, runtime_checkable
 
 if TYPE_CHECKING:
     # Imported only for type checking so this module stays runtime-light.
-    from autobot.core.types import AudioClip, ToolExecutor, Transcription
+    from autobot.core.types import AudioClip, Segment, ToolExecutor, Transcription
     from autobot.tools.registry import ToolSpec
 
 
@@ -40,6 +41,22 @@ class AudioSource(Protocol):
 
 
 @runtime_checkable
+class SystemAudioSource(Protocol):
+    """Continuous far-end (system output) capture for meetings."""
+
+    aec_active: bool
+    """Parity with the mic source flags; always ``False`` for a system tap."""
+
+    def frames(self) -> Iterator[AudioClip]:
+        """Yield 512-sample 16 kHz mono ``float32`` frames until :meth:`close`."""
+        ...
+
+    def close(self) -> None:
+        """Stop capture and release the sidecar. Idempotent."""
+        ...
+
+
+@runtime_checkable
 class SpeechToText(Protocol):
     """Converts an audio clip into text (English only)."""
 
@@ -51,6 +68,24 @@ class SpeechToText(Protocol):
 
         Returns:
             A :class:`~autobot.core.types.Transcription`.
+        """
+        ...
+
+    def transcribe_segments(
+        self,
+        audio: AudioClip,
+        *,
+        language: str = "en",
+        vad_filter: bool = True,
+        condition_on_previous_text: bool = False,
+        initial_prompt: str | None = None,
+    ) -> list[Segment]:
+        """Transcribe a clip into timestamped :class:`Segment`s (English only).
+
+        Used for long-form meeting audio, where the two streams must be merged by
+        time. ``vad_filter`` skips silence; ``condition_on_previous_text=False``
+        keeps one bad window from poisoning later ones. Segments are returned in
+        time order with empty spans dropped.
         """
         ...
 
@@ -75,6 +110,18 @@ class LanguageModel(Protocol):
 
         Returns:
             The assistant's final reply text.
+        """
+        ...
+
+    def complete(self, prompt: str, *, temperature: float = 0.0) -> str:
+        """One-shot, non-conversational completion (no tools). Used for summaries.
+
+        Args:
+            prompt: The full prompt to send to the model.
+            temperature: Sampling temperature; defaults to 0.0 for deterministic output.
+
+        Returns:
+            The model's reply text, stripped of leading/trailing whitespace.
         """
         ...
 

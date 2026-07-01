@@ -262,6 +262,23 @@ def _build_confirmer(
     )
 
 
+def _summary_window_chars(settings: Settings) -> int:
+    """Return a safe summarizer context budget in characters.
+
+    Approximates 3 chars/token from the Ollama context window; falls back to 8000
+    when ``context_tokens`` is 0 (auto-detect hasn't run yet).
+
+    Args:
+        settings: Active application settings.
+
+    Returns:
+        Character budget for :class:`~autobot.meeting.summarizer.MeetingSummarizer`.
+    """
+    if settings.context_tokens:
+        return max(2000, settings.context_tokens * 3)
+    return 8000
+
+
 def _build_llm(
     settings: Settings,
     registry: ToolRegistry,
@@ -318,6 +335,7 @@ def build(
     on_step: Callable[[int, str, str, str], None] | None = None,
     on_workspace: Callable[[str, str], None] | None = None,
     on_mcp_event: Callable[[dict[str, object]], None] | None = None,
+    on_meeting_event: Callable[[dict[str, object]], None] | None = None,
 ) -> Orchestrator:
     """Compose a fully wired :class:`Orchestrator`.
 
@@ -358,6 +376,9 @@ def build(
         on_mcp_event: Optional callback invoked when the MCP manager publishes an
             event; the daemon passes the bus's ``publish_mcp`` to wire MCP state
             to connected clients.
+        on_meeting_event: Optional callback invoked with the recorder's ``status()``
+            dict at each meeting lifecycle transition; the daemon passes the bus's
+            ``publish_meeting`` so connected clients receive live recording state.
 
     Returns:
         A ready-to-run orchestrator. Constructing it loads the STT model, opens
@@ -601,6 +622,81 @@ def build(
     if settings.barge_in:
         log.info("barge-in enabled — engages when voice starts (if AEC is active)")
 
+    # Initialise to None; set inside the allow_meetings block so the daemon
+    # dispatcher can access it via orch.meeting_recorder after build() returns.
+    _meeting_recorder: object | None = None
+
+    if settings.allow_meetings:
+        import os as _os
+
+        from autobot.io.mic_tee import FrameTee
+        from autobot.io.system_audio_mac import CoreAudioTapSource
+        from autobot.meeting.recorder import MeetingRecorder
+        from autobot.meeting.store import MeetingStore
+        from autobot.meeting.summarizer import MeetingSummarizer
+        from autobot.meeting.transcriber import MeetingTranscriber
+        from autobot.tools.meeting import register_meeting_tools
+        from autobot.tts.voices import ensure_syscap
+
+        syscap_bin = ensure_syscap(_os.environ.get("AUTOBOT_SYSCAP_DIR"))
+
+        # The near-branch factory opens a FRESH MicFrameSource wrapped in a new
+        # FrameTee on every call (i.e. every meeting start). This is intentional:
+        # each meeting gets its own short-lived mic stream, opened when the meeting
+        # starts and released as soon as it stops. _StreamWriter.stop() calls
+        # branch.close() → tee.close() → mic.close(), so the hardware resource is
+        # freed immediately after capture ends and no tee accumulates dead branches
+        # across meetings. On macOS two input streams on the same device coexist
+        # normally, so a simultaneous turn-loop mic and meeting mic are fine.
+        def _near_branch() -> object:
+            from autobot.io.listening import MicFrameSource
+
+            mic = MicFrameSource(settings)
+            tee = FrameTee(mic)
+            return tee.branch_started()
+
+        def _far_source() -> CoreAudioTapSource:
+            if not syscap_bin:
+                raise RuntimeError(
+                    "autobot-syscap binary not available; "
+                    "run with AUTOBOT_SYSCAP_DIR pointing at the bundled binary "
+                    "or install the full app to capture far-end audio."
+                )
+            return CoreAudioTapSource(syscap_bin, exclude_pid=_os.getpid())
+
+        _meetings_store = MeetingStore(settings.meetings_dir)
+        _meeting_transcriber = MeetingTranscriber(
+            stt,
+            chunk_s=settings.meeting_chunk_s,
+            overlap_s=settings.meeting_overlap_s,
+            stt_prompt=settings.stt_prompt,
+        )
+        _meeting_summarizer = MeetingSummarizer(
+            lambda p: llm.complete(p),
+            max_chars=_summary_window_chars(settings),
+        )
+        _meeting_recorder = MeetingRecorder(
+            _meetings_store,
+            _meeting_transcriber,
+            _meeting_summarizer,
+            near_branch_factory=_near_branch,
+            far_source_factory=_far_source,
+            keep_audio=settings.meeting_keep_audio,
+            keep=settings.meeting_keep,
+            on_event=on_meeting_event,
+        )
+        register_meeting_tools(registry, _meeting_recorder)
+        import threading as _threading
+
+        _threading.Thread(
+            target=_meeting_recorder.finalize_interrupted,
+            name="meeting-recovery",
+            daemon=True,
+        ).start()
+        log.info("meeting crash-recovery finalize started in background")
+        log.info("meetings ENABLED dir=%s", settings.meetings_dir)
+        print("[meeting] meetings ENABLED — Jack can record and summarize calls.")
+
     orch = Orchestrator(
         settings=settings,
         audio=audio,
@@ -621,6 +717,9 @@ def build(
         release_voice_io=_voice_io.release,
     )
     orch.mcp_provider = mcp_provider
+    # Expose the meeting recorder (if built) so the daemon dispatcher can route
+    # /meeting/* HTTP actions to it — same pattern as mcp_provider above.
+    orch.meeting_recorder = _meeting_recorder
     return orch
 
 

@@ -20,10 +20,13 @@ pub(crate) fn start_engine(app: &tauri::AppHandle) {
         // kill the sidecar, so this self-shutdown is what actually frees :8765 on
         // quit / force-quit / crash. (We still kill() on a clean exit, below.)
         let cmd = cmd.env("AUTOBOT_PARENT_PID", std::process::id().to_string());
-        // Point the engine at the app's bundled voices, so a fresh install can
-        // seed a default Piper voice and speak immediately.
+        // Point the engine at the app's bundled voices (seed a default Piper
+        // voice, speak immediately) and the bundled system-audio sidecar (seed
+        // ~/.autobot/bin/autobot-syscap for meeting far-end capture).
         match app.path().resource_dir() {
-            Ok(dir) => cmd.env("AUTOBOT_VOICE_DIR", dir.join("voices")),
+            Ok(dir) => cmd
+                .env("AUTOBOT_VOICE_DIR", dir.join("voices"))
+                .env("AUTOBOT_SYSCAP_DIR", dir.join("syscap")),
             Err(_) => cmd,
         }
     });

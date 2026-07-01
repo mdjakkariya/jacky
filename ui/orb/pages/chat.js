@@ -11,6 +11,7 @@ import "../components/chat-log/chat-log.js";
 import "../components/update-banner/update-banner.js";
 import { showConfirm, clearConfirm } from "../components/confirm-card/confirm-card.js";
 import { showChoices } from "../components/choices-card/choices-card.js";
+import { renderMeeting } from "../components/meeting-card/meeting-card.js";
 import { setupContextMeter } from "../components/context-meter/context-meter.js";
 import { setupFolderChip } from "../components/folder-chip/folder-chip.js";
 
@@ -92,6 +93,7 @@ async function newChat() {
 $("newchat").addEventListener("click", newChat);
 
 // --- daemon WS wiring -------------------------------------------------------
+daemon.on("meeting", (m) => renderMeeting(log, m));
 daemon.on("confirm", (m) => showConfirm(log, m.text, m.kind, m.options));
 daemon.on("confirm_clear", () => clearConfirm(log));
 daemon.on("context", (m) => ctxMeter.update(m));

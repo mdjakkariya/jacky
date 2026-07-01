@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import numpy as np
 
-from autobot.core.types import AudioClip, Transcription
+from autobot.core.types import AudioClip, Segment, Transcription
 from autobot.stt.reloadable import ReloadableSTT
 
 
@@ -14,6 +14,19 @@ class FakeSTT:
 
     def transcribe(self, audio: AudioClip) -> Transcription:
         return Transcription(text=self.tag, confidence=1.0)
+
+    def transcribe_segments(
+        self,
+        audio: AudioClip,
+        *,
+        language: str = "en",
+        vad_filter: bool = True,
+        condition_on_previous_text: bool = False,
+        initial_prompt: str | None = None,
+    ) -> list[Segment]:
+        if not self.tag:
+            return []
+        return [Segment(text=self.tag, start=0.0, end=1.0)]
 
 
 _CLIP: AudioClip = np.zeros(16, dtype=np.float32)

@@ -262,13 +262,13 @@
   }
   document.addEventListener("visibilitychange", function(){ if(document.hidden) stopSpeech(); });
   setSndUI();
-  var QUERY="find my internship certificate";
+  var QUERY="Jack, take minutes of this meeting";
   var HINTS=["Message Jack…","⌘⌃J to summon or hide","⌘⌃C chat · ⌘⌃V voice"];
   var sleep=function(ms){return new Promise(function(r){setTimeout(r,ms);});};
   function el(h){var d=document.createElement("div");d.innerHTML=h.trim();return d.firstChild;}
   function emptyState(){
     body.innerHTML="";
-    body.appendChild(el('<div class="empty"><div class="es"><svg viewBox="0 0 24 24" fill="none"><path d="M12 3l1.6 4.4L18 9l-4.4 1.6L12 15l-1.6-4.4L6 9z"/></svg></div><h4>Hey, I’m Jack</h4><p>Ask me anything, or start with one of these.</p><div class="chips"><div class="chip2"><div class="cl">Open a website</div><div class="ce">“open GitHub”</div></div><div class="chip2"><div class="cl">Find a file</div><div class="ce">“where’s my resume”</div></div></div></div>'));
+    body.appendChild(el('<div class="empty"><div class="es"><svg viewBox="0 0 24 24" fill="none"><path d="M12 3l1.6 4.4L18 9l-4.4 1.6L12 15l-1.6-4.4L6 9z"/></svg></div><h4>Hey, I’m Jack</h4><p>Ask me anything, or start with one of these.</p><div class="chips"><div class="chip2"><div class="cl">Take meeting minutes</div><div class="ce">“record this call”</div></div><div class="chip2"><div class="cl">Open a website</div><div class="ce">“open GitHub”</div></div></div></div>'));
   }
   async function moveCursorTo(target){
     var sr=show.getBoundingClientRect(), tr=target.getBoundingClientRect();
@@ -289,12 +289,29 @@
     body.appendChild(el('<div class="msg me">'+QUERY+'</div>'));
     var t=el('<div class="typing"><i></i><i></i><i></i></div>'); body.appendChild(t);
     await sleep(1100); t.remove();
-    body.appendChild(el('<div class="msg jk">Found it — here’s the match:</div>'));
-    var card=el('<div class="acard"><div class="ti">Files matching ‘internship certificate’</div><div class="fn">certificate_Mohamed (1).pdf</div><div class="fp">~/Documents/personal/docs</div><div class="row"><span class="chip" id="cOpen">Open</span><span class="chip">Reveal</span><span class="chip">Copy path</span></div></div>');
-    body.appendChild(card); ctx.classList.add("on");
-    await sleep(800);
-    var open=document.getElementById("cOpen"); await moveCursorTo(open); open.classList.add("go");
-    card.appendChild(el('<div class="acstatus">Opened certificate_Mohamed (1).pdf</div>'));
+    body.appendChild(el('<div class="msg jk">On it — recording this call. I’ll write the minutes when it ends.</div>'));
+    // Recording card (mirrors the app's .rec-card: red dot + title + timer, waveform, legend, footer)
+    var bars=""; for(var b=0;b<24;b++){ bars+='<i style="animation-duration:'+(0.7+Math.random()*0.7).toFixed(2)+'s;animation-delay:-'+Math.random().toFixed(2)+'s"></i>'; }
+    var rec=el('<div class="rc"><div class="rc-top"><span class="rc-dot"></span><span class="rc-ttl">Recording — Weekly Sync</span><span class="rc-timer" id="recTimer">00:00</span></div><div class="rc-body"><div class="rc-wave">'+bars+'</div><div class="rc-legend"><span><span class="wd you"></span>You</span><span><span class="wd them"></span>Participants</span><span class="sep">·</span><span>English · on-device</span></div></div><div class="rc-foot"><span class="rc-note"><span class="rc-ld"></span>Audio saved locally · transcribed when you stop</span><div class="rc-actions"><span class="rc-btn">⏸ Pause</span><span class="rc-btn danger">■ Stop &amp; summarize</span></div></div></div>');
+    body.appendChild(rec); ctx.classList.add("on");
+    var secs=0, tm=setInterval(function(){ secs++; var m=document.getElementById("recTimer"); if(m) m.textContent="00:"+(secs<10?"0":"")+secs; }, 230);
+    await sleep(2300); clearInterval(tm); rec.remove();
+    // Processing card (mirrors the app's steps: finalize → transcribe → write minutes)
+    var CHECK='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M5 13l4 4L19 7"/></svg>';
+    var FILE='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14 3v4a1 1 0 0 0 1 1h4"/><path d="M5 3h9l5 5v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2z"/></svg>';
+    var proc=el('<div class="pc"><div class="pc-h">'+FILE+' Processing meeting</div><ul class="pc-steps"><li class="done"><span class="pc-ic">'+CHECK+'</span> Finalizing the recording</li><li class="done"><span class="pc-ic">'+CHECK+'</span> Transcribing · English<span class="pc-meta">on-device</span></li><li class="active"><span class="pc-ic"></span> Writing minutes (summarize → reduce)<span class="pc-meta">qwen3:8b</span></li></ul></div>');
+    body.appendChild(proc);
+    await sleep(1600); proc.remove();
+    body.appendChild(el('<div class="msg jk">Done — here are your minutes:</div>'));
+    // Minutes card (mirrors the app's .min: crumb w/ unique folder, meta, summary, stats, action items, footer)
+    var FOLDER='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>';
+    var LINES='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6h16M4 12h16M4 18h10"/></svg>';
+    var COPY='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg>';
+    var card=el('<div class="mc"><div class="mc-h"><span class="mc-loc">'+FOLDER+'<span class="mc-crumb">Meetings<i>›</i>2026-07-01-0917-weekly-sync</span><span class="mc-ext">minutes.md</span></span><h3>Weekly Sync — Minutes</h3><div class="mc-meta"><span>Jul 1, 2026</span><span>Duration 06:12</span><span>You + Priya + Carlos</span></div></div><div class="mc-prev"><div class="mc-st">'+LINES+' Summary</div><p class="mc-sum">The team reviewed launch readiness. The release is targeted for the 14th, gated on completing the API documentation and resolving the onboarding blocker.</p><div class="mc-stats"><span class="mc-stat"><b>2</b> decisions</span><span class="mc-stat"><b>3</b> action items</span><span class="mc-stat"><b>1</b> open question</span></div><ul class="mc-ai"><li><span class="mc-box"></span><span>Finish the API documentation<span class="mc-who">Priya</span></span></li><li><span class="mc-box"></span><span>Resolve the onboarding blocker<span class="mc-who">Carlos</span></span></li><li class="mc-more">+1 more action item</li></ul></div><div class="mc-foot"><span class="mc-fbtn primary" id="cReveal">'+FOLDER+' Reveal folder</span><span class="mc-fbtn">'+COPY+' Copy</span></div></div>');
+    body.appendChild(card);
+    await sleep(900);
+    var reveal=document.getElementById("cReveal"); await moveCursorTo(reveal); reveal.classList.add("go");
+    card.appendChild(el('<div class="mc-status">Revealed the meeting folder in Finder</div>'));
     await sleep(1400); cursor.style.opacity="0"; await sleep(700);
     await moveCursorTo(segVoice);
     var sr=show.getBoundingClientRect(), vr=segVoice.getBoundingClientRect();

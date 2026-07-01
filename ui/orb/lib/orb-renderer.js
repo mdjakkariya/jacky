@@ -71,6 +71,9 @@ export function createOrbRenderer(c, ov) {
   let state = "idle"; // last state frame
   let liveAmp = 0.0; // last amplitude frame (decays between frames)
 
+  // Recording overlay state (driven by setMeetingState):
+  let rec = { active: false, paused: false, startedAt: 0, baseElapsed: 0, frozenElapsed: 0 };
+
   function rgba(cc, a) { return "rgba(" + Math.round(cc[0] * 255) + "," + Math.round(cc[1] * 255) + "," + Math.round(cc[2] * 255) + "," + a + ")"; }
   const cur = { col: SC.idle.slice(), speed: 0.45, energy: 0.8, amp: 0.0 };
   let rings = [], ringTimer = 0, spin = 0; const rim = 0.04; let phase = 0, last = performance.now(); const startTime = performance.now();
@@ -95,6 +98,37 @@ export function createOrbRenderer(c, ov) {
     } else {
       const br = orbR + 10 + Math.sin(t * 1.3) * 4; o.beginPath(); o.arc(CX, CY, br, 0, Math.PI * 2); o.strokeStyle = rgba(cc, 0.12); o.lineWidth = 1.4; o.stroke();
     }
+
+    // Recording indicator: red pulsing ring + REC label + elapsed timer
+    if (rec.active) {
+      const elapsedS = rec.paused
+        ? rec.frozenElapsed
+        : rec.baseElapsed + (performance.now() - rec.startedAt) / 1000;
+      const pulse = 0.7 + 0.3 * Math.sin(t * 4.2);
+      const ringR = orbR + 14;
+      // Ring color: red when recording/active, amber when paused
+      const ringColor = rec.paused ? "rgba(255,165,0," : "rgba(220,40,40,";
+      o.beginPath(); o.arc(CX, CY, ringR, 0, Math.PI * 2);
+      o.strokeStyle = ringColor + (rec.paused ? 0.8 : pulse).toFixed(2) + ")";
+      o.lineWidth = 3;
+      o.stroke();
+
+      // REC / PAUSED label below the orb
+      const label = rec.paused ? "⏸ PAUSED" : "● REC";
+      const labelColor = rec.paused ? "rgba(255,165,0,0.92)" : "rgba(220,40,40," + pulse.toFixed(2) + ")";
+      o.font = "bold 11px monospace";
+      o.textAlign = "center";
+      o.fillStyle = labelColor;
+      o.fillText(label, CX, CY + orbR + 32);
+
+      // Elapsed mm:ss timer
+      const totalS = Math.floor(Math.max(0, elapsedS));
+      const mm = String(Math.floor(totalS / 60)).padStart(2, "0");
+      const ss = String(totalS % 60).padStart(2, "0");
+      o.font = "10px monospace";
+      o.fillStyle = "rgba(255,255,255,0.75)";
+      o.fillText(mm + ":" + ss, CX, CY + orbR + 46);
+    }
   }
   function frame() {
     const now = performance.now(), dt = Math.min((now - last) / 1000, 0.05); last = now; const t = (now - startTime) / 1000;
@@ -116,6 +150,26 @@ export function createOrbRenderer(c, ov) {
   return {
     setState(s) { state = s; },
     setAmplitude(v) { liveAmp = Math.max(0, Math.min(1, +v || 0)); },
+    setMeetingState({ active, paused, elapsedS }) {
+      if (active) {
+        if (!rec.active) {
+          // Transition into active recording: anchor elapsed from caller's value
+          rec.baseElapsed = elapsedS || 0;
+          rec.startedAt = performance.now();
+        } else if (rec.paused && !paused) {
+          // Resuming from paused: restart the clock from where we froze
+          rec.baseElapsed = rec.frozenElapsed;
+          rec.startedAt = performance.now();
+        } else if (!rec.paused && paused) {
+          // Pausing: freeze the displayed elapsed
+          rec.frozenElapsed = rec.baseElapsed + (performance.now() - rec.startedAt) / 1000;
+        }
+        rec.active = true;
+        rec.paused = !!paused;
+      } else {
+        rec = { active: false, paused: false, startedAt: 0, baseElapsed: 0, frozenElapsed: 0 };
+      }
+    },
     get state() { return state; },
     start() { size(); frame(); },
     resize: size,

@@ -54,3 +54,5 @@ ui/orb-shell/src-tauri/icons/
 
 # Bundled default voice (downloaded by `make voice`)
 ui/orb-shell/src-tauri/voices/
+# Bundled system-audio sidecar binary (built by `make build-syscap`)
+ui/orb-shell/src-tauri/syscap/

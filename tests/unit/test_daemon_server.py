@@ -55,6 +55,52 @@ def test_run_daemon_refuses_non_loopback_bind() -> None:
         run_daemon(bus, "0.0.0.0", 8765)
 
 
+def test_meeting_post_routes_dispatch_to_recorder() -> None:
+    """POST /meeting/{start,stop,pause,resume} must reach on_meeting (not 422).
+
+    Regression: registering these as ``lambda r: post_meeting("stop", r)`` made
+    FastAPI treat the untyped ``r`` as a required query param, so every POST 422'd
+    and the recorder was never called (Stop/Pause buttons did nothing).
+    """
+    calls: list[tuple[str, dict[str, Any]]] = []
+
+    def on_meeting(action: str, payload: dict[str, Any]) -> str:
+        calls.append((action, payload))
+        return "ok"
+
+    client = TestClient(create_app(EventBus(), on_meeting=on_meeting))
+    # Bodiless POSTs must succeed (the bug 422'd them on a missing query param).
+    for path in ("/meeting/stop", "/meeting/pause", "/meeting/resume"):
+        resp = client.post(path)
+        assert resp.status_code == 200, (path, resp.status_code, resp.text)
+        assert resp.json()["ok"] is True
+    resp = client.post("/meeting/start", json={"title": "Sync"})
+    assert resp.status_code == 200
+    assert ("start", {"title": "Sync"}) in calls
+    assert {"stop", "pause", "resume"} <= {a for a, _ in calls}
+
+
+def test_meeting_post_routes_report_disabled_when_no_recorder() -> None:
+    client = TestClient(create_app(EventBus()))  # on_meeting=None
+    resp = client.post("/meeting/stop")
+    assert resp.status_code == 200
+    assert resp.json().get("ok") is False
+
+
+def test_meeting_reveal_route_passes_id_to_recorder() -> None:
+    """POST /meeting/reveal forwards the JSON body's id to on_meeting('reveal', ...)."""
+    calls: list[tuple[str, dict[str, Any]]] = []
+
+    def on_meeting(action: str, payload: dict[str, Any]) -> object:
+        calls.append((action, payload))
+        return {"ok": True, "dir": "/x/meetings/abc"}
+
+    client = TestClient(create_app(EventBus(), on_meeting=on_meeting))
+    resp = client.post("/meeting/reveal", json={"id": "2026-07-01-1508-standup"})
+    assert resp.status_code == 200
+    assert ("reveal", {"id": "2026-07-01-1508-standup"}) in calls
+
+
 def _settings_client(tmp_path: object) -> TestClient:
     from pathlib import Path
 

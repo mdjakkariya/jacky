@@ -40,8 +40,12 @@ class ReloadableLanguageModel:
             self._dirty = True
         _log.info("llm marked for reload")
 
-    def run_turn(self, user_text: str, execute: ToolExecutor) -> str:
-        """Rebuild from fresh settings if dirty, then handle the turn."""
+    def _ensure(self) -> LanguageModel:
+        """Return the (possibly freshly rebuilt) inner model, holding the lock.
+
+        Rebuilds from the factory when dirty; keeps the current model if the rebuild
+        fails so a misconfigured key or transient error never kills the session.
+        """
         with self._lock:
             if self._dirty:
                 try:
@@ -50,8 +54,15 @@ class ReloadableLanguageModel:
                 except Exception as exc:  # keep the working model on failure
                     _log.warning("llm reload failed, keeping current: %s", exc)
                 self._dirty = False
-            inner = self._inner
-        return inner.run_turn(user_text, execute)
+            return self._inner
+
+    def run_turn(self, user_text: str, execute: ToolExecutor) -> str:
+        """Rebuild from fresh settings if dirty, then handle the turn."""
+        return self._ensure().run_turn(user_text, execute)
+
+    def complete(self, prompt: str, *, temperature: float = 0.0) -> str:
+        """Forward to the (lazily built) inner model; same reload semantics as run_turn."""
+        return self._ensure().complete(prompt, temperature=temperature)
 
     def context_usage(self) -> dict[str, Any] | None:
         """Delegate the context-meter usage to the active inner model (if it has it)."""

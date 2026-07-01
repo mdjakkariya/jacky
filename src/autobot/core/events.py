@@ -250,6 +250,30 @@ class WorkspaceEvent:
 
 
 @dataclass(frozen=True, slots=True)
+class MeetingEvent:
+    """Meeting recording state, for the orb's record indicator + timer."""
+
+    state: str  # idle | recording | paused | transcribing | summarizing | done
+    elapsed_s: float
+    recorded_s: float
+    mic_only: bool
+    paused: bool
+    title: str
+
+    def message(self) -> dict[str, object]:
+        """Serialize to the wire shape clients consume."""
+        return {
+            "type": "meeting",
+            "state": self.state,
+            "elapsed_s": self.elapsed_s,
+            "recorded_s": self.recorded_s,
+            "mic_only": self.mic_only,
+            "paused": self.paused,
+            "title": self.title,
+        }
+
+
+@dataclass(frozen=True, slots=True)
 class VoiceDownloadEvent:
     """Progress of the on-demand voice-model download (drives the Settings bar).
 
@@ -410,6 +434,19 @@ class EventBus:
         with self._lock:
             self._last_workspace = msg
         self._emit(msg)
+
+    def publish_meeting(self, status: dict[str, object]) -> None:
+        """Broadcast a meeting status frame (the recorder's ``status()`` dict)."""
+        self._emit(
+            MeetingEvent(
+                state=str(status.get("state", "idle")),
+                elapsed_s=float(status.get("elapsed_s", 0.0)),  # type: ignore[arg-type]
+                recorded_s=float(status.get("recorded_s", 0.0)),  # type: ignore[arg-type]
+                mic_only=bool(status.get("mic_only", False)),
+                paused=bool(status.get("paused", False)),
+                title=str(status.get("title", "")),
+            ).message()
+        )
 
     def publish_mcp(self, payload: dict[str, object]) -> None:
         """Forward an MCP status or auth event to all WebSocket clients.

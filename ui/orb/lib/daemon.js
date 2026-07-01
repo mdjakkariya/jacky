@@ -84,6 +84,14 @@ class Daemon {
   revokeAccess(path) { return this.post("/access/revoke", { path }); }
   secret(name, value) { return this.post("/secret", { name, value }); }
 
+  // --- meeting methods ---
+  meetingStart() { return this.post("/meeting/start", {}); }
+  meetingStop() { return this.post("/meeting/stop", {}); }
+  meetingPause() { return this.post("/meeting/pause", {}); }
+  meetingResume() { return this.post("/meeting/resume", {}); }
+  meetingLast() { return this.get("/meeting/last"); }
+  meetingReveal(id) { return this.post("/meeting/reveal", { id }); }
+
   // --- MCP methods ---
   mcpServers() { return this.get("/mcp/servers"); }
   addMcpServer(descriptor) { return this.post("/mcp/servers", descriptor); }
