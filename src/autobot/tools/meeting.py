@@ -35,19 +35,26 @@ class MeetingTools:
 
     def meeting_status(self) -> str:
         """Report whether a meeting is recording and for how long."""
-        st = self._rec.status()
-        if not st["active"]:
-            return "No meeting is recording right now."
-        mins = int(float(st["elapsed_s"]) // 60)  # type: ignore[arg-type]
-        extra = " (paused)" if st["paused"] else (" — mic-only" if st["mic_only"] else "")
-        return f'Recording "{st["title"]}" for about {mins} min{extra}.'
+        try:
+            st = self._rec.status()
+            if not st["active"]:
+                return "No meeting is recording right now."
+            mins = int(float(st["elapsed_s"]) // 60)  # type: ignore[arg-type]
+            extra = " (paused)" if st["paused"] else (" — mic-only" if st["mic_only"] else "")
+            return f'Recording "{st["title"]}" for about {mins} min{extra}.'
+        except Exception as exc:
+            _log.exception("meeting_status failed: %s", exc)
+            return "I couldn't check the meeting status right now."
 
     def list_meetings(self) -> str:
         """List recent saved meetings."""
-        recent = self._rec._store.list_recent()
+        recent = self._rec.list_recent()
         if not recent:
             return "You have no saved meetings yet."
-        names = [f'"{m.get("title", m.get("id"))}" ({m.get("state")})' for m in recent[:10]]
+        names = [
+            f'"{m.get("title") or m.get("id") or "meeting"}" ({m.get("state") or "?"})'
+            for m in recent[:10]
+        ]
         return "Recent meetings: " + "; ".join(names) + "."
 
     def summarize_meeting(self, id: str = "") -> str:

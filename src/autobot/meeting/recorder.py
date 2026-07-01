@@ -317,6 +317,10 @@ class MeetingRecorder:
             "state": "paused" if a.paused else "recording",
         }
 
+    def list_recent(self) -> list[dict[str, object]]:
+        """Return saved meetings' manifests, newest first (delegates to the store)."""
+        return self._store.list_recent()
+
     def finalize_interrupted(self) -> list[str]:
         """On startup, finalize any meeting left mid-flight from on-disk WAVs.
 
