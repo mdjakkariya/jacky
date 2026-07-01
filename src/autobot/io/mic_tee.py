@@ -70,11 +70,24 @@ class FrameTee:
         return b
 
     def start(self) -> None:
-        """Begin pulling from the source on an owner thread."""
+        """Begin pulling from the source on an owner thread (idempotent)."""
         if self._thread is not None:
             return
         self._thread = threading.Thread(target=self._run, name="frame-tee", daemon=True)
         self._thread.start()
+
+    def branch_started(self) -> _Branch:
+        """Create a new branch and ensure the tee is running (idempotent).
+
+        Equivalent to ``b = self.branch(); self.start(); return b``. Calling
+        :meth:`start` a second time is a no-op, so repeated calls are safe.
+
+        Returns:
+            A fresh :class:`_Branch` that will receive frames from this point on.
+        """
+        b = self.branch()
+        self.start()
+        return b
 
     def _run(self) -> None:
         try:

@@ -262,6 +262,23 @@ def _build_confirmer(
     )
 
 
+def _summary_window_chars(settings: Settings) -> int:
+    """Return a safe summarizer context budget in characters.
+
+    Approximates 3 chars/token from the Ollama context window; falls back to 8000
+    when ``context_tokens`` is 0 (auto-detect hasn't run yet).
+
+    Args:
+        settings: Active application settings.
+
+    Returns:
+        Character budget for :class:`~autobot.meeting.summarizer.MeetingSummarizer`.
+    """
+    if settings.context_tokens:
+        return max(2000, settings.context_tokens * 3)
+    return 8000
+
+
 def _build_llm(
     settings: Settings,
     registry: ToolRegistry,
@@ -600,6 +617,73 @@ def build(
     # the live AEC state here without forcing the mic open — just note the intent.
     if settings.barge_in:
         log.info("barge-in enabled — engages when voice starts (if AEC is active)")
+
+    if settings.allow_meetings:
+        import os as _os
+
+        from autobot.io.mic_tee import FrameTee
+        from autobot.io.system_audio_mac import CoreAudioTapSource
+        from autobot.meeting.recorder import MeetingRecorder
+        from autobot.meeting.store import MeetingStore
+        from autobot.meeting.summarizer import MeetingSummarizer
+        from autobot.meeting.transcriber import MeetingTranscriber
+        from autobot.tools.meeting import register_meeting_tools
+        from autobot.tts.voices import ensure_syscap
+
+        syscap_bin = ensure_syscap(_os.environ.get("AUTOBOT_SYSCAP_DIR"))
+
+        # The near-branch factory builds its own MicFrameSource wrapped in a
+        # FrameTee for each meeting. This is the documented fallback path: the
+        # turn loop keeps its own audio source (the lazy voice I/O), and the
+        # meeting recorder opens a separate, short-lived mic stream only while a
+        # meeting is active. On macOS two input streams on the same device coexist
+        # normally. This avoids reworking LazyVoiceIO's internal mic wiring, which
+        # would be fragile (the built AudioSource embeds the raw FrameSource and
+        # there is no accessor to extract or replace it).
+        _meeting_tee: FrameTee | None = None
+
+        def _near_branch() -> object:
+            nonlocal _meeting_tee
+            if _meeting_tee is None:
+                from autobot.io.listening import MicFrameSource
+
+                mic = MicFrameSource(settings)
+                _meeting_tee = FrameTee(mic)
+            return _meeting_tee.branch_started()
+
+        def _far_source() -> CoreAudioTapSource:
+            if not syscap_bin:
+                raise RuntimeError(
+                    "autobot-syscap binary not available; "
+                    "run with AUTOBOT_SYSCAP_DIR pointing at the bundled binary "
+                    "or install the full app to capture far-end audio."
+                )
+            return CoreAudioTapSource(syscap_bin, exclude_pid=_os.getpid())
+
+        _meetings_store = MeetingStore(settings.meetings_dir)
+        _meeting_transcriber = MeetingTranscriber(
+            stt,
+            chunk_s=settings.meeting_chunk_s,
+            overlap_s=settings.meeting_overlap_s,
+            stt_prompt=settings.stt_prompt,
+        )
+        _meeting_summarizer = MeetingSummarizer(
+            lambda p: llm.complete(p),
+            max_chars=_summary_window_chars(settings),
+        )
+        _meeting_recorder = MeetingRecorder(
+            _meetings_store,
+            _meeting_transcriber,
+            _meeting_summarizer,
+            near_branch_factory=_near_branch,
+            far_source_factory=_far_source,
+            keep_audio=settings.meeting_keep_audio,
+            keep=settings.meeting_keep,
+        )
+        register_meeting_tools(registry, _meeting_recorder)
+        _meeting_recorder.finalize_interrupted()
+        log.info("meetings ENABLED dir=%s", settings.meetings_dir)
+        print("[meeting] meetings ENABLED — Jack can record and summarize calls.")
 
     orch = Orchestrator(
         settings=settings,
