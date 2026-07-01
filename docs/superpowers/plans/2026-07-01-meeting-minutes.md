@@ -1589,6 +1589,13 @@ git commit -m "feat(meeting): LanguageModel.complete for non-conversational summ
 
 ## Task 11: `MeetingSummarizer` — map-reduce minutes
 
+> **Correction (applied during implementation):** the `_reduce` shown below has an
+> infinite-recursion hazard — re-chunking the joined notes character-wise lets a
+> non-shrinking completer *grow* the note count forever. The shipped code instead
+> **batches whole notes** (`batch_notes`), caps rounds (`_MAX_REDUCE_ROUNDS`), and
+> bails to a truncated join on no progress, so it terminates for any completer.
+> See `src/autobot/meeting/summarizer.py` for the authoritative implementation.
+
 **Files:**
 - Create: `src/autobot/meeting/summarizer.py`
 - Test: `tests/unit/test_meeting_summarizer.py`
