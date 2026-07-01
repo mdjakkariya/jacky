@@ -89,6 +89,64 @@ h1{font-size:52px;line-height:1.05;font-weight:680;letter-spacing:-.02em}
 .chip.go{background:rgba(10,132,255,.28);border-color:transparent;color:#cfe6ff}
 .acstatus{font-size:11px;color:var(--green);margin-top:7px}
 .recdot{display:inline-block;width:7px;height:7px;border-radius:50%;background:#ff5b5b;margin-right:3px;vertical-align:middle;animation:blink 1.2s infinite}
+/* ── Meeting cards — match the drawer app's recording / processing / minutes ─── */
+.rc,.mc{align-self:stretch;background:var(--card);border:.5px solid var(--line);border-radius:12px;overflow:hidden;opacity:0;transform:translateY(6px);animation:rise .3s forwards}
+.rc-top{display:flex;align-items:center;gap:9px;padding:11px 13px}
+.rc-dot{width:9px;height:9px;border-radius:50%;background:#ff5b5b;flex:none;animation:blink 1.3s infinite}
+.rc-ttl{font-size:12.5px;font-weight:600}
+.rc-timer{margin-left:auto;font-variant-numeric:tabular-nums;font-size:12.5px;font-weight:600}
+.rc-body{border-top:.5px solid var(--line);padding:14px 13px 11px;display:flex;flex-direction:column;align-items:center;gap:11px}
+.rc-wave{display:flex;align-items:center;gap:3px;height:40px}
+.rc-wave i{width:3px;height:100%;border-radius:2px;background:var(--accent);transform:scaleY(.3);transform-origin:center;animation:wv 1s ease-in-out infinite;display:block}
+.rc-legend{display:flex;align-items:center;gap:8px;font-size:11px;color:var(--muted);flex-wrap:wrap;justify-content:center}
+.wd{width:8px;height:8px;border-radius:50%;display:inline-block;margin-right:4px;vertical-align:middle}
+.wd.you{background:var(--accent)}.wd.them{background:var(--violet)}
+.rc-legend .sep{opacity:.5}
+.rc-foot{display:flex;align-items:center;gap:10px;padding:10px 13px;border-top:.5px solid var(--line);flex-wrap:wrap}
+.rc-note{display:inline-flex;align-items:center;gap:6px;font-size:10.5px;color:var(--muted);flex:1;min-width:150px}
+.rc-ld{width:6px;height:6px;border-radius:50%;background:var(--green);flex:none;animation:blink 1.3s infinite}
+.rc-actions{display:flex;gap:7px;flex:none}
+.rc-btn{font-size:11px;border:.5px solid var(--line2);border-radius:7px;padding:5px 9px;color:var(--text)}
+.rc-btn.danger{color:#ff8b8b;border-color:rgba(255,91,91,.4)}
+@keyframes wv{0%,100%{transform:scaleY(.3)}50%{transform:scaleY(1)}}
+.pc{align-self:stretch;background:var(--card);border:.5px solid var(--line);border-radius:11px;padding:11px 12px;opacity:0;transform:translateY(6px);animation:rise .3s forwards}
+.pc-h{display:flex;align-items:center;gap:6px;font-size:12px;font-weight:500;color:#ff8b8b;margin-bottom:9px}
+.pc-h svg{width:15px;height:15px;flex:none}
+.pc-steps{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:9px}
+.pc-steps li{display:flex;align-items:center;gap:9px;font-size:12px;color:var(--muted)}
+.pc-ic{width:18px;height:18px;flex:none;border-radius:50%;border:2px solid var(--line2);display:flex;align-items:center;justify-content:center}
+.pc-steps li.done{color:var(--text)}
+.pc-steps li.done .pc-ic{border-color:var(--green);background:var(--green);color:#08120a}
+.pc-steps li.done .pc-ic svg{width:11px;height:11px}
+.pc-steps li.active .pc-ic{border-color:var(--accent);border-top-color:transparent;animation:spin .8s linear infinite}
+.pc-meta{margin-left:auto;font-size:10.5px;color:var(--faint);font-variant-numeric:tabular-nums}
+@keyframes spin{to{transform:rotate(360deg)}}
+.mc-h{padding:12px 13px;border-bottom:.5px solid var(--line)}
+.mc-loc{display:inline-flex;align-items:center;gap:6px;font-size:10.5px;color:var(--muted);background:rgba(255,255,255,.04);border:.5px solid var(--line);padding:3px 9px 3px 8px;border-radius:7px;max-width:100%}
+.mc-loc svg{width:13px;height:13px;color:var(--accent);flex:none}
+.mc-crumb{color:var(--text);font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.mc-crumb i{color:var(--muted);font-style:normal;margin:0 3px}
+.mc-ext{font-family:ui-monospace,Menlo,monospace;color:var(--muted);padding-left:7px;border-left:.5px solid var(--line);flex:none}
+.mc-h h3{margin:9px 0 3px;font-size:14px}
+.mc-meta{font-size:11px;color:var(--muted);display:flex;flex-wrap:wrap;gap:4px 12px}
+.mc-prev{padding:11px 13px 3px}
+.mc-st{display:flex;align-items:center;gap:7px;font-size:10.5px;font-weight:700;letter-spacing:.5px;text-transform:uppercase;color:var(--muted);margin-bottom:7px}
+.mc-st svg{width:14px;height:14px}
+.mc-sum{margin:0;font-size:12px;line-height:1.55;color:var(--text)}
+.mc-stats{display:flex;flex-wrap:wrap;gap:7px;margin:11px 0 2px}
+.mc-stat{display:inline-flex;align-items:center;gap:5px;font-size:10.5px;color:var(--muted);background:rgba(255,255,255,.04);border:.5px solid var(--line);border-radius:7px;padding:4px 9px}
+.mc-stat b{color:var(--text);font-weight:700}
+.mc-ai{list-style:none;margin:11px 0 4px;padding:0;display:flex;flex-direction:column;gap:9px}
+.mc-ai li{display:flex;gap:9px;align-items:flex-start;font-size:12px;line-height:1.4}
+.mc-box{width:15px;height:15px;flex:none;margin-top:1px;border-radius:4px;border:1.5px solid var(--line2)}
+.mc-who{display:inline-block;font-size:10px;font-weight:700;color:#c9a6ff;background:rgba(158,92,255,.18);padding:0 6px;border-radius:5px;margin-left:6px}
+.mc-more{font-size:11px;color:var(--accent);padding-left:24px}
+.mc-foot{display:flex;gap:8px;padding:10px 13px;border-top:.5px solid var(--line)}
+.mc-fbtn{flex:1;border:.5px solid var(--line2);background:rgba(255,255,255,.04);color:var(--text);font-size:11px;border-radius:8px;padding:8px;display:inline-flex;align-items:center;justify-content:center;gap:6px;transition:.15s}
+.mc-fbtn svg{width:14px;height:14px}
+.mc-fbtn.primary{border-color:rgba(10,132,255,.5);background:rgba(10,132,255,.14);color:#cfe6ff}
+.mc-fbtn.go{background:rgba(10,132,255,.3);border-color:transparent;color:#eaf4ff}
+.mc-status{font-size:10.5px;color:var(--green);padding:0 13px 10px}
 .typing{display:flex;gap:3px;align-self:flex-start;background:var(--bubble);padding:9px 11px;border-radius:13px;border-bottom-left-radius:4px}
 .typing i{width:5px;height:5px;border-radius:50%;background:var(--muted);animation:blink 1.2s infinite}
 .typing i:nth-child(2){animation-delay:.2s}.typing i:nth-child(3){animation-delay:.4s}
