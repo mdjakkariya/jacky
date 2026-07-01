@@ -463,6 +463,22 @@ def create_app(
         meetings = await asyncio.to_thread(on_meeting, "list", {})
         return {"meetings": meetings}
 
+    async def get_meeting_last() -> dict[str, Any]:
+        """Return the most recent finished meeting's minutes, or ``{"ok": False}``.
+
+        The front-end calls this when a ``meeting`` event with ``state:"done"``
+        arrives, to render a minutes card.  Returns ``{"ok": True, ...}`` with the
+        payload from ``recorder.last_minutes()`` when a finished meeting exists,
+        or ``{"ok": False}`` when meetings are disabled or no finished meeting is
+        found.
+        """
+        if on_meeting is None:
+            return {"ok": False}
+        payload = await asyncio.to_thread(on_meeting, "last", {})
+        if isinstance(payload, dict):
+            return {"ok": True, **payload}
+        return {"ok": False}
+
     # ------------------------------------------------------------------ MCP
     # All /mcp/* handlers check mcp is not None and return a graceful error
     # when MCP is disabled (allow_mcp=False). Blocking manager calls are run
@@ -606,6 +622,7 @@ def create_app(
     app.add_api_route("/meeting/resume", lambda r: post_meeting("resume", r), methods=["POST"])
     app.add_api_route("/meeting/status", get_meeting_status, methods=["GET"])
     app.add_api_route("/meeting/list", get_meeting_list, methods=["GET"])
+    app.add_api_route("/meeting/last", get_meeting_last, methods=["GET"])
     app.add_api_route("/mcp/servers", get_mcp_servers, methods=["GET"])
     app.add_api_route("/mcp/servers", post_mcp_servers, methods=["POST"])
     app.add_api_route("/mcp/servers/{server_id}", delete_mcp_server, methods=["DELETE"])

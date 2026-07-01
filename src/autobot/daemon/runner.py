@@ -161,6 +161,8 @@ def serve(settings: Settings | None = None) -> None:
             return _recorder.status()
         if action == "list":
             return _recorder.list_recent()
+        if action == "last":
+            return _recorder.last_minutes()
         return {"error": f"unknown action: {action!r}"}
 
     on_meeting = _on_meeting if _recorder is not None else None

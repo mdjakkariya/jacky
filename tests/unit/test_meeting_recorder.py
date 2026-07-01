@@ -381,3 +381,69 @@ def test_finalize_interrupted_terminal_on_summarizer_failure(tmp_path: Path) -> 
     minutes_path = meeting_dir / "minutes.md"
     assert minutes_path.exists(), "fallback minutes.md must be written on summary failure"
     assert minutes_path.read_text(encoding="utf-8").strip(), "fallback minutes.md must not be empty"
+
+
+# ---------------------------------------------------------------------------
+# last_minutes() tests (RED — method not yet implemented)
+# ---------------------------------------------------------------------------
+
+
+def test_last_minutes_returns_dict_with_minutes_md(tmp_path: Path) -> None:
+    """last_minutes() returns a dict with id, dir, mic_only, minutes_md for the newest meeting."""
+    rec = _recorder(tmp_path)
+    rec.start("Budget Review")
+    rec.stop()
+
+    result = rec.last_minutes()
+    assert result is not None, "expected a dict, got None"
+    assert "id" in result
+    assert "dir" in result
+    assert isinstance(result["mic_only"], bool)
+    minutes_text = result["minutes_md"]
+    assert isinstance(minutes_text, str) and minutes_text.strip(), "minutes_md must be non-empty"
+
+
+def test_last_minutes_returns_none_when_no_meetings(tmp_path: Path) -> None:
+    """last_minutes() returns None when there are no finished meetings."""
+    store = MeetingStore(str(tmp_path))
+    tr = MeetingTranscriber(cast("object", _FakeSTT()), chunk_s=30.0, overlap_s=3.0, stt_prompt="")  # type: ignore[arg-type]
+    rec = MeetingRecorder(
+        store,
+        tr,
+        _fake_summarizer(),
+        near_branch_factory=lambda: _FakeBranch(0),
+        far_source_factory=lambda: _FakeFar(0),
+        keep_audio=True,
+    )
+    assert rec.last_minutes() is None
+
+
+def test_last_minutes_skips_meeting_without_minutes_md(tmp_path: Path) -> None:
+    """last_minutes() skips a meeting folder that has no minutes.md and returns None."""
+    store = MeetingStore(str(tmp_path))
+    # Create a meeting folder that has a manifest but no minutes.md
+    paths = store.create("Empty Meeting")
+    store.write_manifest(
+        paths,
+        {
+            "id": paths.id,
+            "title": "Empty Meeting",
+            "started_at": "2026-01-01T10:00:00",
+            "state": "done",
+            "mic_only": False,
+            "far_stream": {"status": "ok"},
+            "pauses": [],
+        },
+    )
+    # minutes.md is intentionally NOT written — simulates a partially-finalized meeting
+
+    tr = MeetingTranscriber(cast("object", _FakeSTT()), chunk_s=30.0, overlap_s=3.0, stt_prompt="")  # type: ignore[arg-type]
+    rec = MeetingRecorder(
+        store,
+        tr,
+        _fake_summarizer(),
+        near_branch_factory=lambda: _FakeBranch(0),
+        far_source_factory=lambda: _FakeFar(0),
+        keep_audio=True,
+    )
+    assert rec.last_minutes() is None

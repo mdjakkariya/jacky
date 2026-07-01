@@ -321,6 +321,42 @@ class MeetingRecorder:
         """Return saved meetings' manifests, newest first (delegates to the store)."""
         return self._store.list_recent()
 
+    def last_minutes(self) -> dict[str, object] | None:
+        """Return the most recent finished meeting that has a minutes.md on disk.
+
+        Iterates ``_store.list_recent()`` (newest first) and returns the first
+        entry whose ``minutes.md`` file exists and is readable.  Returns ``None``
+        when no such meeting is found.  Never raises — any error is logged and
+        ``None`` is returned so callers remain safe even on IO failure.
+
+        Returns:
+            Dict with keys ``id``, ``dir``, ``mic_only``, and ``minutes_md``
+            (the raw file text), or ``None`` if no finished meeting exists.
+        """
+        try:
+            for manifest in self._store.list_recent():
+                meeting_id = str(manifest.get("id", ""))
+                if not meeting_id:
+                    continue
+                paths = self._store._paths(meeting_id)
+                minutes_path = Path(paths.minutes_md)
+                if not minutes_path.exists():
+                    continue
+                try:
+                    minutes_text = minutes_path.read_text(encoding="utf-8")
+                except OSError:
+                    _log.warning("last_minutes: could not read minutes id=%s", meeting_id)
+                    continue
+                return {
+                    "id": meeting_id,
+                    "dir": paths.dir,
+                    "mic_only": bool(manifest.get("mic_only", False)),
+                    "minutes_md": minutes_text,
+                }
+        except Exception:
+            _log.exception("last_minutes: unexpected error")
+        return None
+
     def finalize_interrupted(self) -> list[str]:
         """On startup, finalize any meeting left mid-flight from on-disk WAVs.
 
