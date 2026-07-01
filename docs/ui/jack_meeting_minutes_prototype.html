@@ -19,7 +19,7 @@
   --them:#7c5cff; --them-bg:rgba(155,124,255,.16);
   --stage:#d3d4d8;
 }
-@media (prefers-color-scheme: dark){:root{
+:root.force-dark{
   --bg:#1e1e1e; --panel:#2a2a2c; --text:#f5f5f7; --muted:#98989d;
   --line:rgba(255,255,255,.1); --field:#1c1c1e; --field-line:rgba(255,255,255,.15);
   --accent:#0a84ff; --accent-bg:rgba(10,132,255,.22);
@@ -30,7 +30,7 @@
   --note-bg:rgba(10,132,255,.14);
   --them:#b9a6ff; --them-bg:rgba(155,124,255,.2);
   --stage:#101012;
-}}
+}
 *{box-sizing:border-box}
 html,body{margin:0;height:100%}
 body{
@@ -214,6 +214,13 @@ header .x svg{width:18px;height:18px}
 @keyframes ring{0%{transform:scale(1);opacity:.9}70%{transform:scale(1.18);opacity:0}100%{opacity:0}}
 .hidden{display:none!important}
 </style>
+<script>
+  // Dark theme: follow the OS by default; force it when embedded with #dark
+  // (e.g. iframed on the dark marketing homepage). Runs before paint (no flash).
+  if (matchMedia("(prefers-color-scheme: dark)").matches || location.hash.indexOf("dark") >= 0) {
+    document.documentElement.classList.add("force-dark");
+  }
+</script>
 </head>
 <body>
   <div class="stage">
