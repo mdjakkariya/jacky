@@ -335,6 +335,7 @@ def build(
     on_step: Callable[[int, str, str, str], None] | None = None,
     on_workspace: Callable[[str, str], None] | None = None,
     on_mcp_event: Callable[[dict[str, object]], None] | None = None,
+    on_meeting_event: Callable[[dict[str, object]], None] | None = None,
 ) -> Orchestrator:
     """Compose a fully wired :class:`Orchestrator`.
 
@@ -375,6 +376,9 @@ def build(
         on_mcp_event: Optional callback invoked when the MCP manager publishes an
             event; the daemon passes the bus's ``publish_mcp`` to wire MCP state
             to connected clients.
+        on_meeting_event: Optional callback invoked with the recorder's ``status()``
+            dict at each meeting lifecycle transition; the daemon passes the bus's
+            ``publish_meeting`` so connected clients receive live recording state.
 
     Returns:
         A ready-to-run orchestrator. Constructing it loads the STT model, opens
@@ -618,6 +622,10 @@ def build(
     if settings.barge_in:
         log.info("barge-in enabled — engages when voice starts (if AEC is active)")
 
+    # Initialise to None; set inside the allow_meetings block so the daemon
+    # dispatcher can access it via orch.meeting_recorder after build() returns.
+    _meeting_recorder: object | None = None
+
     if settings.allow_meetings:
         import os as _os
 
@@ -679,6 +687,7 @@ def build(
             far_source_factory=_far_source,
             keep_audio=settings.meeting_keep_audio,
             keep=settings.meeting_keep,
+            on_event=on_meeting_event,
         )
         register_meeting_tools(registry, _meeting_recorder)
         import threading as _threading
@@ -712,6 +721,9 @@ def build(
         release_voice_io=_voice_io.release,
     )
     orch.mcp_provider = mcp_provider
+    # Expose the meeting recorder (if built) so the daemon dispatcher can route
+    # /meeting/* HTTP actions to it — same pattern as mcp_provider above.
+    orch.meeting_recorder = _meeting_recorder
     return orch
 
 

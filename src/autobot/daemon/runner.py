@@ -133,8 +133,38 @@ def serve(settings: Settings | None = None) -> None:
         on_step=publish_step,
         on_workspace=publish_workspace,
         on_mcp_event=bus.publish_mcp,
+        on_meeting_event=bus.publish_meeting,
     )
     holder["orch"] = orchestrator
+
+    # Build the meeting dispatcher if the recorder was wired. HTTP WRITE actions
+    # (start/stop/pause/resume) bypass the audit gate and call the recorder directly.
+    # This is intentional: these are UI-initiated controls (not LLM-driven tool calls),
+    # and the recorder itself logs state transitions. The voice/chat tool path (Task 15)
+    # remains the gated/audited path for LLM-originated meeting actions.
+    _recorder = getattr(orchestrator, "meeting_recorder", None)
+
+    def _on_meeting(action: str, payload: dict[str, Any]) -> object:
+        """Dispatch a /meeting/* HTTP action to the recorder."""
+        if _recorder is None:
+            return {"error": "meetings disabled"}
+        if action == "start":
+            title = str(payload.get("title", "")) if isinstance(payload, dict) else ""
+            return _recorder.start(title)
+        if action == "stop":
+            return _recorder.stop()
+        if action == "pause":
+            return _recorder.pause()
+        if action == "resume":
+            return _recorder.resume()
+        if action == "status":
+            return _recorder.status()
+        if action == "list":
+            return _recorder.list_recent()
+        return {"error": f"unknown action: {action!r}"}
+
+    on_meeting = _on_meeting if _recorder is not None else None
+
     thread = threading.Thread(target=orchestrator.run, name="engine", daemon=True)
     thread.start()
     print(f"[daemon] serving on ws://{settings.daemon_host}:{settings.daemon_port}/ws")
@@ -149,6 +179,7 @@ def serve(settings: Settings | None = None) -> None:
         on_new_session=orchestrator.new_chat_session,
         on_action=orchestrator.run_tool,
         mcp_provider=orchestrator.mcp_provider,
+        on_meeting=on_meeting,
     )
 
 

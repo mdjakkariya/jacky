@@ -391,6 +391,9 @@ class Orchestrator:
         # requests to the live manager via this provider, which can also create or
         # tear down the manager at runtime when ``allow_mcp`` is toggled (no restart).
         self.mcp_provider: McpProvider | None = None
+        # Set by the composition root when allow_meetings is True. The daemon
+        # delegates /meeting/* HTTP actions to the recorder via this attribute.
+        self.meeting_recorder: Any = None
 
     def _greeting(self) -> str:
         """The reply to a bare wake word — name-aware, and a first hello if new."""
