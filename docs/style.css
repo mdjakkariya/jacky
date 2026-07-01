@@ -88,6 +88,7 @@ h1{font-size:52px;line-height:1.05;font-weight:680;letter-spacing:-.02em}
 .chip{font-size:11px;border:.5px solid var(--line2);border-radius:7px;padding:4px 9px;color:var(--text);transition:.15s}
 .chip.go{background:rgba(10,132,255,.28);border-color:transparent;color:#cfe6ff}
 .acstatus{font-size:11px;color:var(--green);margin-top:7px}
+.recdot{display:inline-block;width:7px;height:7px;border-radius:50%;background:#ff5b5b;margin-right:3px;vertical-align:middle;animation:blink 1.2s infinite}
 .typing{display:flex;gap:3px;align-self:flex-start;background:var(--bubble);padding:9px 11px;border-radius:13px;border-bottom-left-radius:4px}
 .typing i{width:5px;height:5px;border-radius:50%;background:var(--muted);animation:blink 1.2s infinite}
 .typing i:nth-child(2){animation-delay:.2s}.typing i:nth-child(3){animation-delay:.4s}

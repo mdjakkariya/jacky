@@ -262,13 +262,13 @@
   }
   document.addEventListener("visibilitychange", function(){ if(document.hidden) stopSpeech(); });
   setSndUI();
-  var QUERY="find my internship certificate";
+  var QUERY="Jack, take minutes of this meeting";
   var HINTS=["Message Jack…","⌘⌃J to summon or hide","⌘⌃C chat · ⌘⌃V voice"];
   var sleep=function(ms){return new Promise(function(r){setTimeout(r,ms);});};
   function el(h){var d=document.createElement("div");d.innerHTML=h.trim();return d.firstChild;}
   function emptyState(){
     body.innerHTML="";
-    body.appendChild(el('<div class="empty"><div class="es"><svg viewBox="0 0 24 24" fill="none"><path d="M12 3l1.6 4.4L18 9l-4.4 1.6L12 15l-1.6-4.4L6 9z"/></svg></div><h4>Hey, I’m Jack</h4><p>Ask me anything, or start with one of these.</p><div class="chips"><div class="chip2"><div class="cl">Open a website</div><div class="ce">“open GitHub”</div></div><div class="chip2"><div class="cl">Find a file</div><div class="ce">“where’s my resume”</div></div></div></div>'));
+    body.appendChild(el('<div class="empty"><div class="es"><svg viewBox="0 0 24 24" fill="none"><path d="M12 3l1.6 4.4L18 9l-4.4 1.6L12 15l-1.6-4.4L6 9z"/></svg></div><h4>Hey, I’m Jack</h4><p>Ask me anything, or start with one of these.</p><div class="chips"><div class="chip2"><div class="cl">Take meeting minutes</div><div class="ce">“record this call”</div></div><div class="chip2"><div class="cl">Open a website</div><div class="ce">“open GitHub”</div></div></div></div>'));
   }
   async function moveCursorTo(target){
     var sr=show.getBoundingClientRect(), tr=target.getBoundingClientRect();
@@ -289,12 +289,17 @@
     body.appendChild(el('<div class="msg me">'+QUERY+'</div>'));
     var t=el('<div class="typing"><i></i><i></i><i></i></div>'); body.appendChild(t);
     await sleep(1100); t.remove();
-    body.appendChild(el('<div class="msg jk">Found it — here’s the match:</div>'));
-    var card=el('<div class="acard"><div class="ti">Files matching ‘internship certificate’</div><div class="fn">certificate_Mohamed (1).pdf</div><div class="fp">~/Documents/personal/docs</div><div class="row"><span class="chip" id="cOpen">Open</span><span class="chip">Reveal</span><span class="chip">Copy path</span></div></div>');
-    body.appendChild(card); ctx.classList.add("on");
+    body.appendChild(el('<div class="msg jk">On it — recording this call. I’ll write the minutes when it ends.</div>'));
+    var rec=el('<div class="acard"><div class="ti"><span class="recdot"></span> Recording meeting · captions on-device</div><div class="fn">Weekly Sync</div><div class="fp">You + participants · <span id="recTimer">00:00</span></div></div>');
+    body.appendChild(rec); ctx.classList.add("on");
+    var secs=0, tm=setInterval(function(){ secs++; var m=document.getElementById("recTimer"); if(m) m.textContent="00:"+(secs<10?"0":"")+secs; }, 230);
+    await sleep(2300); clearInterval(tm); rec.remove();
+    body.appendChild(el('<div class="msg jk">Done — here are your minutes:</div>'));
+    var card=el('<div class="acard"><div class="ti">Meeting minutes · summarized on-device</div><div class="fn">Weekly Sync — Minutes</div><div class="fp">~/.autobot/meetings · 2 decisions · 3 action items</div><div class="row"><span class="chip" id="cOpen">Open</span><span class="chip">Reveal</span><span class="chip">Copy</span></div></div>');
+    body.appendChild(card);
     await sleep(800);
     var open=document.getElementById("cOpen"); await moveCursorTo(open); open.classList.add("go");
-    card.appendChild(el('<div class="acstatus">Opened certificate_Mohamed (1).pdf</div>'));
+    card.appendChild(el('<div class="acstatus">Opened minutes.md</div>'));
     await sleep(1400); cursor.style.opacity="0"; await sleep(700);
     await moveCursorTo(segVoice);
     var sr=show.getBoundingClientRect(), vr=segVoice.getBoundingClientRect();
