@@ -10,6 +10,12 @@ def test_chunk_text_respects_max() -> None:
     assert "".join(chunks).replace("\n", "") == text.replace("\n", "")
 
 
+def test_chunk_text_oversized_single_line() -> None:
+    long_line = "x" * 50
+    chunks = chunk_text(long_line + "\nshort", max_chars=30)
+    assert chunks[0] == long_line + "\n"  # an oversized line stays intact as its own chunk
+
+
 def test_batch_notes_groups_whole_notes() -> None:
     notes = ["aaaa", "bbbb", "cccc"]  # 4 chars each; +2 join sep
     batches = batch_notes(notes, max_chars=10)  # "aaaa\n\nbbbb"=10 fits, +cccc overflows

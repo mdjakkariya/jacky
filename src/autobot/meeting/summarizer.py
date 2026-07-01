@@ -34,7 +34,10 @@ _FINAL_PROMPT = (
 
 
 def chunk_text(text: str, max_chars: int) -> list[str]:
-    """Split text on line boundaries into chunks no larger than ``max_chars``."""
+    """Split text on line boundaries into chunks no larger than ``max_chars``.
+
+    A single line longer than ``max_chars`` becomes its own (oversized) chunk.
+    """
     chunks: list[str] = []
     current = ""
     for line in text.splitlines(keepends=True):
@@ -89,11 +92,21 @@ class MeetingSummarizer:
         if len(notes) <= 1 or len(combined) <= self._max_chars:
             return combined
         if _round >= _MAX_REDUCE_ROUNDS:
+            _log.debug(
+                "summarize reduce round-cap hit round=%d notes=%d",
+                _round,
+                len(notes),
+            )
             return combined[: self._max_chars]
         batches = batch_notes(notes, self._max_chars)
         reduced = [self._complete(_REDUCE_PROMPT.format(notes=b)) for b in batches]
         if len(reduced) >= len(notes):
             # No structural progress (each note already oversized) — stop.
+            _log.debug(
+                "summarize reduce no-progress notes=%d batches=%d — truncating",
+                len(notes),
+                len(reduced),
+            )
             return combined[: self._max_chars]
         _log.info("summarize reduce round=%d notes=%d->%d", _round, len(notes), len(reduced))
         return self._reduce(reduced, _round + 1)
