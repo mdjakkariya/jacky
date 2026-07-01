@@ -162,7 +162,75 @@
   .upd .u-dismiss { color: var(--muted); }
   .spinner { width: 24px; height: 24px; border-radius: 50%; border: 2.5px solid var(--field-line); border-top-color: var(--accent); animation: spin .8s linear infinite; }
   @keyframes spin { to { transform: rotate(360deg); } }
+  @keyframes wv { 0%, 100% { transform: scaleY(.25); } 50% { transform: scaleY(1); } }
+  @keyframes mtg-ring { 0% { transform: scale(1); opacity: .9; } 70% { transform: scale(1.18); opacity: 0; } 100% { opacity: 0; } }
   .hidden { display: none !important; }
+
+  /* ── Meeting recording card ────────────────────────────────────────────────── */
+  .rec-card { align-self: stretch; background: var(--panel); border: .5px solid var(--field-line); border-radius: 12px; overflow: hidden; animation: rise .25s ease both; }
+  .rec-top { display: flex; align-items: center; gap: 9px; padding: 12px 14px; }
+  .rec-top .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--danger); animation: pulse 1.4s infinite; flex: none; }
+  .rec-card.paused .rec-top .dot { background: var(--warn); animation: none; }
+  .rec-top .ttl { font-size: 13px; font-weight: 600; }
+  .rec-top .pill { font-size: 10px; font-weight: 700; letter-spacing: .3px; color: var(--warn); background: var(--warn-bg); padding: 2px 7px; border-radius: 6px; display: none; }
+  .rec-card.paused .rec-top .pill { display: inline-block; }
+  .rec-top .timer { margin-left: auto; font-variant-numeric: tabular-nums; font-size: 13px; font-weight: 600; color: var(--text); }
+  .rec-body { border-top: .5px solid var(--line); padding: 16px 14px 12px; display: flex; flex-direction: column; align-items: center; gap: 12px; }
+  .wave { display: flex; align-items: center; gap: 3px; height: 46px; }
+  .wave i { width: 3px; height: 100%; border-radius: 2px; background: var(--accent); transform-origin: center; transform: scaleY(.3); animation: wv 1s ease-in-out infinite; display: block; }
+  .rec-card.paused .wave i { animation-play-state: paused; background: var(--muted); opacity: .4; }
+  .caplegend { display: flex; align-items: center; gap: 8px; font-size: 11.5px; color: var(--muted); flex-wrap: wrap; justify-content: center; }
+  .who-dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; margin-right: 4px; vertical-align: middle; }
+  .who-dot.you { background: var(--accent); }
+  .who-dot.them { background: var(--them); }
+  .caplegend .sep { opacity: .5; }
+  .warnline { display: none; align-items: flex-start; gap: 7px; font-size: 11.5px; line-height: 1.4; color: var(--warn); background: var(--warn-bg); border-radius: 9px; padding: 8px 10px; width: 100%; }
+  .warnline svg { width: 14px; height: 14px; flex: none; margin-top: 1px; }
+  .rec-card.miconly .warnline { display: flex; }
+  .rec-card.miconly .who-dot.them, .rec-card.miconly .them-label { opacity: .3; text-decoration: line-through; }
+  .rec-foot { display: flex; align-items: center; gap: 10px; padding: 11px 14px; border-top: .5px solid var(--line); flex-wrap: wrap; }
+  .rec-foot .note { display: inline-flex; align-items: center; gap: 6px; font-size: 11px; color: var(--muted); line-height: 1.3; flex: 1; min-width: 140px; }
+  .rec-foot .note .ld { width: 6px; height: 6px; border-radius: 50%; background: var(--ok); flex: none; animation: pulse 1.4s infinite; }
+  .rec-actions { display: flex; gap: 8px; flex: none; }
+
+  /* ── Processing steps card ─────────────────────────────────────────────────── */
+  .mtg-steps { list-style: none; margin: 8px 0 0; padding: 0; display: flex; flex-direction: column; gap: 10px; }
+  .mtg-steps li { display: flex; align-items: center; gap: 9px; font-size: 12.5px; color: var(--muted); }
+  .mtg-steps li .ic { width: 18px; height: 18px; flex: none; border-radius: 50%; border: 2px solid var(--field-line); display: flex; align-items: center; justify-content: center; }
+  .mtg-steps li.done { color: var(--text); }
+  .mtg-steps li.done .ic { border-color: var(--ok); background: var(--ok); color: #fff; }
+  .mtg-steps li.done .ic svg { width: 11px; height: 11px; }
+  .mtg-steps li.active { color: var(--text); }
+  .mtg-steps li.active .ic { border-color: var(--accent); border-top-color: transparent; animation: spin .8s linear infinite; }
+  .mtg-steps li .meta { margin-left: auto; font-size: 11px; color: var(--muted); font-variant-numeric: tabular-nums; }
+
+  /* ── Minutes card ──────────────────────────────────────────────────────────── */
+  .min { align-self: stretch; background: var(--panel); border: .5px solid var(--field-line); border-radius: 12px; overflow: hidden; animation: rise .3s ease both; }
+  .min-h { padding: 13px 14px; border-bottom: .5px solid var(--line); }
+  .min-h .loc { display: inline-flex; align-items: center; gap: 6px; font-size: 11px; color: var(--muted); background: var(--field); border: .5px solid var(--field-line); padding: 3px 9px 3px 8px; border-radius: 7px; max-width: 100%; }
+  .min-h .loc svg { width: 13px; height: 13px; color: var(--accent); flex: none; }
+  .min-h .loc .crumb { color: var(--text); font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .min-h .loc .crumb i { color: var(--muted); font-style: normal; margin: 0 3px; }
+  .min-h .loc .ext { font-family: "SF Mono", ui-monospace, Menlo, monospace; color: var(--muted); padding-left: 7px; border-left: .5px solid var(--field-line); flex: none; }
+  .min-h h3 { margin: 9px 0 3px; font-size: 15px; }
+  .min-h .meta { font-size: 11.5px; color: var(--muted); display: flex; flex-wrap: wrap; gap: 4px 12px; }
+  .min-prev { padding: 12px 14px 4px; }
+  .min-prev .st { display: flex; align-items: center; gap: 7px; font-size: 11px; font-weight: 700; letter-spacing: .5px; text-transform: uppercase; color: var(--muted); margin-bottom: 7px; }
+  .min-prev .st svg { width: 14px; height: 14px; }
+  .sum { position: relative; margin: 0; font-size: 12.5px; line-height: 1.55; color: var(--text); display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+  .sum::after { content: ""; position: absolute; left: 0; right: 0; bottom: 0; height: 1.5em; background: linear-gradient(transparent, var(--panel)); }
+  .mtg-stats { display: flex; flex-wrap: wrap; gap: 7px; margin: 12px 0 2px; }
+  .stat { display: inline-flex; align-items: center; gap: 5px; font-size: 11px; color: var(--muted); background: var(--field); border: .5px solid var(--field-line); border-radius: 7px; padding: 4px 9px; }
+  .stat b { color: var(--text); font-weight: 700; font-variant-numeric: tabular-nums; }
+  .aiprev { list-style: none; margin: 12px 0 4px; padding: 0; display: flex; flex-direction: column; gap: 9px; }
+  .aiprev .more-ai { font-size: 11.5px; color: var(--accent); padding-left: 24px; }
+  .ai { display: flex; gap: 9px; align-items: flex-start; font-size: 12.5px; line-height: 1.4; }
+  .ai .box { width: 15px; height: 15px; flex: none; margin-top: 1px; border-radius: 4px; border: 1.5px solid var(--field-line); }
+  .ai .who { display: inline-block; font-size: 10.5px; font-weight: 700; color: var(--them); background: var(--them-bg); padding: 0 6px; border-radius: 5px; margin-left: 6px; }
+  .min-foot { display: flex; gap: 8px; padding: 11px 14px; border-top: .5px solid var(--line); flex-wrap: wrap; }
+  .fbtn { flex: 1; min-width: 96px; border: .5px solid var(--field-line); background: var(--field); color: var(--text); font-size: 11.5px; border-radius: 8px; padding: 8px; cursor: pointer; display: inline-flex; align-items: center; justify-content: center; gap: 6px; }
+  .fbtn svg { width: 14px; height: 14px; }
+  .fbtn.primary { border-color: rgba(10, 132, 255, .5); background: var(--accent-bg); color: var(--accent); }
   .steptrace { align-self: flex-start; max-width: 82%; display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--muted); padding: 4px 2px; }
   .steptrace .row { display: flex; align-items: center; gap: 7px; }
   .steptrace .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--muted); flex: none; }
