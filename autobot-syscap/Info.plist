@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleIdentifier</key>
+    <string>com.browserstack.autobot.syscap</string>
+    <key>CFBundleName</key>
+    <string>autobot-syscap</string>
+    <key>CFBundleVersion</key>
+    <string>1</string>
+    <key>CFBundleShortVersionString</key>
+    <string>1.0.0</string>
+    <key>LSMinimumSystemVersion</key>
+    <string>14.4</string>
+    <key>NSAudioCaptureUsageDescription</key>
+    <string>autobot-syscap captures system audio output to enable meeting transcription. No audio is stored or transmitted off-device.</string>
+    <key>NSMicrophoneUsageDescription</key>
+    <string>autobot-syscap may access the microphone via aggregate device routing for system audio capture.</string>
+</dict>
+</plist>
