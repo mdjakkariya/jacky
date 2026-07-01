@@ -39,6 +39,9 @@
     ],
     "externalBin": [
       "binaries/autobot-daemon"
+    ],
+    "resources": [
+      "syscap/autobot-syscap"
     ]
   }
 }
