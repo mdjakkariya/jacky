@@ -50,7 +50,6 @@ h1{font-size:52px;line-height:1.05;font-weight:680;letter-spacing:-.02em}
 .fine{margin-top:16px;font-size:13px;color:var(--faint)}
 /* showcase */
 .show{position:relative;display:flex;justify-content:center;align-items:center;min-height:480px}
-.show-frame{display:block;width:100%;max-width:560px;height:724px;border:0;border-radius:16px;box-shadow:0 30px 70px rgba(0,0,0,.5);color-scheme:dark}
 .drawer{position:relative;z-index:2;width:340px;height:448px;background:var(--drawer);border:.5px solid var(--line2);border-radius:16px;
   box-shadow:0 30px 70px rgba(0,0,0,.55);display:flex;flex-direction:column;overflow:hidden;transition:transform .55s cubic-bezier(.4,0,.2,1),opacity .4s}
 .drawer.out{transform:translateX(150%);opacity:0}
@@ -209,8 +208,7 @@ pre code{background:none;padding:0;color:#cfe6ff;font-size:12.5px;line-height:1.
   /* center the hero copy and buttons on mobile */
   .cta{justify-content:center}
   /* keep the chat-drawer showcase centered and within the viewport */
-  .show{margin:18px auto 0;width:100%;max-width:400px;min-height:auto}
-  .show-frame{height:700px}
+  .show{margin:18px auto 0;width:100%;max-width:360px;min-height:auto}
   .drawer{width:100%;max-width:340px;height:420px}
   h1{font-size:40px}
   .three,.grid{grid-template-columns:1fr}
