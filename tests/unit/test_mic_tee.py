@@ -96,6 +96,17 @@ def test_branch_close_closes_tee_and_source() -> None:
         assert not tee._thread.is_alive(), "owner thread must stop after branch.close()"
 
 
+def test_flush_discards_buffered_frames_and_sentinel_ends_iteration() -> None:
+    """flush() drops queued frames; a None sentinel ends frames() iteration."""
+    tee = FrameTee(_FakeSource([]))
+    b = tee.branch()
+    b._offer(np.zeros(4, dtype=np.float32))
+    b._offer(np.zeros(4, dtype=np.float32))
+    b.flush()  # discard both
+    b._offer(None)  # sentinel
+    assert list(b.frames()) == []  # flushed → only the sentinel remains → empty
+
+
 def _take(branch: object, n: int) -> list[AudioClip]:
     out: list[AudioClip] = []
     for f in branch.frames():  # type: ignore[attr-defined]

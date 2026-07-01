@@ -138,6 +138,30 @@ def test_reveal_missing_folder(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) 
     assert calls == []
 
 
+def test_reveal_reports_open_failure(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """When `open` raises, reveal() returns ok=False instead of propagating."""
+    rec = _recorder(tmp_path)
+    (tmp_path / "2026-01-01-0900-mtg").mkdir()
+
+    def _boom(cmd: object, **kw: object) -> None:
+        raise RuntimeError("no Finder")
+
+    monkeypatch.setattr("subprocess.run", _boom)
+    out = rec.reveal("2026-01-01-0900-mtg")
+    assert out["ok"] is False
+
+
+def test_last_minutes_none_when_minutes_missing(tmp_path: Path) -> None:
+    """last_minutes() skips meetings whose minutes.md doesn't exist → None."""
+    rec = _recorder(tmp_path)
+    d = tmp_path / "2026-01-01-0900-mtg"
+    d.mkdir()
+    (d / "manifest.json").write_text(
+        '{"id": "2026-01-01-0900-mtg", "state": "done"}', encoding="utf-8"
+    )
+    assert rec.last_minutes() is None
+
+
 def test_delete_removes_the_folder(tmp_path: Path) -> None:
     rec = _recorder(tmp_path)
     d = tmp_path / "2026-01-01-0900-mtg"

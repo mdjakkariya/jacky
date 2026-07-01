@@ -184,6 +184,90 @@ def test_delete_meeting_is_destructive_and_confirms() -> None:
     assert spec.confirm_prompt
 
 
+# --- handler branch coverage ---
+
+
+def test_meeting_status_active_reports_minutes() -> None:
+    class _Active(_FakeRecorder):
+        def status(self) -> dict:  # type: ignore[type-arg]
+            return {
+                "active": True,
+                "paused": False,
+                "mic_only": False,
+                "elapsed_s": 125.0,
+                "title": "Sync",
+            }
+
+    out = MeetingTools(_Active()).meeting_status()  # type: ignore[arg-type]
+    assert "Sync" in out and "2 min" in out
+
+
+def test_meeting_status_paused_and_miconly_suffixes() -> None:
+    class _Paused(_FakeRecorder):
+        def status(self) -> dict:  # type: ignore[type-arg]
+            return {
+                "active": True,
+                "paused": True,
+                "mic_only": False,
+                "elapsed_s": 60.0,
+                "title": "P",
+            }
+
+    class _Mic(_FakeRecorder):
+        def status(self) -> dict:  # type: ignore[type-arg]
+            return {
+                "active": True,
+                "paused": False,
+                "mic_only": True,
+                "elapsed_s": 30.0,
+                "title": "M",
+            }
+
+    assert "(paused)" in MeetingTools(_Paused()).meeting_status()  # type: ignore[arg-type]
+    assert "mic-only" in MeetingTools(_Mic()).meeting_status()  # type: ignore[arg-type]
+
+
+def test_list_meetings_empty() -> None:
+    class _Empty(_FakeRecorder):
+        def list_recent(self) -> list[dict[str, object]]:
+            return []
+
+    assert "no saved meetings" in MeetingTools(_Empty()).list_meetings().lower()  # type: ignore[arg-type]
+
+
+def test_last_meeting_handles_lookup_error() -> None:
+    class _Boom(_FakeRecorder):
+        def last_minutes(self) -> dict[str, object] | None:
+            raise RuntimeError("boom")
+
+    assert "couldn't" in MeetingTools(_Boom()).last_meeting().lower()  # type: ignore[arg-type]
+
+
+def test_last_meeting_without_summary_still_reports_path() -> None:
+    class _NoSum(_FakeRecorder):
+        def last_minutes(self) -> dict[str, object] | None:
+            return {"id": "m", "dir": "/x/m", "mic_only": True, "minutes_md": "# Title only\n"}
+
+    out = MeetingTools(_NoSum()).last_meeting()  # type: ignore[arg-type]
+    assert "Title only" in out and "/x/m" in out and "Summary:" not in out
+
+
+def test_delete_meeting_lookup_error() -> None:
+    class _Boom(_FakeRecorder):
+        def last_minutes(self) -> dict[str, object] | None:
+            raise RuntimeError("boom")
+
+    assert "couldn't find" in MeetingTools(_Boom()).delete_meeting().lower()  # type: ignore[arg-type]
+
+
+def test_delete_meeting_empty_when_none_saved() -> None:
+    class _NoneSaved(_FakeRecorder):
+        def last_minutes(self) -> dict[str, object] | None:
+            return None
+
+    assert "no saved meetings" in MeetingTools(_NoneSaved()).delete_meeting().lower()  # type: ignore[arg-type]
+
+
 def test_summarize_meeting_with_id_calls_resummarize() -> None:
     rec = _FakeRecorder()
     tools = MeetingTools(rec)  # type: ignore[arg-type]
