@@ -11,6 +11,34 @@ from autobot.tools.registry import ToolRegistry, ToolSpec
 _log = get_logger("meeting")
 
 
+def _brief(minutes_md: str) -> tuple[str, str]:
+    """Extract (title, summary) from a minutes.md — the H1 and the Summary paragraph.
+
+    Pure and defensive: returns empty strings for anything it can't find. Used to
+    give a spoken one-liner without dumping the whole file.
+
+    Args:
+        minutes_md: The raw minutes markdown.
+
+    Returns:
+        ``(title, summary)`` — either may be ``""``.
+    """
+    title = ""
+    buf: list[str] = []
+    in_summary = False
+    for line in (minutes_md or "").splitlines():
+        s = line.strip()
+        if not title and s.startswith("# "):
+            title = s[2:].strip()
+            continue
+        if s.startswith("## "):
+            in_summary = s[3:].strip().lower() == "summary"
+            continue
+        if in_summary and s:
+            buf.append(s)
+    return title, " ".join(buf)
+
+
 class MeetingTools:
     """Start/stop/pause/resume + status/list/summarize, backed by the recorder."""
 
@@ -47,15 +75,34 @@ class MeetingTools:
             return "I couldn't check the meeting status right now."
 
     def list_meetings(self) -> str:
-        """List recent saved meetings."""
+        """List recent saved meetings with their folder paths."""
         recent = self._rec.list_recent()
         if not recent:
             return "You have no saved meetings yet."
-        names = [
-            f'"{m.get("title") or m.get("id") or "meeting"}" ({m.get("state") or "?"})'
+        lines = [
+            f'· "{m.get("title") or m.get("id") or "meeting"}" ({m.get("state") or "?"}) '
+            f"— {m.get('dir') or m.get('id') or ''}"
             for m in recent[:10]
         ]
-        return "Recent meetings: " + "; ".join(names) + "."
+        return "Your saved meetings (newest first):\n" + "\n".join(lines)
+
+    def last_meeting(self) -> str:
+        """Say where the most recent meeting is saved and give its summary."""
+        try:
+            last = self._rec.last_minutes()
+        except Exception as exc:
+            _log.exception("last_meeting failed: %s", exc)
+            return "I couldn't look up your last meeting right now."
+        if not last:
+            return "You have no saved meetings yet."
+        directory = str(last.get("dir", "")).strip()
+        title, summary = _brief(str(last.get("minutes_md", "")))
+        name = title or "your last meeting"
+        where = f" It's saved in {directory} (minutes.md)." if directory else ""
+        if summary:
+            excerpt = summary if len(summary) <= 500 else summary[:500].rstrip() + "…"
+            return f'Your most recent meeting is "{name}".{where} Summary: {excerpt}'
+        return f'Your most recent meeting is "{name}".{where}'
 
     def summarize_meeting(self, id: str = "") -> str:
         """Rebuild minutes for a saved meeting (the most recent if ``id`` omitted)."""
@@ -133,10 +180,27 @@ class MeetingTools:
                 risk=Risk.READ_ONLY,
             ),
             ToolSpec(
+                name="last_meeting",
+                description=(
+                    "Recall the meeting Jack most recently recorded: WHERE it is saved "
+                    "(the local folder path) and its summary. This is the RIGHT tool for "
+                    "'where did you save the meeting?', 'where are my minutes?', 'what "
+                    "were the minutes/decisions/action items?', 'show me the last meeting' "
+                    "— for meetings JACK recorded on this Mac. Do NOT use a notes search, "
+                    "Notion, or the web for this; the meeting lives in the local store."
+                ),
+                parameters={"type": "object", "properties": {}, "required": []},
+                handler=self.last_meeting,
+                risk=Risk.READ_ONLY,
+                core=True,
+            ),
+            ToolSpec(
                 name="list_meetings",
                 description=(
-                    "List recent recorded meetings and their state. "
-                    "Cue: 'what meetings have you saved?'."
+                    "List the meetings Jack has recorded, newest first, each with its "
+                    "saved folder path. This is the RIGHT tool for 'what meetings have "
+                    "you saved?', 'where are my meetings?', 'list my recordings' — the "
+                    "meetings live in the local store, not in notes/Notion/the web."
                 ),
                 parameters={"type": "object", "properties": {}, "required": []},
                 handler=self.list_meetings,

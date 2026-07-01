@@ -86,8 +86,19 @@ class MeetingStore:
         return sorted((d for d in self._root.iterdir() if d.is_dir()), reverse=True)
 
     def list_recent(self) -> list[dict[str, object]]:
-        """All meetings' manifests, newest first (by folder name = timestamped id)."""
-        return [m for d in self._all_dirs() if (m := self.read_manifest(str(d)))]
+        """All meetings' manifests, newest first (by folder name = timestamped id).
+
+        Each manifest is augmented with ``id`` (the folder name) and ``dir`` (its
+        absolute path) so callers can tell the user *where* a meeting is saved.
+        """
+        out: list[dict[str, object]] = []
+        for d in self._all_dirs():
+            m = self.read_manifest(str(d))
+            if m:
+                m.setdefault("id", d.name)
+                m["dir"] = str(d)
+                out.append(m)
+        return out
 
     def find_interrupted(self) -> list[str]:
         """Ids of meetings left in a non-terminal state (to finalize on startup)."""

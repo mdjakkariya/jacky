@@ -38,7 +38,25 @@ class _FakeRecorder:
 
     def list_recent(self) -> list[dict[str, object]]:
         self.calls.append("list_recent")
-        return [{"id": "m1", "title": "Standup", "state": "done"}]
+        return [
+            {
+                "id": "2026-07-01-2225-standup",
+                "title": "Standup",
+                "state": "done",
+                "dir": "/x/meetings/2026-07-01-2225-standup",
+            }
+        ]
+
+    def last_minutes(self) -> dict[str, object] | None:
+        self.calls.append("last_minutes")
+        return {
+            "id": "2026-07-01-2225-standup",
+            "dir": "/x/meetings/2026-07-01-2225-standup",
+            "mic_only": True,
+            "minutes_md": (
+                "# Standup\n\n## Summary\nShipped the reveal button.\n\n## Decisions\n- None\n"
+            ),
+        }
 
 
 def _specs() -> dict[str, ToolSpec]:
@@ -101,6 +119,36 @@ def test_list_meetings_calls_list_recent_and_returns_string() -> None:
     assert "list_recent" in rec.calls
     assert isinstance(result, str)
     assert "Standup" in result
+
+
+def test_list_meetings_includes_the_folder_path() -> None:
+    """The user must be able to learn WHERE a meeting is saved."""
+    result = MeetingTools(_FakeRecorder()).list_meetings()  # type: ignore[arg-type]
+    assert "/x/meetings/2026-07-01-2225-standup" in result
+
+
+def test_last_meeting_reports_path_and_summary() -> None:
+    rec = _FakeRecorder()
+    result = MeetingTools(rec).last_meeting()  # type: ignore[arg-type]
+    assert "last_minutes" in rec.calls
+    assert "/x/meetings/2026-07-01-2225-standup" in result
+    assert "Standup" in result
+    assert "Shipped the reveal button" in result
+
+
+def test_last_meeting_when_none_saved() -> None:
+    class _Empty(_FakeRecorder):
+        def last_minutes(self) -> dict[str, object] | None:
+            return None
+
+    result = MeetingTools(_Empty()).last_meeting()  # type: ignore[arg-type]
+    assert "no saved meetings" in result.lower()
+
+
+def test_last_meeting_is_core_and_read_only() -> None:
+    spec = _specs()["last_meeting"]
+    assert spec.core is True
+    assert spec.risk == Risk.READ_ONLY
 
 
 def test_summarize_meeting_with_id_calls_resummarize() -> None:
