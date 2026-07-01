@@ -48,7 +48,11 @@ def _fake_summarizer() -> MeetingSummarizer:
     return MeetingSummarizer(complete=lambda prompt: "## Summary\n- ok\n", max_chars=8000)
 
 
-def _recorder(tmp_path: Path, far_ok: bool = True) -> MeetingRecorder:
+def _recorder(
+    tmp_path: Path,
+    far_ok: bool = True,
+    on_event: object = None,
+) -> MeetingRecorder:
     store = MeetingStore(str(tmp_path))
     tr = MeetingTranscriber(cast("object", _FakeSTT()), chunk_s=30.0, overlap_s=3.0, stt_prompt="")  # type: ignore[arg-type]
 
@@ -64,6 +68,7 @@ def _recorder(tmp_path: Path, far_ok: bool = True) -> MeetingRecorder:
         near_branch_factory=lambda: _FakeBranch(8),
         far_source_factory=far_factory,
         keep_audio=True,
+        on_event=on_event,  # type: ignore[arg-type]
     )
 
 
@@ -75,6 +80,29 @@ def test_full_lifecycle_writes_files(tmp_path: Path) -> None:
     out = rec.stop()
     assert "saved" in out.lower()
     assert rec.status()["active"] is False
+
+
+def test_emits_full_phase_sequence(tmp_path: Path) -> None:
+    """start→stop emits the full phase sequence, never a trailing 'idle'.
+
+    Expected order: recording → transcribing → summarizing → done. A trailing
+    'idle' would wipe the drawer's minutes card.
+
+    Regression: _finalize runs after self._active is cleared, so emitting via
+    status() reported 'idle' for every finalize phase and the drawer never showed
+    the processing or minutes cards.
+    """
+    events: list[str] = []
+    rec = _recorder(tmp_path, on_event=lambda s: events.append(str(s["state"])))
+    rec.start("Standup")
+    rec.stop()
+
+    # The recording event fires first, then the three finalize phases in order.
+    assert events[0] == "recording"
+    assert events[-1] == "done", f"last event must be 'done', got {events!r}"
+    assert "idle" not in events, f"no 'idle' during finalize (would clear cards): {events!r}"
+    # transcribing precedes summarizing precedes done.
+    assert events.index("transcribing") < events.index("summarizing") < events.index("done")
 
 
 def test_degrades_to_mic_only(tmp_path: Path) -> None:

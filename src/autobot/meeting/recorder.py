@@ -119,8 +119,8 @@ class MeetingRecorder:
         self._lock = threading.Lock()
         self._active: _Active | None = None
 
-    def _emit(self) -> None:
-        status = self.status()
+    def _publish(self, status: dict[str, object]) -> None:
+        """Log the meeting event and forward it to the on_event callback (the bus)."""
         _log.debug(
             "emit meeting event state=%s paused=%s mic_only=%s",
             status.get("state"),
@@ -129,6 +129,36 @@ class MeetingRecorder:
         )
         if self._on_event is not None:
             self._on_event(status)
+
+    def _emit(self) -> None:
+        """Publish the current live status (recording/paused/idle)."""
+        self._publish(self.status())
+
+    def _status_for(self, a: _Active, state: str) -> dict[str, object]:
+        """Build a status snapshot for a specific meeting with an explicit state.
+
+        Used during ``_finalize``, which runs *after* ``self._active`` has been
+        cleared (so a new meeting can't start mid-finalize).  ``status()`` would
+        therefore report ``idle`` for the transcribing/summarizing/done emits and
+        the drawer would wipe the cards — this carries the true finalize phase.
+
+        Args:
+            a: The meeting being finalized.
+            state: One of ``transcribing``, ``summarizing``, ``done``.
+
+        Returns:
+            A status dict with the same keys as :meth:`status`.
+        """
+        elapsed = (datetime.now() - a.started).total_seconds()
+        return {
+            "active": state not in ("idle", "done"),
+            "paused": a.paused,
+            "mic_only": a.mic_only,
+            "elapsed_s": round(elapsed, 1),
+            "recorded_s": round(a.near.recorded_s(), 1),
+            "title": a.title,
+            "state": state,
+        }
 
     def start(self, title: str) -> str:
         """Begin capture; degrade to mic-only if the far end can't start.
@@ -232,7 +262,9 @@ class MeetingRecorder:
             active.far.stop()
         self._finalize(active)
         self._store.prune(self._keep)
-        self._emit()
+        # NOTE: no trailing _emit() here — _finalize already published the terminal
+        # "done" event. A status() emit now would report "idle" (active is None) and
+        # the drawer would clear the just-rendered minutes card.
         return f"Saved the meeting minutes to {active.paths.dir}."
 
     def _far_stream_status(self, active: _Active) -> str:
@@ -257,7 +289,7 @@ class MeetingRecorder:
             active: The completed meeting's mutable state.
         """
         self._write_manifest_for(active, "transcribing")
-        self._emit()
+        self._publish(self._status_for(active, "transcribing"))
         near_p = Path(active.paths.near_wav)
         far_p = Path(active.paths.far_wav)
         if near_p.exists():
@@ -272,7 +304,7 @@ class MeetingRecorder:
         )
         Path(active.paths.transcript_md).write_text(transcript, encoding="utf-8")
         self._write_manifest_for(active, "summarizing")
-        self._emit()
+        self._publish(self._status_for(active, "summarizing"))
         duration = _fmt_duration((datetime.now() - active.started).total_seconds())
         try:
             minutes = self._summarizer.summarize(
@@ -294,6 +326,7 @@ class MeetingRecorder:
                 if p.exists():
                     p.unlink()
         self._write_manifest_for(active, "done")
+        self._publish(self._status_for(active, "done"))
         _log.info("meeting done id=%s", active.paths.id)
 
     def status(self) -> dict[str, object]:
