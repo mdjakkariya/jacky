@@ -62,15 +62,17 @@ class MeetingTools:
         return self._rec.resummarize(id or None)
 
     def specs(self) -> list[ToolSpec]:
-        """Return the tool specs (relevance-gated; not core)."""
+        """Return the tool specs. start/stop are core (the feature's entry points)."""
         return [
             ToolSpec(
                 name="start_meeting",
                 description=(
-                    "Start recording the current meeting/call (Google Meet, Zoom, any "
-                    "app) to take minutes. Captures both your microphone and the other "
-                    "participants' audio, on-device. Cues: 'take minutes', 'record this "
-                    "meeting', 'start recording the call'. Optional `title` names it."
+                    "Start LIVE-RECORDING the current meeting/call (Google Meet, Zoom, "
+                    "any app) to take minutes. Captures your mic AND the participants' "
+                    "audio, transcribes and summarizes it on-device. This is the RIGHT "
+                    "tool for 'take minutes', 'take minutes of this meeting', 'record "
+                    "this meeting/call', 'start recording' — do NOT create a file or a "
+                    "note for that; call this instead. Optional `title` names it."
                 ),
                 parameters={
                     "type": "object",
@@ -86,6 +88,7 @@ class MeetingTools:
                 risk=Risk.WRITE,
                 requires=permissions.MICROPHONE,
                 ack="Starting the recording.",
+                core=True,
             ),
             ToolSpec(
                 name="stop_meeting",
@@ -98,6 +101,7 @@ class MeetingTools:
                 handler=self.stop_meeting,
                 risk=Risk.WRITE,
                 ack="Wrapping up and writing the minutes.",
+                core=True,
             ),
             ToolSpec(
                 name="pause_meeting",
