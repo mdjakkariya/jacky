@@ -4,6 +4,11 @@ Design reference for a new feature (its own GitHub issue + branch). Records *how
 Jack records a meeting, produces an English transcript, and writes minutes — and
 *why* it's built this way. Status/tracking lives in the issue, not here.
 
+> **Implementation plan:** [`docs/superpowers/plans/2026-07-01-meeting-minutes.md`](../superpowers/plans/2026-07-01-meeting-minutes.md).
+> The on-device Python subsystem (Tasks 1–17) is implemented on `feat/meeting-minutes`.
+> The native `autobot-syscap` sidecar (Task 0) and packaging/signing (Task 18) require
+> Xcode + a Developer ID and are validated on real hardware — see the plan.
+
 > Goal in one line: when the user asks ("Jack, take minutes of this meeting"),
 > Jack captures **both sides** of a Google Meet / Zoom / any call, transcribes it
 > to **English** entirely on-device, and saves a clean transcript plus structured
