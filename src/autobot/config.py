@@ -220,6 +220,20 @@ class Settings:
     allow_system_toggles: bool = True
     access_store: str = "~/.autobot/access.json"
     memory_db: str = "~/.autobot/memory.db"
+    # --- meetings (opt-in; records both sides of a call, transcribes + summarizes) ---
+    # Master capability flag (off by default, like allow_web). Registers the meeting
+    # tools + the system-audio source + the mic tee.
+    allow_meetings: bool = False
+    meetings_dir: str = "~/.autobot/meetings"
+    # Keep the WAVs after transcription (True) or delete them to save space (False).
+    meeting_keep_audio: bool = True
+    # Retain the most recent N meetings; older folders are pruned on stop.
+    meeting_keep: int = 20
+    # On-stop transcription windowing (memory bound only; not a real-time knob).
+    meeting_chunk_s: float = 30.0
+    meeting_overlap_s: float = 3.0
+    # "dual_stream" (you/participants) today; a finer per-speaker mode can be added here.
+    meeting_diarization: str = "dual_stream"
     # --- debugging / logging ---
     session_log: bool = True
     session_dir: str = _DEFAULT_SESSION_DIR
