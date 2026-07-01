@@ -163,6 +163,9 @@ def serve(settings: Settings | None = None) -> None:
             return _recorder.list_recent()
         if action == "last":
             return _recorder.last_minutes()
+        if action == "reveal":
+            meeting_id = str(payload.get("id", "")) if isinstance(payload, dict) else ""
+            return _recorder.reveal(meeting_id)
         return {"error": f"unknown action: {action!r}"}
 
     on_meeting = _on_meeting if _recorder is not None else None

@@ -110,8 +110,8 @@ def create_app(
             ``allow_mcp`` changes — so MCP can be enabled at runtime with no restart.
         on_meeting: Optional callable ``(action: str, payload: dict) -> object``
             dispatching meeting actions (``start``/``stop``/``pause``/``resume``/
-            ``status``/``list``) to the recorder. When ``None``, all /meeting/* routes
-            return ``{"ok": False, "error": "meetings disabled"}``.
+            ``status``/``list``/``last``/``reveal``) to the recorder. When ``None``,
+            all /meeting/* routes return ``{"ok": False, "error": "meetings disabled"}``.
 
     Returns:
         A FastAPI app: ``/healthz``, WebSocket ``/ws``, the settings API, and
@@ -442,7 +442,7 @@ def create_app(
         if on_meeting is None:
             return _meeting_disabled
         payload: object = {}
-        if action == "start":
+        if action in ("start", "reveal"):
             payload = await request.json()
         reply = await asyncio.to_thread(
             on_meeting, action, payload if isinstance(payload, dict) else {}
@@ -631,10 +631,14 @@ def create_app(
     async def _post_meeting_resume(request: Request) -> dict[str, Any]:
         return await post_meeting("resume", request)
 
+    async def _post_meeting_reveal(request: Request) -> dict[str, Any]:
+        return await post_meeting("reveal", request)
+
     app.add_api_route("/meeting/start", _post_meeting_start, methods=["POST"])
     app.add_api_route("/meeting/stop", _post_meeting_stop, methods=["POST"])
     app.add_api_route("/meeting/pause", _post_meeting_pause, methods=["POST"])
     app.add_api_route("/meeting/resume", _post_meeting_resume, methods=["POST"])
+    app.add_api_route("/meeting/reveal", _post_meeting_reveal, methods=["POST"])
     app.add_api_route("/meeting/status", get_meeting_status, methods=["GET"])
     app.add_api_route("/meeting/list", get_meeting_list, methods=["GET"])
     app.add_api_route("/meeting/last", get_meeting_last, methods=["GET"])

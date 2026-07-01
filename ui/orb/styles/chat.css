@@ -110,6 +110,7 @@
   @keyframes tdot { 0%, 70%, 100% { transform: translateY(0); opacity: .35; } 35% { transform: translateY(-5px); opacity: 1; } }
   .confirm { align-self: stretch; background: var(--panel); border: .5px solid var(--field-line); border-radius: 8px; padding: 11px 12px; }
   .confirm .h { display: flex; align-items: center; gap: 6px; font-size: 12.5px; font-weight: 500; color: var(--danger); margin-bottom: 4px; }
+  .confirm .h svg { width: 15px; height: 15px; flex: none; }
   .confirm .b { font-size: 12.5px; color: var(--muted); line-height: 1.5; margin-bottom: 10px; overflow-wrap: anywhere; }
   .confirm .row { display: flex; gap: 8px; justify-content: flex-end; }
   .confirm.network { border-color: rgba(251, 146, 60, .35); }
@@ -214,11 +215,22 @@
   .min-h .loc .ext { font-family: "SF Mono", ui-monospace, Menlo, monospace; color: var(--muted); padding-left: 7px; border-left: .5px solid var(--field-line); flex: none; }
   .min-h h3 { margin: 9px 0 3px; font-size: 15px; }
   .min-h .meta { font-size: 11.5px; color: var(--muted); display: flex; flex-wrap: wrap; gap: 4px 12px; }
-  .min-prev { padding: 12px 14px 4px; }
+  .min-prev { position: relative; padding: 12px 14px 4px; }
   .min-prev .st { display: flex; align-items: center; gap: 7px; font-size: 11px; font-weight: 700; letter-spacing: .5px; text-transform: uppercase; color: var(--muted); margin-bottom: 7px; }
   .min-prev .st svg { width: 14px; height: 14px; }
+  /* Expand affordance — fades in on card hover, rotates when open */
+  .min-expand { position: absolute; top: 10px; right: 12px; width: 26px; height: 26px; display: inline-flex; align-items: center; justify-content: center; padding: 0; border: .5px solid var(--field-line); background: var(--field); color: var(--muted); border-radius: 7px; opacity: 0; cursor: pointer; transition: opacity .15s ease, transform .2s ease, color .15s ease; }
+  .min-expand svg { width: 15px; height: 15px; }
+  .min:hover .min-expand, .min:focus-within .min-expand { opacity: 1; }
+  .min-expand:hover { color: var(--text); }
+  .min.expanded .min-expand { opacity: 1; transform: rotate(180deg); }
   .sum { position: relative; margin: 0; font-size: 12.5px; line-height: 1.55; color: var(--text); display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
   .sum::after { content: ""; position: absolute; left: 0; right: 0; bottom: 0; height: 1.5em; background: linear-gradient(transparent, var(--panel)); }
+  .min.expanded .sum { display: block; -webkit-line-clamp: unset; overflow: visible; }
+  .min.expanded .sum::after { display: none; }
+  .aiprev .ai.extra { display: none; }
+  .min.expanded .aiprev .ai.extra { display: flex; }
+  .min.expanded .aiprev .more-ai { display: none; }
   .mtg-stats { display: flex; flex-wrap: wrap; gap: 7px; margin: 12px 0 2px; }
   .stat { display: inline-flex; align-items: center; gap: 5px; font-size: 11px; color: var(--muted); background: var(--field); border: .5px solid var(--field-line); border-radius: 7px; padding: 4px 9px; }
   .stat b { color: var(--text); font-weight: 700; font-variant-numeric: tabular-nums; }

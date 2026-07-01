@@ -90,6 +90,7 @@ class Daemon {
   meetingPause() { return this.post("/meeting/pause", {}); }
   meetingResume() { return this.post("/meeting/resume", {}); }
   meetingLast() { return this.get("/meeting/last"); }
+  meetingReveal(id) { return this.post("/meeting/reveal", { id }); }
 
   // --- MCP methods ---
   mcpServers() { return this.get("/mcp/servers"); }

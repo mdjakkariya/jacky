@@ -11,6 +11,7 @@ const SVG_FOLDER = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" s
 const SVG_COPY = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg>';
 const SVG_LINES = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6h16M4 12h16M4 18h10"/></svg>';
 const SVG_CHECK = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M5 13l4 4L19 7"/></svg>';
+const SVG_CHEV = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg>';
 
 const fmt = (s) =>
   String(Math.floor(s / 60)).padStart(2, "0") + ":" + String(s % 60).padStart(2, "0");
@@ -314,12 +315,15 @@ export function renderMinutes(log, r) {
 
   const loc = document.createElement("span"); loc.className = "loc";
   loc.innerHTML = SVG_FOLDER;
+  // Each meeting lives in its own timestamped folder, so surface that folder
+  // name (the unique id) in the crumb — many meetings, no minutes.md collision.
+  const folderName = (r.dir || "").split("/").filter(Boolean).pop() || (title || "Meeting");
   const crumb = document.createElement("span"); crumb.className = "crumb";
   crumb.textContent = "Meetings";
   const _sep = document.createElement("i");
   _sep.textContent = "›";
   crumb.appendChild(_sep);
-  crumb.appendChild(document.createTextNode(title || "Meeting"));
+  crumb.appendChild(document.createTextNode(folderName));
   const ext = document.createElement("span"); ext.className = "ext";
   ext.textContent = "minutes.md";
   loc.appendChild(crumb);
@@ -357,11 +361,13 @@ export function renderMinutes(log, r) {
     statsDiv.appendChild(chip);
   });
 
-  // Action items preview (first 2)
+  // Action items: render all; those past the first 2 are hidden until the card
+  // is expanded (CSS .ai.extra). The "+N more" hint hides when expanded.
+  const PREVIEW_N = 2;
   const aiList = document.createElement("ul"); aiList.className = "aiprev";
-  const preview = actions.slice(0, 2);
-  preview.forEach(({ owner, task }) => {
+  actions.forEach(({ owner, task }, i) => {
     const li = document.createElement("li"); li.className = "ai";
+    if (i >= PREVIEW_N) li.classList.add("extra");
     const box = document.createElement("span"); box.className = "box";
     const txt = document.createElement("span");
     txt.textContent = task;
@@ -374,13 +380,26 @@ export function renderMinutes(log, r) {
     li.appendChild(txt);
     aiList.appendChild(li);
   });
-  const remaining = actions.length - preview.length;
+  const remaining = actions.length - PREVIEW_N;
   if (remaining > 0) {
     const more = document.createElement("li"); more.className = "more-ai";
     more.textContent = "+" + remaining + " more action item" + (remaining > 1 ? "s" : "");
     aiList.appendChild(more);
   }
 
+  // Expand affordance: a chevron that fades in on hover; click toggles the card
+  // between the clamped preview and the full summary + all action items.
+  const expandBtn = document.createElement("button");
+  expandBtn.className = "min-expand";
+  expandBtn.type = "button";
+  expandBtn.setAttribute("aria-label", "Expand minutes");
+  expandBtn.innerHTML = SVG_CHEV;
+  expandBtn.addEventListener("click", () => {
+    const on = card.classList.toggle("expanded");
+    expandBtn.setAttribute("aria-label", on ? "Collapse minutes" : "Expand minutes");
+  });
+
+  minPrev.appendChild(expandBtn);
   minPrev.appendChild(st);
   minPrev.appendChild(sumP);
   minPrev.appendChild(statsDiv);
@@ -389,28 +408,19 @@ export function renderMinutes(log, r) {
   // ── footer ──
   const foot = document.createElement("div"); foot.className = "min-foot";
 
-  const openBtn = document.createElement("button"); openBtn.className = "fbtn primary";
-  openBtn.innerHTML = SVG_FILE + " Open minutes";
-
-  const revealBtn = document.createElement("button"); revealBtn.className = "fbtn";
+  const revealBtn = document.createElement("button"); revealBtn.className = "fbtn primary";
   revealBtn.innerHTML = SVG_FOLDER + " Reveal folder";
 
   const copyBtn = document.createElement("button"); copyBtn.className = "fbtn";
   copyBtn.innerHTML = SVG_COPY + " Copy";
 
-  // Open minutes / Reveal folder: copy the path to clipboard (no daemon route exists)
+  // Reveal folder: ask the daemon to open the meeting's folder in Finder
+  // (path-jailed to the meetings root, keyed by the meeting id).
   const dir = r.dir || "";
-  openBtn.title = dir;
-  openBtn.addEventListener("click", () => {
-    copyText(dir);
-    openBtn.textContent = "Path copied";
-    setTimeout(() => { openBtn.innerHTML = SVG_FILE + " Open minutes"; }, 1500);
-  });
-
   revealBtn.title = dir;
   revealBtn.addEventListener("click", () => {
-    copyText(dir);
-    revealBtn.textContent = "Path copied";
+    daemon.meetingReveal(r.id).catch(() => {});
+    revealBtn.textContent = "Opening…";
     setTimeout(() => { revealBtn.innerHTML = SVG_FOLDER + " Reveal folder"; }, 1500);
   });
 
@@ -420,7 +430,6 @@ export function renderMinutes(log, r) {
     setTimeout(() => { copyBtn.innerHTML = SVG_COPY + " Copy"; }, 1500);
   });
 
-  foot.appendChild(openBtn);
   foot.appendChild(revealBtn);
   foot.appendChild(copyBtn);
 

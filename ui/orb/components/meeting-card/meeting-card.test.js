@@ -6,6 +6,7 @@ vi.mock("../../lib/daemon.js", () => ({
     meetingStop: vi.fn(),
     meetingPause: vi.fn(),
     meetingResume: vi.fn(),
+    meetingReveal: vi.fn().mockResolvedValue({ ok: true }),
   },
 }));
 vi.mock("../../lib/clipboard.js", () => ({ copyText: vi.fn().mockResolvedValue(true) }));
@@ -195,6 +196,52 @@ describe("renderMeeting — done state", () => {
     renderMeeting(log, { state: "done", elapsed_s: 0, mic_only: false, paused: false, title: "T" });
     await vi.runAllTimersAsync();
     expect(log.querySelector("#meeting-minutes")).toBeNull();
+  });
+});
+
+// ── minutes card interactions ─────────────────────────────────────────────────
+
+describe("renderMinutes — footer + expand", () => {
+  const R = { ok: true, id: "2026-07-01-1508-standup", dir: "/x/meetings/2026-07-01-1508-standup", minutes_md: SAMPLE_MD };
+
+  it("has no 'Open minutes' button", () => {
+    const log = makeLog();
+    renderMinutes(log, R);
+    const labels = Array.from(log.querySelectorAll(".min-foot .fbtn")).map((b) => b.textContent);
+    expect(labels.some((t) => /open minutes/i.test(t))).toBe(false);
+  });
+
+  it("Reveal folder calls daemon.meetingReveal with the meeting id", () => {
+    const log = makeLog();
+    renderMinutes(log, R);
+    const reveal = Array.from(log.querySelectorAll(".min-foot .fbtn")).find((b) => /reveal/i.test(b.textContent));
+    reveal.click();
+    expect(daemon.meetingReveal).toHaveBeenCalledWith("2026-07-01-1508-standup");
+  });
+
+  it("crumb shows the unique folder name from dir", () => {
+    const log = makeLog();
+    renderMinutes(log, R);
+    expect(log.querySelector(".min-h .crumb").textContent).toContain("2026-07-01-1508-standup");
+  });
+
+  it("expand toggle flips the .expanded class on the card", () => {
+    const log = makeLog();
+    renderMinutes(log, R);
+    const card = log.querySelector("#meeting-minutes");
+    const btn = log.querySelector(".min-expand");
+    expect(card.classList.contains("expanded")).toBe(false);
+    btn.click();
+    expect(card.classList.contains("expanded")).toBe(true);
+    btn.click();
+    expect(card.classList.contains("expanded")).toBe(false);
+  });
+
+  it("renders all action items (overflow marked .extra) — 3 total, 1 extra", () => {
+    const log = makeLog();
+    renderMinutes(log, R); // SAMPLE_MD has 3 action items
+    expect(log.querySelectorAll(".aiprev .ai").length).toBe(3);
+    expect(log.querySelectorAll(".aiprev .ai.extra").length).toBe(1);
   });
 });
 

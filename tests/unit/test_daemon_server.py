@@ -87,6 +87,20 @@ def test_meeting_post_routes_report_disabled_when_no_recorder() -> None:
     assert resp.json().get("ok") is False
 
 
+def test_meeting_reveal_route_passes_id_to_recorder() -> None:
+    """POST /meeting/reveal forwards the JSON body's id to on_meeting('reveal', ...)."""
+    calls: list[tuple[str, dict[str, Any]]] = []
+
+    def on_meeting(action: str, payload: dict[str, Any]) -> object:
+        calls.append((action, payload))
+        return {"ok": True, "dir": "/x/meetings/abc"}
+
+    client = TestClient(create_app(EventBus(), on_meeting=on_meeting))
+    resp = client.post("/meeting/reveal", json={"id": "2026-07-01-1508-standup"})
+    assert resp.status_code == 200
+    assert ("reveal", {"id": "2026-07-01-1508-standup"}) in calls
+
+
 def _settings_client(tmp_path: object) -> TestClient:
     from pathlib import Path
 

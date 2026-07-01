@@ -397,6 +397,38 @@ class MeetingRecorder:
             _log.exception("last_minutes: unexpected error")
         return None
 
+    def reveal(self, meeting_id: str) -> dict[str, object]:
+        """Open a saved meeting's folder in Finder (macOS).
+
+        Path-jailed to the meetings root: the client-supplied ``meeting_id`` is
+        resolved under the store root and rejected if it escapes it, so a crafted
+        id (``../../…``) can never open an arbitrary folder.  UI-initiated only
+        (a drawer button), never an LLM tool — same trust class as stop/pause.
+
+        Args:
+            meeting_id: The meeting folder name to reveal.
+
+        Returns:
+            ``{"ok": True, "dir": <path>}`` on success, else
+            ``{"ok": False, "error": <reason>}``.
+        """
+        import subprocess
+
+        root = self._store._root.resolve()
+        target = Path(self._store._paths(meeting_id).dir).resolve()
+        if target != root and root not in target.parents:
+            _log.warning("reveal rejected out-of-root id=%r", meeting_id)
+            return {"ok": False, "error": "invalid meeting id"}
+        if not target.is_dir():
+            return {"ok": False, "error": "meeting folder not found"}
+        try:
+            subprocess.run(["open", str(target)], check=True)
+        except Exception as exc:  # pragma: no cover - depends on OS/Finder at runtime
+            _log.warning("reveal failed id=%s err=%s", meeting_id, exc)
+            return {"ok": False, "error": "could not open folder"}
+        _log.info("reveal meeting folder id=%s", meeting_id)
+        return {"ok": True, "dir": str(target)}
+
     def finalize_interrupted(self) -> list[str]:
         """On startup, finalize any meeting left mid-flight from on-disk WAVs.
 

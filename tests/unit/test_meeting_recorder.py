@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import cast
 
 import numpy as np
+import pytest
 
 from autobot.core.types import AudioClip, Segment, Transcription
 from autobot.meeting.recorder import MeetingRecorder
@@ -103,6 +104,38 @@ def test_emits_full_phase_sequence(tmp_path: Path) -> None:
     assert "idle" not in events, f"no 'idle' during finalize (would clear cards): {events!r}"
     # transcribing precedes summarizing precedes done.
     assert events.index("transcribing") < events.index("summarizing") < events.index("done")
+
+
+def test_reveal_opens_valid_folder(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """reveal() shells out to `open <dir>` for a real meeting folder under the root."""
+    rec = _recorder(tmp_path)
+    (tmp_path / "2026-01-01-0900-mtg").mkdir()
+    calls: list[list[str]] = []
+    monkeypatch.setattr("subprocess.run", lambda cmd, **kw: calls.append(cmd))
+    out = rec.reveal("2026-01-01-0900-mtg")
+    assert out["ok"] is True
+    assert calls and calls[0][0] == "open"
+    assert calls[0][1].endswith("2026-01-01-0900-mtg")
+
+
+def test_reveal_rejects_path_escape(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A crafted id (../../…) is rejected and never shells out."""
+    rec = _recorder(tmp_path)
+    calls: list[list[str]] = []
+    monkeypatch.setattr("subprocess.run", lambda cmd, **kw: calls.append(cmd))
+    out = rec.reveal("../../etc")
+    assert out["ok"] is False
+    assert calls == []
+
+
+def test_reveal_missing_folder(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A valid-looking id with no folder on disk fails without shelling out."""
+    rec = _recorder(tmp_path)
+    calls: list[list[str]] = []
+    monkeypatch.setattr("subprocess.run", lambda cmd, **kw: calls.append(cmd))
+    out = rec.reveal("2099-01-01-0000-nope")
+    assert out["ok"] is False
+    assert calls == []
 
 
 def test_degrades_to_mic_only(tmp_path: Path) -> None:
