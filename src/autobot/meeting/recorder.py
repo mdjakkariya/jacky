@@ -120,8 +120,15 @@ class MeetingRecorder:
         self._active: _Active | None = None
 
     def _emit(self) -> None:
+        status = self.status()
+        _log.debug(
+            "emit meeting event state=%s paused=%s mic_only=%s",
+            status.get("state"),
+            status.get("paused"),
+            status.get("mic_only"),
+        )
         if self._on_event is not None:
-            self._on_event(self.status())
+            self._on_event(status)
 
     def start(self, title: str) -> str:
         """Begin capture; degrade to mic-only if the far end can't start.

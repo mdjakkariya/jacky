@@ -44,6 +44,11 @@ check: ## Everything CI runs: lint + format check + types + tests
 run: ## Launch the assistant daemon
 	uv run autobot-daemon
 
+dev-orb: ## Run the orb + drawer UI live from source (loads the CURRENT ui/orb). Run `make run` in another terminal for the daemon.
+	@echo "Live UI from ui/orb — keep 'make run' (daemon on :8765) running in another terminal."
+	@echo "Use this instead of a stale built Jack.app: 'make run' only restarts the daemon, NOT the UI."
+	cd ui/orb-shell && cargo tauri dev
+
 LOG ?= $(HOME)/.autobot/logs/autobot.log
 logs: ## Tail the debug log (override path with LOG=…)
 	tail -n 200 -f "$(LOG)"
