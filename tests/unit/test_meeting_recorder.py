@@ -138,6 +138,37 @@ def test_reveal_missing_folder(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) 
     assert calls == []
 
 
+def test_delete_removes_the_folder(tmp_path: Path) -> None:
+    rec = _recorder(tmp_path)
+    d = tmp_path / "2026-01-01-0900-mtg"
+    d.mkdir()
+    (d / "minutes.md").write_text("# x", encoding="utf-8")
+    out = rec.delete("2026-01-01-0900-mtg")
+    assert out["ok"] is True
+    assert not d.exists()
+
+
+def test_delete_rejects_path_escape(tmp_path: Path) -> None:
+    rec = _recorder(tmp_path)
+    assert rec.delete("../../etc")["ok"] is False
+
+
+def test_delete_empty_id_does_not_touch_root(tmp_path: Path) -> None:
+    rec = _recorder(tmp_path)
+    (tmp_path / "keep").mkdir()
+    assert rec.delete("")["ok"] is False
+    assert tmp_path.exists() and (tmp_path / "keep").exists()
+
+
+def test_delete_refuses_active_meeting(tmp_path: Path) -> None:
+    rec = _recorder(tmp_path)
+    rec.start("Live")
+    active_id = str(rec.list_recent()[0]["id"])  # newest first = the in-flight meeting
+    out = rec.delete(active_id)
+    assert out["ok"] is False and "recording" in str(out["error"]).lower()
+    rec.stop()
+
+
 def test_degrades_to_mic_only(tmp_path: Path) -> None:
     rec = _recorder(tmp_path, far_ok=False)
     ack = rec.start("Solo")

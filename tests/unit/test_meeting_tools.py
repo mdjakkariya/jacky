@@ -58,6 +58,10 @@ class _FakeRecorder:
             ),
         }
 
+    def delete(self, meeting_id: str) -> dict[str, object]:
+        self.calls.append(f"delete:{meeting_id}")
+        return {"ok": True, "id": meeting_id}
+
 
 def _specs() -> dict[str, ToolSpec]:
     return {s.name: s for s in MeetingTools(_FakeRecorder()).specs()}  # type: ignore[arg-type]
@@ -149,6 +153,35 @@ def test_last_meeting_is_core_and_read_only() -> None:
     spec = _specs()["last_meeting"]
     assert spec.core is True
     assert spec.risk == Risk.READ_ONLY
+
+
+def test_delete_meeting_with_id_delegates() -> None:
+    rec = _FakeRecorder()
+    result = MeetingTools(rec).delete_meeting("2026-07-01-2225-standup")  # type: ignore[arg-type]
+    assert "delete:2026-07-01-2225-standup" in rec.calls
+    assert "2026-07-01-2225-standup" in result
+
+
+def test_delete_meeting_without_id_targets_most_recent() -> None:
+    rec = _FakeRecorder()
+    MeetingTools(rec).delete_meeting()  # type: ignore[arg-type]
+    assert "last_minutes" in rec.calls
+    assert "delete:2026-07-01-2225-standup" in rec.calls
+
+
+def test_delete_meeting_reports_failure() -> None:
+    class _Fails(_FakeRecorder):
+        def delete(self, meeting_id: str) -> dict[str, object]:
+            return {"ok": False, "error": "meeting not found"}
+
+    out = MeetingTools(_Fails()).delete_meeting("nope")  # type: ignore[arg-type]
+    assert "couldn't" in out.lower()
+
+
+def test_delete_meeting_is_destructive_and_confirms() -> None:
+    spec = _specs()["delete_meeting"]
+    assert spec.risk == Risk.DESTRUCTIVE
+    assert spec.confirm_prompt
 
 
 def test_summarize_meeting_with_id_calls_resummarize() -> None:

@@ -429,6 +429,35 @@ class MeetingRecorder:
         _log.info("reveal meeting folder id=%s", meeting_id)
         return {"ok": True, "dir": str(target)}
 
+    def delete(self, meeting_id: str) -> dict[str, object]:
+        """Permanently delete a saved meeting's folder (audio + transcript + minutes).
+
+        Path-jailed to the meetings root: a valid target is exactly ``root/<id>``,
+        so a crafted or empty id (which would resolve to the root itself) is
+        rejected.  Refuses to delete the meeting that is currently recording.
+
+        Args:
+            meeting_id: The meeting folder name to delete.
+
+        Returns:
+            ``{"ok": True, "id": <id>}`` on success, else
+            ``{"ok": False, "error": <reason>}``.
+        """
+        import shutil
+
+        with self._lock:
+            active_id = self._active.paths.id if self._active is not None else None
+        if meeting_id and active_id == meeting_id:
+            return {"ok": False, "error": "that meeting is still recording"}
+        root = self._store._root.resolve()
+        target = Path(self._store._paths(meeting_id).dir).resolve()
+        if target.parent != root or not target.is_dir():
+            _log.warning("delete rejected id=%r", meeting_id)
+            return {"ok": False, "error": "meeting not found"}
+        shutil.rmtree(target, ignore_errors=True)
+        _log.info("meeting deleted id=%s", meeting_id)
+        return {"ok": True, "id": meeting_id}
+
     def finalize_interrupted(self) -> list[str]:
         """On startup, finalize any meeting left mid-flight from on-disk WAVs.
 

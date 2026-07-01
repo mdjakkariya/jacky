@@ -108,6 +108,23 @@ class MeetingTools:
         """Rebuild minutes for a saved meeting (the most recent if ``id`` omitted)."""
         return self._rec.resummarize(id or None)
 
+    def delete_meeting(self, id: str = "") -> str:
+        """Permanently delete a saved meeting (the most recent if ``id`` omitted)."""
+        meeting_id = (id or "").strip()
+        if not meeting_id:
+            try:
+                last = self._rec.last_minutes()
+            except Exception as exc:
+                _log.exception("delete_meeting lookup failed: %s", exc)
+                return "I couldn't find a meeting to delete right now."
+            meeting_id = str(last.get("id", "")) if last else ""
+        if not meeting_id:
+            return "You have no saved meetings to delete."
+        result = self._rec.delete(meeting_id)
+        if result.get("ok"):
+            return f'Deleted the meeting "{meeting_id}".'
+        return f"I couldn't delete that meeting: {result.get('error', 'not found')}."
+
     def specs(self) -> list[ToolSpec]:
         """Return the tool specs. start/stop are core (the feature's entry points)."""
         return [
@@ -225,6 +242,31 @@ class MeetingTools:
                 handler=self.summarize_meeting,
                 risk=Risk.WRITE,
                 ack="Rebuilding the minutes.",
+            ),
+            ToolSpec(
+                name="delete_meeting",
+                description=(
+                    "Permanently delete a meeting Jack recorded — its whole folder "
+                    "(audio, transcript and minutes) — from the local store. Destructive: "
+                    "the user is asked to confirm first. Pass the `id` (folder name from "
+                    "list_meetings); omit it to delete the most recent meeting. Cues: "
+                    "'delete that meeting', 'remove the last recording', 'delete the "
+                    "standup minutes'. To delete several, call this once per meeting id."
+                ),
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "id": {
+                            "type": "string",
+                            "description": "Meeting id/folder name; empty = most recent.",
+                        }
+                    },
+                    "required": [],
+                },
+                handler=self.delete_meeting,
+                risk=Risk.DESTRUCTIVE,
+                confirm_prompt=("🗑️ Permanently delete this meeting recording and its minutes?"),
+                ack="Deleting that meeting.",
             ),
         ]
 
