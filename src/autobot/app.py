@@ -681,7 +681,14 @@ def build(
             keep=settings.meeting_keep,
         )
         register_meeting_tools(registry, _meeting_recorder)
-        _meeting_recorder.finalize_interrupted()
+        import threading as _threading
+
+        _threading.Thread(
+            target=_meeting_recorder.finalize_interrupted,
+            name="meeting-recovery",
+            daemon=True,
+        ).start()
+        log.info("meeting crash-recovery finalize started in background")
         log.info("meetings ENABLED dir=%s", settings.meetings_dir)
         print("[meeting] meetings ENABLED — Jack can record and summarize calls.")
 
