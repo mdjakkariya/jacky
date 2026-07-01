@@ -29,6 +29,9 @@
   --btn-line: rgba(0, 0, 0, .18);
   --ok: #2c9c4a;
   --warn: #b8860b;
+  --warn-bg: rgba(184, 134, 11, .12);
+  --them: #7c5cff;
+  --them-bg: rgba(155, 124, 255, .16);
   --net: #e8740e;
   --net-bg: rgba(251,146,60,.14);
 }
@@ -57,6 +60,9 @@
     --btn-line: rgba(255, 255, 255, .15);
     --ok: #5bd778;
     --warn: #e6b54a;
+    --warn-bg: rgba(230, 181, 74, .16);
+    --them: #b9a6ff;
+    --them-bg: rgba(155, 124, 255, .2);
     --net: #fb923c;
     --net-bg: rgba(251,146,60,.18);
   }
