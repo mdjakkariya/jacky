@@ -21,17 +21,17 @@ be merged and pulled *before* you build.
 ```bash
 # 1. Branch off an up-to-date main.
 git checkout main && git pull
-git checkout -b release/v0.6.2
+git checkout -b release/v0.6.3
 
 # 2. Bump every manifest + lockfile and refresh the changelog. Commit both.
 # rewrites pyproject / Cargo.toml / tauri.conf.json + lockfiles
-make release VERSION=0.6.2
-# prepends the v0.6.2 section to CHANGELOG.md (needs git-cliff)
-make changelog VERSION=0.6.2
-git add . && git commit -m "chore(release): v0.6.2"
+make release VERSION=0.6.3
+# prepends the v0.6.3 section to CHANGELOG.md (needs git-cliff)
+make changelog VERSION=0.6.3
+git add . && git commit -m "chore(release): v0.6.3"
 
 # 3. Open the PR; merge it once the required checks are green.
-git push -u origin release/v0.6.2
+git push -u origin release/v0.6.3
 # then review + merge in the usual way
 gh pr create --fill
 
@@ -39,7 +39,7 @@ gh pr create --fill
 #    directly — it's protected — but the tag pushes fine and is the CI trigger.
 # picks up the merged bump
 git checkout main && git pull
-git tag v0.6.2 && git push origin v0.6.2
+git tag v0.6.3 && git push origin v0.6.3
 
 # 5. CI (triggered by the tag) builds the engine wheel/sdist and creates the GitHub
 #    Release. The manifests are already correct (bumped in the PR), so there is no
@@ -51,7 +51,7 @@ git pull
 # freeze engine -> sidecar -> the .dmg (versioned from the manifests)
 make bundle
 # uploads the .dmg AND sets the release notes
-make publish-orb VERSION=0.6.2
+make publish-orb VERSION=0.6.3
 ```
 
 CI sets the build version **from the tag**, so the engine wheel/sdist are always
