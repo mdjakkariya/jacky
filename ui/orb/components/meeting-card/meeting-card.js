@@ -3,6 +3,7 @@
  *  phase card into the chat log. */
 import { daemon } from "../../lib/daemon.js";
 import { copyText } from "../../lib/clipboard.js";
+import { fmtModel } from "../../lib/format.js";
 
 // ── SVG snippets (inline; no external assets) ──────────────────────────────
 const SVG_WARN = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"/><path d="M12 9v4M12 17h.01"/></svg>';
@@ -12,6 +13,18 @@ const SVG_COPY = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" str
 const SVG_LINES = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6h16M4 12h16M4 18h10"/></svg>';
 const SVG_CHECK = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M5 13l4 4L19 7"/></svg>';
 const SVG_CHEV = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg>';
+const SVG_QMARK = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M9.2 9.3a2.8 2.8 0 0 1 5.4 1c0 1.8-2.6 2.5-2.6 2.5"/><path d="M12 17h.01"/></svg>';
+
+/** Resolve the label of the model that writes the minutes: the *live* LLM — the
+ * cloud model when the provider is Anthropic, else the local Ollama model — so the
+ * processing card reflects what actually ran instead of a hardcoded default. */
+async function summarizerModelLabel() {
+  const s = await daemon.settings();
+  if (!s) return "";
+  const raw = s.llm_provider === "anthropic" ? (s.anthropic_model || "cloud model") : (s.llm_model || "");
+  // Same friendlier label the chat context meter shows (e.g. "haiku-4.5").
+  return raw ? fmtModel(raw) : "";
+}
 
 const fmt = (s) =>
   String(Math.floor(s / 60)).padStart(2, "0") + ":" + String(s % 60).padStart(2, "0");
@@ -247,7 +260,9 @@ function showProcessingCard(log) {
   const stepDefs = [
     { label: "Finalizing the recording", meta: "" },
     { label: "Transcribing · English", meta: "on-device" },
-    { label: "Writing minutes (summarize → reduce)", meta: "qwen3:8b" },
+    // The model label is resolved from live settings below (not hardcoded), so it
+    // reflects the actual summarizer — cloud (Anthropic) or local (Ollama).
+    { label: "Writing minutes (summarize → reduce)", meta: "…", model: true },
   ];
 
   stepDefs.forEach((s) => {
@@ -256,8 +271,9 @@ function showProcessingCard(log) {
     const txt = document.createTextNode(" " + s.label);
     li.appendChild(ic);
     li.appendChild(txt);
-    if (s.meta) {
+    if (s.meta || s.model) {
       const meta = document.createElement("span"); meta.className = "meta";
+      if (s.model) meta.classList.add("mtg-model");
       meta.textContent = s.meta;
       li.appendChild(meta);
     }
@@ -268,6 +284,15 @@ function showProcessingCard(log) {
   proc.appendChild(ul);
   log.appendChild(proc);
   if (log.scroll) log.scroll();
+
+  // Fill the summarizer model label from live settings (cloud vs local).
+  summarizerModelLabel()
+    .then((label) => {
+      const meta = proc.querySelector(".mtg-model");
+      if (meta && label) meta.textContent = label;
+    })
+    .catch(() => {});
+
   return proc;
 }
 
@@ -294,6 +319,73 @@ function advanceProcessingSteps(proc, state) {
 
 // ── Minutes card ────────────────────────────────────────────────────────────
 
+/** Wrap a list in a collapsible, keyed section (header + list). Hidden by default;
+ * shown when it gains `.open` (its pill was clicked) or the card is `.expanded`.
+ * @param {string} key data-section key ("decisions"|"actions"|"openq")
+ * @param {string} headSvg inline SVG for the header icon
+ * @param {string} headLabel section title
+ * @param {HTMLElement} listEl the list element to nest
+ * @returns {HTMLElement}
+ */
+function buildSection(key, headSvg, headLabel, listEl) {
+  const sec = document.createElement("div");
+  sec.className = "mtg-section";
+  sec.dataset.section = key;
+  const head = document.createElement("div"); head.className = "st";
+  head.innerHTML = headSvg + " " + headLabel;
+  sec.appendChild(head);
+  sec.appendChild(listEl);
+  return sec;
+}
+
+/** Decisions as a checkmarked list. @param {string[]} decisions */
+function buildDecisionsList(decisions) {
+  const ul = document.createElement("ul"); ul.className = "declist";
+  decisions.forEach((d) => {
+    const li = document.createElement("li"); li.className = "dec";
+    const mark = document.createElement("span"); mark.className = "dmark";
+    mark.innerHTML = SVG_CHECK;
+    const txt = document.createElement("span"); txt.textContent = d;
+    li.appendChild(mark); li.appendChild(txt);
+    ul.appendChild(li);
+  });
+  return ul;
+}
+
+/** Action items as a checkbox list with an optional owner chip.
+ * @param {{owner:string, task:string}[]} actions */
+function buildActionsList(actions) {
+  const ul = document.createElement("ul"); ul.className = "aiprev";
+  actions.forEach(({ owner, task }) => {
+    const li = document.createElement("li"); li.className = "ai";
+    const box = document.createElement("span"); box.className = "box";
+    const txt = document.createElement("span");
+    txt.textContent = task;
+    if (owner) {
+      const who = document.createElement("span"); who.className = "who";
+      who.textContent = owner;
+      txt.appendChild(who);
+    }
+    li.appendChild(box); li.appendChild(txt);
+    ul.appendChild(li);
+  });
+  return ul;
+}
+
+/** Open questions as a "?"-marked list. @param {string[]} openQuestions */
+function buildOpenQuestionsList(openQuestions) {
+  const ul = document.createElement("ul"); ul.className = "oqprev";
+  openQuestions.forEach((q) => {
+    const li = document.createElement("li"); li.className = "oq";
+    const mark = document.createElement("span"); mark.className = "qmark";
+    mark.textContent = "?";
+    const txt = document.createElement("span"); txt.textContent = q;
+    li.appendChild(mark); li.appendChild(txt);
+    ul.appendChild(li);
+  });
+  return ul;
+}
+
 /** Render the completed minutes card from a /meeting/last response.
  * @param {HTMLElement} log
  * @param {{ok:boolean, id:string, dir:string, mic_only:boolean, minutes_md:string}} r
@@ -309,6 +401,11 @@ export function renderMinutes(log, r) {
   const card = document.createElement("div");
   card.id = "meeting-minutes";
   card.className = "min";
+
+  // Toggle the clamped preview ↔ full view. Shared by the chevron, the stat count
+  // chips, and the "+N more" hints so any of them acts as the expand affordance
+  // (previously only the easily-missed hover chevron did — bug #38).
+  const toggleExpand = () => card.classList.toggle("expanded");
 
   // ── header ──
   const minH = document.createElement("div"); minH.className = "min-h";
@@ -350,52 +447,60 @@ export function renderMinutes(log, r) {
   const sumP = document.createElement("p"); sumP.className = "sum";
   sumP.textContent = summary || "";
 
+  // ── detail sections (one per category) ──
+  // Decisions and action items and open questions each render as their own
+  // collapsible section. A section is hidden until its count pill is clicked (or
+  // the chevron expands the whole card). This is the fix for #38: previously the
+  // pills only toggled the whole-card expand and open questions had no list at all.
+  const decList = buildDecisionsList(decisions);
+  const aiList = buildActionsList(actions);
+  const oqList = buildOpenQuestionsList(openQuestions);
+
+  const sectionsWrap = document.createElement("div"); sectionsWrap.className = "mtg-sections";
+  const secByKey = {};
+  if (decisions.length) secByKey.decisions = buildSection("decisions", SVG_CHECK, "Decisions", decList);
+  if (actions.length) secByKey.actions = buildSection("actions", SVG_LINES, "Action items", aiList);
+  if (openQuestions.length) secByKey.openq = buildSection("openq", SVG_QMARK, "Open questions", oqList);
+  Object.values(secByKey).forEach((s) => sectionsWrap.appendChild(s));
+
   const statsDiv = document.createElement("div"); statsDiv.className = "mtg-stats";
   [
-    { n: decisions.length, label: "decision" },
-    { n: actions.length, label: "action item" },
-    { n: openQuestions.length, label: "open question" },
-  ].forEach(({ n, label }) => {
-    const chip = document.createElement("span"); chip.className = "stat";
+    { key: "decisions", n: decisions.length, label: "decision" },
+    { key: "actions", n: actions.length, label: "action item" },
+    { key: "openq", n: openQuestions.length, label: "open question" },
+  ].forEach(({ key, n, label }) => {
+    const chip = document.createElement("button");
+    chip.type = "button";
+    chip.className = "stat";
+    chip.dataset.section = key;
     chip.innerHTML = "<b>" + n + "</b> " + (n === 1 ? label : label + "s");
+    if (n === 0) {
+      // Nothing to reveal — leave the count visible but non-interactive.
+      chip.disabled = true;
+      chip.classList.add("empty");
+    } else {
+      // Reveal ONLY this section (exclusive) and highlight this pill; clicking the
+      // already-open pill closes it. The chevron is the separate "show everything".
+      chip.addEventListener("click", () => {
+        const sec = secByKey[key];
+        const willOpen = !sec.classList.contains("open");
+        Object.values(secByKey).forEach((s) => s.classList.remove("open"));
+        statsDiv.querySelectorAll(".stat").forEach((c) => c.classList.remove("active"));
+        if (willOpen) { sec.classList.add("open"); chip.classList.add("active"); }
+      });
+    }
     statsDiv.appendChild(chip);
   });
 
-  // Action items: render all; those past the first 2 are hidden until the card
-  // is expanded (CSS .ai.extra). The "+N more" hint hides when expanded.
-  const PREVIEW_N = 2;
-  const aiList = document.createElement("ul"); aiList.className = "aiprev";
-  actions.forEach(({ owner, task }, i) => {
-    const li = document.createElement("li"); li.className = "ai";
-    if (i >= PREVIEW_N) li.classList.add("extra");
-    const box = document.createElement("span"); box.className = "box";
-    const txt = document.createElement("span");
-    txt.textContent = task;
-    if (owner) {
-      const who = document.createElement("span"); who.className = "who";
-      who.textContent = owner;
-      txt.appendChild(who);
-    }
-    li.appendChild(box);
-    li.appendChild(txt);
-    aiList.appendChild(li);
-  });
-  const remaining = actions.length - PREVIEW_N;
-  if (remaining > 0) {
-    const more = document.createElement("li"); more.className = "more-ai";
-    more.textContent = "+" + remaining + " more action item" + (remaining > 1 ? "s" : "");
-    aiList.appendChild(more);
-  }
-
-  // Expand affordance: a chevron that fades in on hover; click toggles the card
-  // between the clamped preview and the full summary + all action items.
+  // Expand affordance: a chevron that fades in on hover; click expands the card
+  // to the full summary and *all* sections at once (independent of the pills).
   const expandBtn = document.createElement("button");
   expandBtn.className = "min-expand";
   expandBtn.type = "button";
   expandBtn.setAttribute("aria-label", "Expand minutes");
   expandBtn.innerHTML = SVG_CHEV;
   expandBtn.addEventListener("click", () => {
-    const on = card.classList.toggle("expanded");
+    const on = toggleExpand();
     expandBtn.setAttribute("aria-label", on ? "Collapse minutes" : "Expand minutes");
   });
 
@@ -403,7 +508,7 @@ export function renderMinutes(log, r) {
   minPrev.appendChild(st);
   minPrev.appendChild(sumP);
   minPrev.appendChild(statsDiv);
-  minPrev.appendChild(aiList);
+  minPrev.appendChild(sectionsWrap);
 
   // ── footer ──
   const foot = document.createElement("div"); foot.className = "min-foot";
