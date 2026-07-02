@@ -186,6 +186,12 @@ class Settings:
     # tool_selection: "lexical" (on-device keyword ranking, default) or "all"
     # (advertise every tool — the pre-optimization behavior, for debugging).
     tool_budget: int = 20
+    # Cloud path only: how many query-relevant *gated* (deferred) tools to surface
+    # un-deferred each turn, on top of the always-on core + identity tools. Kept small
+    # because selection accuracy degrades when too many tools are advertised at once —
+    # the long tail stays deferred behind the native tool-search tool. (The local path
+    # uses tool_budget instead.)
+    tool_relevant_limit: int = 8
     tool_selection: str = "lexical"
     # Tool names to force into / out of the core set without code edits.
     tool_core_extra: list[str] = field(default_factory=list)

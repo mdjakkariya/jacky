@@ -18,6 +18,7 @@ import re
 from collections.abc import Callable, Sequence
 from typing import TYPE_CHECKING
 
+from autobot.core.types import Risk
 from autobot.logging_setup import get_logger
 
 if TYPE_CHECKING:
@@ -74,13 +75,33 @@ def tokenize(text: str) -> list[str]:
     return [w for w in words if len(w) >= 2 and w not in _STOPWORDS]
 
 
+def _stem_match(query_term: str, doc_term: str) -> bool:
+    """Whether a query term matches a doc term, allowing a light morphological prefix.
+
+    True when the terms are equal, or when the shorter is a prefix of the longer and is
+    at least 4 characters — so ``repo``↔``repositories`` and ``star``↔``stars`` match,
+    without spurious short-prefix hits (``go``↔``google``). This gives the lexical gate
+    stemming-like recall without a stemmer dependency, which is what lets a query saying
+    "repo" surface a ``search_repositories`` tool that the raw word never matched.
+    """
+    if query_term == doc_term:
+        return True
+    if len(query_term) <= len(doc_term):
+        short, long = query_term, doc_term
+    else:
+        short, long = doc_term, query_term
+    return len(short) >= 4 and long.startswith(short)
+
+
 def score_tools(query: str, specs: Sequence[ToolSpec]) -> list[tuple[ToolSpec, float]]:
     """Rank ``specs`` by keyword relevance to ``query`` (desc, then name asc).
 
     Each tool's document is its name (split on ``_``) plus its description. Score is
     the IDF-weighted overlap of query terms with the document, with name matches
-    boosted. Zero-score specs are excluded — better to advertise fewer tools than to
-    pad the context with irrelevant ones. ``query`` with no usable terms → ``[]``.
+    boosted and query terms matched morphologically (:func:`_stem_match`, so "repo"
+    hits "repositories"). Zero-score specs are excluded — better to advertise fewer
+    tools than to pad the context with irrelevant ones. ``query`` with no usable
+    terms → ``[]``.
     """
     q = set(tokenize(query))
     if not q or not specs:
@@ -97,13 +118,77 @@ def score_tools(query: str, specs: Sequence[ToolSpec]) -> list[tuple[ToolSpec, f
     scored: list[tuple[ToolSpec, float]] = []
     for s, name_tokens, doc in docs:
         score = 0.0
-        for t in q & doc:
-            idf = math.log(1 + n / (1 + df[t]))
-            score += idf * (_NAME_BOOST if t in name_tokens else 1.0)
+        for qt in q:
+            # Best doc term this query term matches (exact or morphological), preferring a
+            # name-token hit, then the rarest term (highest IDF). Stemming lets "repo" hit
+            # "repositories"; IDF still down-weights terms like "repository" that appear in
+            # many tool descriptions, so a real name match wins over incidental prose.
+            best: str | None = None
+            best_key: tuple[bool, int] | None = None
+            for dt in doc:
+                if not _stem_match(qt, dt):
+                    continue
+                key = (dt in name_tokens, -df[dt])
+                if best_key is None or key > best_key:
+                    best_key, best = key, dt
+            if best is None:
+                continue
+            idf = math.log(1 + n / (1 + df[best]))
+            score += idf * (_NAME_BOOST if best in name_tokens else 1.0)
         if score > 0:
             scored.append((s, score))
     scored.sort(key=lambda pair: (-pair[1], pair[0].name))
     return scored
+
+
+# Bare tool names (server prefix stripped) that denote an "authenticated user / me"
+# entry tool — the identity anchor a first-person request ("my repos", "my issues")
+# needs before it can act. Matched case-insensitively; the description markers catch
+# server-specific names not in this list.
+_IDENTITY_TOOL_NAMES = frozenset(
+    {
+        "get_me",
+        "whoami",
+        "who_am_i",
+        "current_user",
+        "get_current_user",
+        "get_authenticated_user",
+        "get_my_user",
+        "get_my_profile",
+    }
+)
+_IDENTITY_DESC_MARKERS = ("authenticated user", "current user")
+
+
+def is_identity_tool(spec: ToolSpec) -> bool:
+    """Whether ``spec`` is a network MCP "who am I" read tool (an identity anchor).
+
+    Identity tools return the connected account, which is how the model resolves a
+    first-person request ("my repos", "my issues") into a concrete owner. They are
+    always advertised (never deferred/gated out) so the model can resolve "my …"
+    without first having to *discover* a tool — closing the missing-identity-tool gap
+    that made a request like "check my public repo stars" stall. Restricted to
+    READ_ONLY network tools so a write tool that merely mentions "authenticated user"
+    in its description is never force-advertised.
+
+    Args:
+        spec: The tool to classify.
+
+    Returns:
+        ``True`` if ``spec`` is a read-only network identity tool.
+    """
+    if not spec.network or spec.risk != Risk.READ_ONLY:
+        return False
+    bare = spec.name.split("__", 1)[-1].lower()
+    if bare in _IDENTITY_TOOL_NAMES:
+        return True
+    desc = spec.description.lower()
+    return any(marker in desc for marker in _IDENTITY_DESC_MARKERS)
+
+
+def identity_tool_names(specs: Sequence[ToolSpec]) -> frozenset[str]:
+    """Registry names of every identity tool among ``specs`` (see :func:`is_identity_tool`)."""
+    return frozenset(s.name for s in specs if is_identity_tool(s))
 
 
 def cosine(a: Sequence[float], b: Sequence[float]) -> float:
@@ -188,16 +273,21 @@ class LexicalToolSelector:
         self._core_remove = core_remove
 
     def select(self, query: str, *, pinned: frozenset[str] = frozenset()) -> list[ToolSpec]:
-        """Return core U top-K relevant gated U pinned, deduped and budget-bounded."""
+        """Return always-on U top-K relevant gated U pinned, deduped and budget-bounded.
+
+        "Always-on" is the core set plus identity anchors (:func:`identity_tool_names`),
+        so a first-person request can resolve "my …" without discovery.
+        """
         specs = self._registry.specs()
         core_names = ({s.name for s in specs if s.core} | self._core_extra) - self._core_remove
-        core = [s for s in specs if s.name in core_names]
-        gated = [s for s in specs if s.name not in core_names]
+        always_names = core_names | identity_tool_names(specs)
+        core = [s for s in specs if s.name in always_names]
+        gated = [s for s in specs if s.name not in always_names]
 
         k = max(0, self._budget - len(core))
         ranked = [s for s, _ in score_tools(query, gated)][:k]
 
-        pinned_specs = [s for s in specs if s.name in pinned and s.name not in core_names]
+        pinned_specs = [s for s in specs if s.name in pinned and s.name not in always_names]
 
         chosen: list[ToolSpec] = []
         seen: set[str] = set()
@@ -213,11 +303,13 @@ class LexicalToolSelector:
         Core tools are excluded — the model already sees them every round, so a
         discovery query should only surface the gated tools it can't currently
         reach. ``core_extra``/``core_remove`` shift the core boundary the same way
-        they do in :meth:`select`.
+        they do in :meth:`select`. Identity anchors are excluded too, since they are
+        also always advertised (see :meth:`select`).
         """
         specs = self._registry.specs()
         core_names = ({s.name for s in specs if s.core} | self._core_extra) - self._core_remove
-        gated = [s for s in specs if s.name not in core_names]
+        always_names = core_names | identity_tool_names(specs)
+        gated = [s for s in specs if s.name not in always_names]
         ranked = score_tools(intent, gated)
         return [spec.name for spec, _ in ranked[:limit]]
 
@@ -257,9 +349,10 @@ class EmbeddingToolSelector:
         self._cache: dict[str, list[float]] = {}  # _doc_key -> tool vector
         self._warned = False  # log the embedding-failure fallback at most once
 
-    def _core_names(self, specs: Sequence[ToolSpec]) -> set[str]:
-        """Effective core set: marked-core | core_extra - core_remove."""
-        return ({s.name for s in specs if s.core} | self._core_extra) - self._core_remove
+    def _always_names(self, specs: Sequence[ToolSpec]) -> set[str]:
+        """Always-advertised set: marked-core | core_extra - core_remove | identity anchors."""
+        core = ({s.name for s in specs if s.core} | self._core_extra) - self._core_remove
+        return core | identity_tool_names(specs)
 
     def _tool_vector(self, spec: ToolSpec) -> list[float]:
         """Return ``spec``'s cached embedding, embedding (once) on a cache miss."""
@@ -296,9 +389,12 @@ class EmbeddingToolSelector:
         return [s for s, sim in ranked if sim > 0.0]
 
     def select(self, query: str, *, pinned: frozenset[str] = frozenset()) -> list[ToolSpec]:
-        """Return core | top-K embedding-ranked gated | pinned, deduped and bounded."""
+        """Return always-on | top-K embedding-ranked gated | pinned, deduped and bounded.
+
+        "Always-on" is the core set plus identity anchors (:func:`identity_tool_names`).
+        """
         specs = self._registry.specs()
-        core_names = self._core_names(specs)
+        core_names = self._always_names(specs)
         core = [s for s in specs if s.name in core_names]
         gated = [s for s in specs if s.name not in core_names]
 
@@ -323,7 +419,7 @@ class EmbeddingToolSelector:
         on an embedding failure exactly as :meth:`select` does.
         """
         specs = self._registry.specs()
-        core_names = self._core_names(specs)
+        core_names = self._always_names(specs)
         gated = [s for s in specs if s.name not in core_names]
         return [s.name for s in self._rank_gated(intent, gated)[:limit]]
 

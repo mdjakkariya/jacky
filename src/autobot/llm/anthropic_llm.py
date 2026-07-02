@@ -683,8 +683,20 @@ class AnthropicLanguageModel:
         )
 
     def _relevant_gated(self, query: str) -> frozenset[str]:
-        """Gated tool names lexically relevant to ``query`` (to advertise un-deferred)."""
-        from autobot.tools.selection import LexicalToolSelector
+        """Gated tool names to advertise un-deferred this turn.
+
+        Two sources, kept deliberately small so the model isn't flooded (advertising
+        too many tools degrades selection as badly as hiding the needed one):
+
+        - the top ``tool_relevant_limit`` gated tools lexically relevant to ``query``
+          (with light stemming, so "repo" surfaces ``search_repositories``), and
+        - every **identity anchor** (``get_me``/"authenticated user" read tools), always,
+          so a first-person request ("my repos") can resolve the account without the
+          model having to discover an identity tool first.
+
+        The long tail stays deferred behind the native tool-search tool.
+        """
+        from autobot.tools.selection import LexicalToolSelector, identity_tool_names
 
         selector = LexicalToolSelector(
             self._registry,
@@ -692,7 +704,9 @@ class AnthropicLanguageModel:
             core_extra=frozenset(self._settings.tool_core_extra),
             core_remove=frozenset(self._settings.tool_core_remove),
         )
-        return frozenset(selector.search(query, limit=self._settings.tool_budget))
+        relevant = set(selector.search(query, limit=self._settings.tool_relevant_limit))
+        relevant |= identity_tool_names(self._registry.specs())
+        return frozenset(relevant)
 
     def run_turn(self, user_text: str, execute: ToolExecutor) -> str:
         """Handle one turn end-to-end; tool calls run through ``execute`` (the gate).
