@@ -5,6 +5,8 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+import pytest
+
 from autobot.tools.files import (
     _choice_items,
     _kinds_present,
@@ -366,3 +368,34 @@ def test_subprocess_runner_times_out() -> None:
     rc, out = _subprocess_runner(["sleep", "5"], timeout=0.5)
     assert rc == 124
     assert "timed out" in out.lower()
+
+
+def test_mdfind_runner_bounded_when_producer_stalls_with_partial_output(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import time as _time
+
+    import autobot.tools.files as files_mod
+
+    monkeypatch.setattr(files_mod, "_MDFIND_TIMEOUT_S", 0.5)
+    # Emits one line, then hangs forever (never reaches the line cap, never EOFs).
+    script = "import sys,time\nsys.stdout.write('a\\n'); sys.stdout.flush()\ntime.sleep(60)"
+    argv = ["python3", "-c", script]
+    start = _time.monotonic()
+    _rc, out = files_mod._mdfind_runner(argv)
+    elapsed = _time.monotonic() - start
+    assert elapsed < 10  # bounded by the wall clock, not the 60s sleep
+    assert "a" in out  # the line collected before the stall is returned
+
+
+def test_mdfind_runner_times_out_with_no_output(monkeypatch: pytest.MonkeyPatch) -> None:
+    import time as _time
+
+    import autobot.tools.files as files_mod
+
+    monkeypatch.setattr(files_mod, "_MDFIND_TIMEOUT_S", 0.5)
+    start = _time.monotonic()
+    rc, out = files_mod._mdfind_runner(["sleep", "60"])  # never outputs, never EOFs in window
+    elapsed = _time.monotonic() - start
+    assert elapsed < 10
+    assert rc == 124 and "timed out" in out.lower()
