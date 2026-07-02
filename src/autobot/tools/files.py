@@ -47,6 +47,15 @@ _TOO_MANY = 60
 # and stall the turn. A broad match is flagged "too broad" anyway, so capping here
 # costs nothing useful.
 _MAX_CANDIDATES = 200
+# mdfind on a broad query (e.g. the model searching "*") can match millions of files;
+# letting it enumerate them all blocks the turn (and the whole session, via the turn lock)
+# for minutes. We only ever rank the first _MAX_CANDIDATES, so read at most this many
+# result lines then stop mdfind early. Generous enough that normal searches are unaffected.
+_MDFIND_MAX_LINES = 1000
+# Seconds to wait for mdfind to drain/exit after we terminate it, and the default wall-clock
+# cap for one-shot subprocesses (open/reveal) so a stuck command can't hang the turn.
+_MDFIND_DRAIN_S = 5.0
+_SUBPROCESS_TIMEOUT_S = 20.0
 
 # Filler/meta words a user (or the model) tends to wrap a name in — 'find the file
 # with the name X'. Searching for these matches huge swaths of the disk ('name' is
@@ -92,12 +101,55 @@ _STOPWORDS = frozenset(
 )
 
 
-def _subprocess_runner(argv: list[str]) -> tuple[int, str]:
+def _subprocess_runner(argv: list[str], timeout: float = _SUBPROCESS_TIMEOUT_S) -> tuple[int, str]:
     import subprocess
 
-    proc = subprocess.run(argv, capture_output=True, text=True)
+    try:
+        proc = subprocess.run(argv, capture_output=True, text=True, timeout=timeout)
+    except subprocess.TimeoutExpired:
+        return 124, "timed out"
     out = (proc.stdout or "") if proc.returncode == 0 else (proc.stderr or proc.stdout or "")
     return proc.returncode, out
+
+
+def _mdfind_runner(argv: list[str]) -> tuple[int, str]:
+    """Run mdfind but stop after ``_MDFIND_MAX_LINES`` results, terminating it early.
+
+    Streams stdout line by line; once the cap is reached we terminate the process so a
+    wildcard-broad query can't make mdfind enumerate the entire index (which blocks the turn
+    for minutes — see issue #40 follow-up). Keeps the ``(returncode, output)`` contract of
+    :func:`_subprocess_runner`: an early stop, or a normal finish with results, reports
+    success (``0``); a clean finish with a nonzero exit and no output surfaces the error.
+    """
+    import subprocess
+
+    proc = subprocess.Popen(argv, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    lines: list[str] = []
+    capped = False
+    assert proc.stdout is not None
+    for line in proc.stdout:
+        lines.append(line)
+        if len(lines) >= _MDFIND_MAX_LINES:
+            capped = True
+            break
+    if capped:
+        proc.terminate()
+        try:
+            proc.communicate(timeout=_MDFIND_DRAIN_S)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.communicate()
+        return 0, "".join(lines)
+    # Natural EOF: mdfind finished on its own.
+    try:
+        _, err = proc.communicate(timeout=_MDFIND_DRAIN_S)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        _, err = proc.communicate()
+    rc = proc.returncode or 0
+    if rc != 0 and not lines:
+        return rc, err or ""
+    return 0, "".join(lines)
 
 
 def _safe_mtime(path: str) -> float:
@@ -374,7 +426,7 @@ def search_files(
     voice it's a transient preview on the orb. The returned text is unchanged, so
     voice still works off the spoken reply.
     """
-    run = runner or _subprocess_runner
+    run = runner or _mdfind_runner
     toks = _tokens(query or "")
     if not toks:
         return "Tell me what to look for — a word or two from the file name."

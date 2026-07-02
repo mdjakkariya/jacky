@@ -326,3 +326,43 @@ def test_search_files_no_card_when_empty() -> None:
         choices=lambda t, i: published.append((t, i)),
     )
     assert not published  # no results -> no card
+
+
+def test_mdfind_runner_caps_and_terminates_quickly() -> None:
+    import time as _time
+
+    from autobot.tools.files import _MDFIND_MAX_LINES, _mdfind_runner
+
+    # A process that would print forever; the runner must stop after the cap and return fast.
+    argv = ["python3", "-c", "import sys\nwhile True: sys.stdout.write('x\\n')"]
+    start = _time.monotonic()
+    rc, out = _mdfind_runner(argv)
+    elapsed = _time.monotonic() - start
+    lines = out.splitlines()
+    assert rc == 0
+    assert len(lines) == _MDFIND_MAX_LINES  # capped, not unbounded
+    assert elapsed < 15  # early-terminated, not run-to-completion (it never ends on its own)
+
+
+def test_mdfind_runner_returns_all_when_few_and_exits_zero() -> None:
+    from autobot.tools.files import _mdfind_runner
+
+    rc, out = _mdfind_runner(["python3", "-c", "print('a'); print('b')"])
+    assert rc == 0
+    assert out.splitlines() == ["a", "b"]
+
+
+def test_mdfind_runner_surfaces_error_when_no_output() -> None:
+    from autobot.tools.files import _mdfind_runner
+
+    rc, out = _mdfind_runner(["python3", "-c", "import sys; sys.stderr.write('boom'); sys.exit(2)"])
+    assert rc == 2
+    assert "boom" in out
+
+
+def test_subprocess_runner_times_out() -> None:
+    from autobot.tools.files import _subprocess_runner
+
+    rc, out = _subprocess_runner(["sleep", "5"], timeout=0.5)
+    assert rc == 124
+    assert "timed out" in out.lower()
