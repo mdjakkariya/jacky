@@ -161,7 +161,8 @@ class PermissionGate:
         """Ask the confirmer for a tri-state decision, falling back to bool confirm()."""
         fn = getattr(self._confirmer, "confirm_action", None)
         if callable(fn):
-            return str(fn(prompt, kind))
+            decision: str = fn(prompt, kind)
+            return decision if decision in ("once", "session") else ""
         return "once" if self._confirmer.confirm(prompt, kind) else ""
 
     def execute(self, call: ToolCall) -> ToolResult:

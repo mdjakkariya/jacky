@@ -273,3 +273,10 @@ def test_choose_session_cue_ignored_without_session_option() -> None:
     # a plain yes still maps to the least-privilege default.
     c, _ = _voice(["yes for all of them"])
     assert c.choose("Let Jack in?", _LEVELS, "read", "read") == "read"
+
+
+def test_choose_unclear_answer_with_cue_does_not_grant_session() -> None:
+    # An unclear answer (no clear yes) that merely contains a cue word must NOT
+    # escalate a destructive action to a whole-session grant (least privilege).
+    c, _ = _voice(["always"])
+    assert c.choose("Delete it?", _GRANT, "danger", "once") != "session"

@@ -428,3 +428,16 @@ def test_legacy_confirm_only_never_grants_session() -> None:
     gate.execute(ToolCall(name="delete_file", arguments={"path": "/d/a"}))
     assert tool.ran is True
     assert confirmer.asks == 2  # legacy path never grants a session
+
+
+def test_bogus_confirm_action_value_fails_closed() -> None:
+    class _Bogus:
+        def confirm(self, prompt: str, kind: str = "danger") -> bool:
+            return True
+
+        def confirm_action(self, prompt: str, kind: str = "danger") -> str:
+            return "yes"  # not "once"/"session" -> must be treated as decline
+
+    gate, tool = _delete_gate(_Bogus())
+    result = gate.execute(ToolCall(name="delete_file", arguments={"path": "/d/a"}))
+    assert tool.ran is False and result.ok is False  # unknown value fails closed

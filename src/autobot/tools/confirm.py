@@ -223,11 +223,7 @@ class VoiceConfirmer:
                 text = self._listen(chunk)
                 if not text.strip():
                     continue
-                if (
-                    "session" in valid
-                    and _session_cue(text)
-                    and parse_confirmation(text) is not False
-                ):
+                if "session" in valid and _session_cue(text) and parse_confirmation(text) is True:
                     return "session"
                 ans = parse_confirmation(text)
                 if ans is True:
