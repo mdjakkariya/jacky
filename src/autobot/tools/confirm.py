@@ -86,6 +86,19 @@ _YES_WORDS = frozenset(
 )
 _YES_PHRASES = ("go ahead", "do it", "go for it", "please do", "of course", "sounds good")
 
+_GRANT_OPTIONS: list[dict[str, str]] = [
+    {"label": "Allow once", "value": "once"},
+    {"label": "Allow this session", "value": "session"},
+]
+# Spoken cues that mean "grant this for the rest of the session", not just once.
+_SESSION_CUES = ("for all", "this session", "every time", "always", "don't ask", "dont ask")
+
+
+def _session_cue(text: str) -> bool:
+    """Whether a spoken answer asks to remember the grant for the session."""
+    lowered = text.lower()
+    return any(cue in lowered for cue in _SESSION_CUES)
+
 
 def parse_confirmation(text: str) -> bool | None:
     """Classify a spoken answer: ``True`` = yes, ``False`` = no, ``None`` = unclear.
@@ -210,6 +223,12 @@ class VoiceConfirmer:
                 text = self._listen(chunk)
                 if not text.strip():
                     continue
+                if (
+                    "session" in valid
+                    and _session_cue(text)
+                    and parse_confirmation(text) is not False
+                ):
+                    return "session"
                 ans = parse_confirmation(text)
                 if ans is True:
                     return default
@@ -276,7 +295,10 @@ class VoiceConfirmer:
                 self._on_clear()
 
     def confirm_action(self, prompt: str, kind: str = "danger") -> str:
-        """Confirm a gated action: "once" (proceed), "session" (proceed + remember), "" (cancel)."""
-        if self.confirm(prompt, kind):
-            return "once"
-        return ""
+        """Confirm a gated action, offering an "Allow this session" grant.
+
+        Reuses :meth:`choose` (card + inbox + voice), so a click picks a button and a
+        spoken plain "yes" grants ``"once"`` while a session cue ("for all", "this
+        session") grants ``"session"``. Returns "" on cancel / silence / timeout.
+        """
+        return self.choose(prompt, _GRANT_OPTIONS, kind, default="once")

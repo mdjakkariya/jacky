@@ -230,3 +230,46 @@ def test_choose_voice_yes_picks_least_privilege_default() -> None:
 def test_choose_cancel_returns_empty() -> None:
     c, _ = _voice(["no"])
     assert c.choose("Let Jack in?", _LEVELS, "read", "read") == ""
+
+
+_GRANT = [
+    {"label": "Allow once", "value": "once"},
+    {"label": "Allow this session", "value": "session"},
+]
+
+
+def test_confirm_action_click_session_in_chat() -> None:
+    polls = {"n": 0}
+
+    def poll() -> str | None:
+        polls["n"] += 1
+        return "session" if polls["n"] >= 2 else None  # drain, then the picked value
+
+    c = VoiceConfirmer(
+        speak=lambda _s: None,
+        listen=lambda _t: "",
+        on_show=lambda p, k, o: None,
+        poll_answer=poll,
+        is_chat=lambda: True,
+        timeout_s=10.0,
+        clock=lambda: 0.0,
+        sleep=lambda _s: None,
+    )
+    assert c.confirm_action("Delete it?") == "session"
+
+
+def test_confirm_action_plain_yes_is_once_by_voice() -> None:
+    c, _ = _voice(["yes"])
+    assert c.confirm_action("Delete it?") == "once"
+
+
+def test_choose_voice_session_cue_returns_session() -> None:
+    c, _ = _voice(["yes for all this session"])
+    assert c.choose("Delete it?", _GRANT, "danger", "once") == "session"
+
+
+def test_choose_session_cue_ignored_without_session_option() -> None:
+    # Folder-grant options have no "session" value -> a session cue can't invent one;
+    # a plain yes still maps to the least-privilege default.
+    c, _ = _voice(["yes for all of them"])
+    assert c.choose("Let Jack in?", _LEVELS, "read", "read") == "read"
