@@ -686,6 +686,12 @@ def build(
             on_event=on_meeting_event,
         )
         register_meeting_tools(registry, _meeting_recorder)
+        # Expose live recording state to the LLM's per-turn system context, so the
+        # model's belief about whether a meeting is recording tracks reality even when
+        # it was stopped from the drawer's Stop button (which bypasses the model).
+        from autobot.meeting.state import set_meeting_status_provider
+
+        set_meeting_status_provider(_meeting_recorder.status)
         import threading as _threading
 
         _threading.Thread(

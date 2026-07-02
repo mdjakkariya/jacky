@@ -115,6 +115,30 @@ def active_folder_line() -> str:
     return f"Active folder: {pol.cwd}" if pol is not None else ""
 
 
+def meeting_state_line() -> str:
+    """A one-line live meeting-recorder status for the system context.
+
+    Empty when meetings aren't enabled. Otherwise it is authoritative about whether a
+    recording is in progress *right now* — injected every turn so the model reflects
+    reality instead of a stale earlier message. A meeting can be stopped from the
+    drawer's Stop button (which bypasses the model), so without this the model would
+    keep thinking it is recording and decline to start a new one.
+    """
+    from autobot.meeting.state import meeting_status_snapshot
+
+    st = meeting_status_snapshot()
+    if st is None:
+        return ""
+    if st.get("active"):
+        mins = int(float(st.get("elapsed_s", 0.0) or 0.0) // 60)
+        paused = " (currently paused)" if st.get("paused") else ""
+        return (
+            f"Meeting recorder: a recording IS in progress right now{paused} "
+            f"(~{mins} min elapsed). To finish it, use stop_meeting; do not start another."
+        )
+    return "Meeting recorder: idle — no meeting is being recorded right now."
+
+
 def _get(obj: Any, key: str) -> Any:
     """Read ``key`` from a dict, or the attribute ``key`` from an object.
 
@@ -357,6 +381,9 @@ class OllamaLanguageModel:
         folder = active_folder_line()
         if folder:
             messages.append({"role": "system", "content": folder})
+        meeting = meeting_state_line()
+        if meeting:
+            messages.append({"role": "system", "content": meeting})
         if self._summary:
             messages.append(
                 {"role": "system", "content": f"Summary of earlier conversation: {self._summary}"}
