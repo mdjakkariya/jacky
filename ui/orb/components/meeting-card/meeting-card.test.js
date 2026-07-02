@@ -7,6 +7,7 @@ vi.mock("../../lib/daemon.js", () => ({
     meetingPause: vi.fn(),
     meetingResume: vi.fn(),
     meetingReveal: vi.fn().mockResolvedValue({ ok: true }),
+    settings: vi.fn().mockResolvedValue({ llm_provider: "ollama", llm_model: "qwen3:8b" }),
   },
 }));
 vi.mock("../../lib/clipboard.js", () => ({ copyText: vi.fn().mockResolvedValue(true) }));
@@ -237,11 +238,109 @@ describe("renderMinutes — footer + expand", () => {
     expect(card.classList.contains("expanded")).toBe(false);
   });
 
-  it("renders all action items (overflow marked .extra) — 3 total, 1 extra", () => {
+  it("renders all action items in the actions section", () => {
     const log = makeLog();
     renderMinutes(log, R); // SAMPLE_MD has 3 action items
-    expect(log.querySelectorAll(".aiprev .ai").length).toBe(3);
-    expect(log.querySelectorAll(".aiprev .ai.extra").length).toBe(1);
+    expect(log.querySelectorAll(".mtg-section[data-section='actions'] .ai").length).toBe(3);
+  });
+
+  it("renders the open questions as a list (not just a count)", () => {
+    const log = makeLog();
+    renderMinutes(log, R); // SAMPLE_MD has 1 open question
+    const items = log.querySelectorAll(".mtg-section[data-section='openq'] .oq");
+    expect(items.length).toBe(1);
+    expect(items[0].textContent).toContain("legal review");
+  });
+
+  it("renders the decisions as a list", () => {
+    const log = makeLog();
+    renderMinutes(log, R); // SAMPLE_MD has 2 decisions
+    expect(log.querySelectorAll(".mtg-section[data-section='decisions'] .dec").length).toBe(2);
+  });
+
+  it("clicking a count pill reveals ONLY that section — not the whole card", () => {
+    const log = makeLog();
+    renderMinutes(log, R);
+    const card = log.querySelector("#meeting-minutes");
+    const oqPill = log.querySelector(".mtg-stats .stat[data-section='openq']");
+    const oqSec = log.querySelector(".mtg-section[data-section='openq']");
+    expect(oqSec.classList.contains("open")).toBe(false);
+    oqPill.click();
+    expect(oqSec.classList.contains("open")).toBe(true);
+    // The full-card expand belongs to the chevron, not the pills (issue #38).
+    expect(card.classList.contains("expanded")).toBe(false);
+  });
+
+  it("clicking the decisions pill reveals the decisions list", () => {
+    const log = makeLog();
+    renderMinutes(log, R);
+    const decPill = log.querySelector(".mtg-stats .stat[data-section='decisions']");
+    const decSec = log.querySelector(".mtg-section[data-section='decisions']");
+    decPill.click();
+    expect(decSec.classList.contains("open")).toBe(true);
+    expect(decSec.querySelectorAll(".dec").length).toBe(2);
+  });
+
+  it("opening one section closes the others (shows only the clicked one)", () => {
+    const log = makeLog();
+    renderMinutes(log, R);
+    log.querySelector(".mtg-stats .stat[data-section='decisions']").click();
+    log.querySelector(".mtg-stats .stat[data-section='openq']").click();
+    expect(log.querySelector(".mtg-section[data-section='decisions']").classList.contains("open")).toBe(false);
+    expect(log.querySelector(".mtg-section[data-section='openq']").classList.contains("open")).toBe(true);
+  });
+
+  it("highlights the clicked pill as active (and clears it on the others)", () => {
+    const log = makeLog();
+    renderMinutes(log, R);
+    const decPill = log.querySelector(".mtg-stats .stat[data-section='decisions']");
+    const oqPill = log.querySelector(".mtg-stats .stat[data-section='openq']");
+    decPill.click();
+    expect(decPill.classList.contains("active")).toBe(true);
+    oqPill.click();
+    expect(oqPill.classList.contains("active")).toBe(true);
+    expect(decPill.classList.contains("active")).toBe(false);
+    // Clicking the active pill again closes its section and clears the highlight.
+    oqPill.click();
+    expect(oqPill.classList.contains("active")).toBe(false);
+  });
+
+  it("a zero-count pill is disabled and opens no section", () => {
+    const md = "# T\n## Decisions\n- None\n## Action items\n- None\n## Open questions\n- Only one\n";
+    const log = makeLog();
+    renderMinutes(log, { ok: true, id: "m", dir: "/x/m", minutes_md: md });
+    const actPill = log.querySelector(".mtg-stats .stat[data-section='actions']");
+    expect(actPill.disabled).toBe(true);
+    expect(log.querySelector(".mtg-section[data-section='actions']")).toBeNull();
+  });
+});
+
+// ── processing card — model label (bug #38) ────────────────────────────────────
+
+describe("showProcessingCard — model label", () => {
+  it("shows the cloud model from settings, not a hardcoded local model", async () => {
+    daemon.settings.mockResolvedValue({
+      llm_provider: "anthropic",
+      anthropic_model: "claude-haiku-4-5",
+      llm_model: "qwen2.5:3b",
+    });
+    const log = makeLog();
+    renderMeeting(log, { state: "summarizing", elapsed_s: 0, mic_only: false, paused: false, title: "T" });
+    await vi.runAllTimersAsync();
+    const steps = log.querySelectorAll("#meeting-processing li");
+    const writeStep = steps[steps.length - 1];
+    expect(writeStep.textContent).toContain("Writing minutes");
+    expect(writeStep.querySelector(".meta").textContent).toBe("haiku-4.5");
+  });
+
+  it("shows the local model name when provider is ollama", async () => {
+    daemon.settings.mockResolvedValue({ llm_provider: "ollama", llm_model: "qwen2.5:3b" });
+    const log = makeLog();
+    renderMeeting(log, { state: "summarizing", elapsed_s: 0, mic_only: false, paused: false, title: "T" });
+    await vi.runAllTimersAsync();
+    const steps = log.querySelectorAll("#meeting-processing li");
+    const writeStep = steps[steps.length - 1];
+    expect(writeStep.querySelector(".meta").textContent).toBe("qwen2.5:3b");
   });
 });
 

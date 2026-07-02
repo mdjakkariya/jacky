@@ -228,17 +228,30 @@
   .sum::after { content: ""; position: absolute; left: 0; right: 0; bottom: 0; height: 1.5em; background: linear-gradient(transparent, var(--panel)); }
   .min.expanded .sum { display: block; -webkit-line-clamp: unset; overflow: visible; }
   .min.expanded .sum::after { display: none; }
-  .aiprev .ai.extra { display: none; }
-  .min.expanded .aiprev .ai.extra { display: flex; }
-  .min.expanded .aiprev .more-ai { display: none; }
   .mtg-stats { display: flex; flex-wrap: wrap; gap: 7px; margin: 12px 0 2px; }
   .stat { display: inline-flex; align-items: center; gap: 5px; font-size: 11px; color: var(--muted); background: var(--field); border: .5px solid var(--field-line); border-radius: 7px; padding: 4px 9px; }
   .stat b { color: var(--text); font-weight: 700; font-variant-numeric: tabular-nums; }
   .aiprev { list-style: none; margin: 12px 0 4px; padding: 0; display: flex; flex-direction: column; gap: 9px; }
-  .aiprev .more-ai { font-size: 11.5px; color: var(--accent); padding-left: 24px; }
   .ai { display: flex; gap: 9px; align-items: flex-start; font-size: 12.5px; line-height: 1.4; }
   .ai .box { width: 15px; height: 15px; flex: none; margin-top: 1px; border-radius: 4px; border: 1.5px solid var(--field-line); }
   .ai .who { display: inline-block; font-size: 10.5px; font-weight: 700; color: var(--them); background: var(--them-bg); padding: 0 6px; border-radius: 5px; margin-left: 6px; }
+  /* Count chips are toggle buttons: each reveals ONLY its own section (bug #38);
+     the active one is highlighted. The chevron is the separate "expand all". */
+  .mtg-stats .stat { font-family: inherit; line-height: 1.2; cursor: pointer; transition: border-color .15s ease, color .15s ease, background .15s ease; }
+  .mtg-stats .stat:hover:not([disabled]) { border-color: var(--accent); color: var(--text); }
+  .mtg-stats .stat.active { border-color: var(--accent); color: var(--text); background: var(--accent-bg); }
+  .mtg-stats .stat.active b { color: var(--accent); }
+  .mtg-stats .stat.empty, .mtg-stats .stat[disabled] { cursor: default; opacity: .45; }
+  /* Detail sections: hidden until their pill opens them, or the card is expanded. */
+  .mtg-sections { display: flex; flex-direction: column; }
+  .mtg-section { display: none; margin-top: 14px; }
+  .mtg-section.open, .min.expanded .mtg-section { display: block; }
+  .declist, .oqprev { list-style: none; margin: 10px 0 0; padding: 0; display: flex; flex-direction: column; gap: 9px; }
+  .mtg-section .aiprev { margin: 10px 0 0; }
+  .dec, .oqprev .oq { display: flex; gap: 9px; align-items: flex-start; font-size: 12.5px; line-height: 1.4; }
+  .dec .dmark { width: 15px; height: 15px; flex: none; margin-top: 1px; color: var(--accent); }
+  .dec .dmark svg { width: 15px; height: 15px; }
+  .oqprev .oq .qmark { width: 15px; height: 15px; flex: none; margin-top: 1px; border-radius: 50%; border: 1.5px solid var(--field-line); color: var(--muted); font-size: 10px; font-weight: 700; display: inline-flex; align-items: center; justify-content: center; }
   .min-foot { display: flex; gap: 8px; padding: 11px 14px; border-top: .5px solid var(--line); flex-wrap: wrap; }
   .fbtn { flex: 1; min-width: 96px; border: .5px solid var(--field-line); background: var(--field); color: var(--text); font-size: 11.5px; border-radius: 8px; padding: 8px; cursor: pointer; display: inline-flex; align-items: center; justify-content: center; gap: 6px; }
   .fbtn svg { width: 14px; height: 14px; }
