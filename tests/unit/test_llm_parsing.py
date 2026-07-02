@@ -259,3 +259,75 @@ def test_active_folder_line_returns_empty_when_no_policy() -> None:
 
     set_active_policy(None)
     assert active_folder_line() == ""
+
+
+def test_meeting_state_line_empty_when_no_provider() -> None:
+    from autobot.llm.ollama_llm import meeting_state_line
+    from autobot.meeting.state import set_meeting_status_provider
+
+    set_meeting_status_provider(None)
+    assert meeting_state_line() == ""
+
+
+def test_meeting_state_line_idle_when_not_recording() -> None:
+    from autobot.llm.ollama_llm import meeting_state_line
+    from autobot.meeting.state import set_meeting_status_provider
+
+    set_meeting_status_provider(lambda: {"active": False, "state": "idle"})
+    try:
+        line = meeting_state_line()
+        # Authoritative "not recording" so the model can't act on a stale "I'm recording".
+        assert line and "no meeting" in line.lower()
+    finally:
+        set_meeting_status_provider(None)
+
+
+def test_meeting_state_line_recording_when_active() -> None:
+    from autobot.llm.ollama_llm import meeting_state_line
+    from autobot.meeting.state import set_meeting_status_provider
+
+    set_meeting_status_provider(
+        lambda: {"active": True, "elapsed_s": 130.0, "paused": False, "state": "recording"}
+    )
+    try:
+        line = meeting_state_line()
+        assert "recording" in line.lower()
+        assert "2 min" in line  # 130s → ~2 min elapsed
+        assert "stop_meeting" in line  # points the model at the way to finish
+    finally:
+        set_meeting_status_provider(None)
+
+
+def test_meeting_state_line_swallows_provider_errors() -> None:
+    from autobot.llm.ollama_llm import meeting_state_line
+    from autobot.meeting.state import set_meeting_status_provider
+
+    def boom() -> dict[str, Any]:
+        raise RuntimeError("recorder exploded")
+
+    set_meeting_status_provider(boom)
+    try:
+        assert meeting_state_line() == ""  # a broken provider must never crash a turn
+    finally:
+        set_meeting_status_provider(None)
+
+
+def test_ollama_assemble_injects_meeting_state() -> None:
+    from autobot.config import Settings
+    from autobot.llm.ollama_llm import OllamaLanguageModel
+    from autobot.meeting.state import set_meeting_status_provider
+
+    m = object.__new__(OllamaLanguageModel)
+    m._settings = Settings()
+    m._memory = None
+    m._summary = ""
+    m._history = []
+    m._delivery_mode = "chat"
+
+    set_meeting_status_provider(lambda: {"active": True, "elapsed_s": 60.0, "paused": False})
+    try:
+        msgs = m._assemble({"role": "user", "content": "take minutes"})
+        system_text = " ".join(str(x.get("content", "")) for x in msgs if x.get("role") == "system")
+        assert "recording" in system_text.lower()
+    finally:
+        set_meeting_status_provider(None)
