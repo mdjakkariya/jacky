@@ -1,6 +1,6 @@
 /** Chat confirmation card (created dynamically in the transcript, so a module rather
- *  than a custom element). Tiers tone to read/write/danger; optional <select> of
- *  choices. Answer posts {value} via lib/daemon. Moved from chat.html. */
+ *  than a custom element). Tiers tone to read/write/danger; optional buttons for
+ *  multiple choices. Answer posts {value} via lib/daemon. Moved from chat.html. */
 import { daemon } from "../../lib/daemon.js";
 
 export function clearConfirm(log) {
