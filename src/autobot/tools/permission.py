@@ -46,6 +46,10 @@ class Confirmer(Protocol):
         """Pick one option's value (e.g. an access level); "" means cancel."""
         ...
 
+    def confirm_action(self, prompt: str, kind: str = "danger") -> str:
+        """Confirm a gated action: "once" (proceed), "session" (proceed + remember), "" (cancel)."""
+        ...
+
 
 class TerminalConfirmer:
     """Confirms via a ``[y/N]`` prompt on the terminal (default: No)."""
@@ -61,6 +65,10 @@ class TerminalConfirmer:
         """Confirm on stdin; a yes grants the least-privilege ``default``."""
         return default if self.confirm(prompt) else ""
 
+    def confirm_action(self, prompt: str, kind: str = "danger") -> str:
+        """Terminal has no session button: a yes proceeds once, anything else cancels."""
+        return "once" if self.confirm(prompt) else ""
+
 
 class AlwaysAllow:
     """A confirmer that approves everything (tests / non-interactive use)."""
@@ -73,6 +81,9 @@ class AlwaysAllow:
     ) -> str:
         return default
 
+    def confirm_action(self, prompt: str, kind: str = "danger") -> str:  # noqa: D102
+        return "once"
+
 
 class AlwaysDeny:
     """A confirmer that rejects everything (tests)."""
@@ -83,6 +94,9 @@ class AlwaysDeny:
     def choose(  # noqa: D102
         self, prompt: str, options: list[dict[str, str]], kind: str = "read", default: str = "read"
     ) -> str:
+        return ""
+
+    def confirm_action(self, prompt: str, kind: str = "danger") -> str:  # noqa: D102
         return ""
 
 
@@ -97,6 +111,7 @@ class PermissionGate:
         confirm_at_or_above: Risk = Risk.DESTRUCTIVE,
         permission_status: Callable[[str], str] | None = None,
         on_permission_needed: Callable[[str], object] | None = None,
+        scope_of: Callable[[ToolCall], str] | None = None,
     ) -> None:
         self._registry = registry
         self._audit = audit
@@ -107,6 +122,12 @@ class PermissionGate:
         # is called (e.g. to open the Settings pane) when a tool is blocked.
         self._permission_status = permission_status
         self._on_permission_needed = on_permission_needed
+        # Derives a per-call scope string (e.g. the target folder) for session grants;
+        # None -> tool-name-only scope. Set in the composition root (app.build).
+        self._scope_of = scope_of
+        # Actions the user approved "for this session" (in-memory; key = "tool|scope").
+        # Cleared on New Chat and on process restart.
+        self._session_grants: set[str] = set()
 
     def risk_of(self, name: str) -> Risk | None:
         """The risk level of a registered tool, or ``None`` if it's unknown.
@@ -126,6 +147,23 @@ class PermissionGate:
         """
         spec = self._registry.get(name)
         return spec.ack if spec is not None else None
+
+    def clear_session_grants(self) -> None:
+        """Forget every "allow this session" grant (called on New Chat / restart)."""
+        self._session_grants.clear()
+
+    def _grant_key(self, call: ToolCall) -> str:
+        """The session-grant key for a call: ``"{tool}|{scope}"`` (scope may be empty)."""
+        scope = self._scope_of(call) if self._scope_of is not None else ""
+        return f"{call.name}|{scope}"
+
+    def _confirm_action(self, prompt: str, kind: str) -> str:
+        """Ask the confirmer for a tri-state decision, falling back to bool confirm()."""
+        fn = getattr(self._confirmer, "confirm_action", None)
+        if callable(fn):
+            decision: str = fn(prompt, kind)
+            return decision if decision in ("once", "session") else ""
+        return "once" if self._confirmer.confirm(prompt, kind) else ""
 
     def execute(self, call: ToolCall) -> ToolResult:
         """Run one tool call through the gate; see the module docstring for policy."""
@@ -171,7 +209,21 @@ class PermissionGate:
             prompt = spec.confirm_prompt or self._format_prompt(
                 spec.name, spec.risk, call.arguments
             )
-            if not self._confirmer.confirm(prompt, self._confirm_kind(spec)):
+            kind = self._confirm_kind(spec)
+            granted = False
+            if spec.network:
+                # Off-device send: always confirm per call, never remembered (privacy).
+                decision = "once" if self._confirmer.confirm(prompt, kind) else ""
+            else:
+                key = self._grant_key(call)
+                if key in self._session_grants:
+                    granted = True
+                    decision = "once"  # already approved this session — skip the card
+                else:
+                    decision = self._confirm_action(prompt, kind)
+                    if decision == "session":
+                        self._session_grants.add(key)
+            if not decision:
                 # Timeout (no answer) reads differently from a deliberate "no": say we
                 # cancelled for lack of confirmation, not that the user declined.
                 timed_out = bool(getattr(self._confirmer, "timed_out", False))
@@ -200,6 +252,8 @@ class PermissionGate:
                         "Acknowledge in one short sentence; do not ask again or retry."
                     )
                 return ToolResult(name=call.name, content=content, ok=False)
+            if granted:
+                _log.info("auto-approved tool=%s via session grant", call.name)
 
         result = self._registry.dispatch(call.name, call.arguments)
         # Learn from the outcome: a success means the permission is granted; a

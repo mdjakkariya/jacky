@@ -1,6 +1,6 @@
 /** Chat confirmation card (created dynamically in the transcript, so a module rather
- *  than a custom element). Tiers tone to read/write/danger; optional <select> of
- *  choices. Answer posts {value} via lib/daemon. Moved from chat.html. */
+ *  than a custom element). Tiers tone to read/write/danger; optional buttons for
+ *  multiple choices. Answer posts {value} via lib/daemon. Moved from chat.html. */
 import { daemon } from "../../lib/daemon.js";
 
 export function clearConfirm(log) {
@@ -18,21 +18,26 @@ export function showConfirm(log, prompt, kind, options, meta) {
   const yes = kind === "danger" ? "Yes, do it" : "Allow";
   const yesCls = kind === "danger" ? "btn danger" : "btn primary";
   const no = kind === "danger" ? "Cancel" : "Not now";
-  card.innerHTML = '<div class="h"></div><div class="b"></div>'
-    + '<div class="row"><button class="btn" data-v="no"></button>'
-    + '<button class="' + yesCls + '" data-v="yes"></button></div>';
+  card.innerHTML = '<div class="h"></div><div class="b"></div>';
   card.querySelector(".h").textContent = head;
   card.querySelector(".b").textContent = prompt || "Do you want me to go ahead with this?";
-  card.querySelector('[data-v="no"]').textContent = no;
-  card.querySelector('[data-v="yes"]').textContent = yes;
-  // Build the choices <select> with createElement (not innerHTML) so option text/values
-  // can't break out of attribute context.
-  let selEl = null;
+  const row = document.createElement("div"); row.className = "row";
   if (hasOpts) {
-    selEl = document.createElement("select"); selEl.className = "confsel"; selEl.id = "confSel";
-    options.forEach((o) => { const op = document.createElement("option"); op.value = o.value; op.textContent = o.label; selEl.appendChild(op); });
-    card.insertBefore(selEl, card.querySelector(".row"));
+    // One button per option (last is the primary), plus Cancel — clearer than a dropdown.
+    const cancel = document.createElement("button"); cancel.className = "btn"; cancel.setAttribute("data-v", "no"); cancel.textContent = no;
+    row.appendChild(cancel);
+    options.forEach((o, i) => {
+      const b = document.createElement("button");
+      b.className = i === options.length - 1 ? yesCls : "btn";
+      b.setAttribute("data-v", o.value); b.textContent = o.label;
+      row.appendChild(b);
+    });
+  } else {
+    const noBtn = document.createElement("button"); noBtn.className = "btn"; noBtn.setAttribute("data-v", "no"); noBtn.textContent = no;
+    const yesBtn = document.createElement("button"); yesBtn.className = yesCls; yesBtn.setAttribute("data-v", "yes"); yesBtn.textContent = yes;
+    row.appendChild(noBtn); row.appendChild(yesBtn);
   }
+  card.appendChild(row);
   // Add network-specific disclosure rows before the button row
   if (kind === "network" && (meta.serverLabel || meta.egress)) {
     const rowContainer = card.querySelector(".row");
@@ -55,9 +60,7 @@ export function showConfirm(log, prompt, kind, options, meta) {
   }
   card.querySelectorAll("button").forEach((b) => {
     b.addEventListener("click", () => {
-      let v = b.getAttribute("data-v");
-      if (v === "yes" && hasOpts) { v = selEl ? selEl.value : "yes"; }
-      daemon.confirm({ value: v });
+      daemon.confirm({ value: b.getAttribute("data-v") });
       card.remove();
     });
   });

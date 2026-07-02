@@ -14,12 +14,14 @@ from __future__ import annotations
 
 import json
 import threading
+import unicodedata
 from collections.abc import Callable
 from dataclasses import dataclass
 from enum import IntEnum
 from pathlib import Path
 from typing import ClassVar, Protocol
 
+from autobot.core.types import ToolCall
 from autobot.logging_setup import get_logger
 
 _log = get_logger("access")
@@ -81,6 +83,38 @@ def _is_denied(resolved: Path) -> bool:
     if resolved.name in _DENY_FILE_NAMES:
         return True
     return any(p in name for p in _DENY_NAME_PARTS)
+
+
+def _fold_name(name: str) -> str:
+    """Fold a filename for whitespace/Unicode-tolerant matching.
+
+    Normalizes to NFC and maps every Unicode whitespace character to a plain space, so a
+    name an LLM re-typed with a regular space matches a real macOS filename that uses a
+    narrow no-break space (U+202F, common in screenshot names). Nothing else is altered.
+    """
+    return "".join(" " if ch.isspace() else ch for ch in unicodedata.normalize("NFC", name))
+
+
+def find_existing(resolved: Path) -> Path | None:
+    """Return an existing file for ``resolved``, tolerant of whitespace/Unicode drift.
+
+    If ``resolved`` exists, return it unchanged. Otherwise look in its parent for a single
+    entry whose name matches ``resolved``'s under :func:`_fold_name` (so a regular space
+    matches a narrow no-break space). Returns the real path only when exactly one sibling
+    matches; returns ``None`` when there is no match or the match is ambiguous — it never
+    guesses which of several files to act on (important for destructive ops).
+    """
+    if resolved.exists():
+        return resolved
+    parent = resolved.parent
+    if not parent.is_dir():
+        return None
+    want = _fold_name(resolved.name)
+    try:
+        matches = [p for p in parent.iterdir() if _fold_name(p.name) == want]
+    except OSError:
+        return None
+    return matches[0] if len(matches) == 1 else None
 
 
 class AccessPolicy:
@@ -320,3 +354,24 @@ class AccessBroker:
                     raise PermissionError(denied) from na
                 self._policy.grant(na.folder, write=(choice == "write"))
             return self._policy.check(resolved, write)
+
+
+def folder_scope_of(policy: AccessPolicy) -> Callable[[ToolCall], str]:
+    """Build a session-grant scope function keyed on a call's target folder.
+
+    For a path-bearing tool (``delete_file`` etc.) the scope is the resolved parent
+    folder, so a session grant means "this action, in this folder". Tools with no
+    ``path`` argument (``empty_trash``, ``uninstall_app``) get an empty scope, i.e. a
+    tool-name-only grant. Never raises — an unresolvable path yields ``""``.
+    """
+
+    def scope_of(call: ToolCall) -> str:
+        raw = call.arguments.get("path")
+        if isinstance(raw, str) and raw:
+            try:
+                return str(policy.resolve(raw).parent)
+            except Exception:
+                return ""
+        return ""
+
+    return scope_of

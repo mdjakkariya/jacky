@@ -729,6 +729,10 @@ class _AlwaysAllowConfirmer:
     ) -> str:
         return default
 
+    def confirm_action(self, prompt: str, kind: str = "danger") -> str:
+        """Tri-state confirm action stub: always returns 'once'."""
+        return "once"
+
 
 class _AlwaysDenyConfirmer:
     """Confirmer that rejects every prompt."""

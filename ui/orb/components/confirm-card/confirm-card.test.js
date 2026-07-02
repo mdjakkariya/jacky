@@ -24,12 +24,20 @@ it("yes posts {value:'yes'} and removes the card", () => {
   expect(log.querySelector("#confirm-card")).toBeNull();
 });
 
-it("with options, yes posts the selected option value", () => {
+it("with options, each option renders a button that posts its value", () => {
   const log = makeLog();
-  showConfirm(log, "pick", "read", [{ value: "a", label: "A" }, { value: "b", label: "B" }]);
-  log.querySelector("#confSel").value = "b";
-  log.querySelector('[data-v="yes"]').click();
-  expect(daemon.confirm).toHaveBeenCalledWith({ value: "b" });
+  showConfirm(log, "pick", "read", [{ value: "once", label: "Allow once" }, { value: "session", label: "Allow this session" }]);
+  const card = log.querySelector("#confirm-card");
+  expect(card.querySelector('[data-v="session"]').textContent).toBe("Allow this session");
+  card.querySelector('[data-v="once"]').click();
+  expect(daemon.confirm).toHaveBeenCalledWith({ value: "once" });
+});
+
+it("options card has a Cancel button that posts no", () => {
+  const log = makeLog();
+  showConfirm(log, "pick", "danger", [{ value: "once", label: "Allow once" }, { value: "session", label: "Session" }]);
+  log.querySelector('[data-v="no"]').click();
+  expect(daemon.confirm).toHaveBeenCalledWith({ value: "no" });
 });
 
 it("clearConfirm removes an existing card", () => {

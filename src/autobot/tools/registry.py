@@ -19,6 +19,16 @@ from autobot.core.types import Risk, ToolResult
 ToolHandler = Callable[..., str]
 
 
+class ToolError(Exception):
+    """Raised by a handler to report an *expected* failure (e.g. not found, denied).
+
+    The registry maps it to a failed :class:`ToolResult` whose ``content`` is the
+    message verbatim — so the model (and the audit log) see ``ok=False`` instead of a
+    success-looking string, without the generic ``"tool failed:"`` prefix used for
+    unexpected crashes.
+    """
+
+
 @dataclass(frozen=True, slots=True)
 class ToolSpec:
     """A registered tool: its advertised schema, handler, and risk level."""
@@ -153,7 +163,9 @@ class ToolRegistry:
         try:
             content = spec.handler(**(arguments or {}))
             return ToolResult(name=name, content=content, ok=True)
-        except Exception as exc:  # surface any tool error to the model, don't crash
+        except ToolError as exc:  # expected failure — report verbatim, ok=False
+            return ToolResult(name=name, content=str(exc), ok=False)
+        except Exception as exc:  # unexpected — surface, don't crash the loop
             return ToolResult(name=name, content=f"tool failed: {exc}", ok=False)
 
 

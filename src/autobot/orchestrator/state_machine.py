@@ -433,6 +433,8 @@ class Orchestrator:
                 reset()
             self._last_reply = ""
             self._sm.reset(State.IDLE)
+            # Forget "allow this session" grants so a fresh chat re-confirms actions.
+            self._gate.clear_session_grants()
             # Scope the concise debug report to this fresh session: breadcrumbs from
             # before "New chat" stay in the full report but drop out of the dev view.
             from autobot.diagnostics import get_buffer

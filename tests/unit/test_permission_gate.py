@@ -301,3 +301,143 @@ def test_network_destructive_kind_is_network() -> None:
     )
     gate.execute(ToolCall(name="slack__delete", arguments={}))
     assert rec.kinds == ["network"]  # egress tint takes precedence
+
+
+def test_builtin_confirmers_confirm_action() -> None:
+    from autobot.tools.permission import AlwaysAllow, AlwaysDeny
+
+    assert AlwaysAllow().confirm_action("go?") == "once"
+    assert AlwaysDeny().confirm_action("go?") == ""
+
+
+class _ScriptedConfirmer:
+    """Returns queued confirm_action answers; records how many times it was asked."""
+
+    def __init__(self, answers: list[str]) -> None:
+        self._answers = answers
+        self.asks = 0
+
+    def confirm(self, prompt: str, kind: str = "danger") -> bool:
+        self.asks += 1
+        return bool(self._answers)
+
+    def confirm_action(self, prompt: str, kind: str = "danger") -> str:
+        self.asks += 1
+        return self._answers.pop(0) if self._answers else ""
+
+
+def _delete_gate(
+    confirmer: object, scope_of: object | None = None
+) -> tuple[PermissionGate, _SpyTool]:
+    tool = _SpyTool(Risk.DESTRUCTIVE)
+    registry = ToolRegistry()
+    registry.register(
+        ToolSpec(
+            name="delete_file", description="", parameters={}, handler=tool, risk=Risk.DESTRUCTIVE
+        )
+    )
+    gate = PermissionGate(
+        registry,
+        AuditLog(":memory:"),
+        confirmer,  # type: ignore[arg-type]
+        scope_of=scope_of,  # type: ignore[arg-type]
+    )
+    return gate, tool
+
+
+def test_session_grant_skips_second_confirmation() -> None:
+    scope_of = lambda call: str(call.arguments.get("path", ""))  # noqa: E731
+    confirmer = _ScriptedConfirmer(["session"])
+    gate, _tool = _delete_gate(confirmer, scope_of)
+    r1 = gate.execute(ToolCall(name="delete_file", arguments={"path": "/d/a"}))
+    r2 = gate.execute(ToolCall(name="delete_file", arguments={"path": "/d/a"}))
+    assert r1.ok and r2.ok
+    assert confirmer.asks == 1  # asked once; second was auto-approved
+
+
+def test_once_does_not_remember() -> None:
+    scope_of = lambda call: str(call.arguments.get("path", ""))  # noqa: E731
+    confirmer = _ScriptedConfirmer(["once", "once"])
+    gate, _ = _delete_gate(confirmer, scope_of)
+    gate.execute(ToolCall(name="delete_file", arguments={"path": "/d/a"}))
+    gate.execute(ToolCall(name="delete_file", arguments={"path": "/d/a"}))
+    assert confirmer.asks == 2  # asked every time
+
+
+def test_session_grant_is_scoped_by_key() -> None:
+    scope_of = lambda call: str(call.arguments.get("path", ""))  # noqa: E731
+    confirmer = _ScriptedConfirmer(["session", "session"])
+    gate, _ = _delete_gate(confirmer, scope_of)
+    gate.execute(ToolCall(name="delete_file", arguments={"path": "/d/a"}))
+    gate.execute(ToolCall(name="delete_file", arguments={"path": "/other/b"}))
+    assert confirmer.asks == 2  # different scope -> asked again
+
+
+def test_clear_session_grants_forgets() -> None:
+    scope_of = lambda call: str(call.arguments.get("path", ""))  # noqa: E731
+    confirmer = _ScriptedConfirmer(["session", "session"])
+    gate, _ = _delete_gate(confirmer, scope_of)
+    gate.execute(ToolCall(name="delete_file", arguments={"path": "/d/a"}))
+    gate.clear_session_grants()
+    gate.execute(ToolCall(name="delete_file", arguments={"path": "/d/a"}))
+    assert confirmer.asks == 2
+
+
+def test_legacy_confirm_only_confirmer_still_works() -> None:
+    # A confirmer with no confirm_action falls back to confirm(); never grants a session.
+    gate, tool = _delete_gate(_RecordingConfirmer())  # confirm() -> False
+    result = gate.execute(ToolCall(name="delete_file", arguments={"path": "/d/a"}))
+    assert not tool.ran and not result.ok
+
+
+def test_network_write_never_offers_session() -> None:
+    tool = _SpyTool(Risk.WRITE)
+    registry = ToolRegistry()
+    registry.register(
+        ToolSpec(
+            name="send", description="", parameters={}, handler=tool, risk=Risk.WRITE, network=True
+        )
+    )
+    confirmer = _ScriptedConfirmer(
+        ["session", "session"]
+    )  # would grant if asked via confirm_action
+    gate = PermissionGate(registry, AuditLog(":memory:"), confirmer, scope_of=lambda c: "x")  # type: ignore[arg-type]
+    gate.execute(ToolCall(name="send", arguments={}))
+    gate.execute(ToolCall(name="send", arguments={}))
+    assert confirmer.asks == 2  # network path uses confirm() each time, no grant
+
+
+class _LegacyApproveConfirmer:
+    """A confirm()-only confirmer (no confirm_action) that always approves."""
+
+    def __init__(self) -> None:
+        self.asks = 0
+
+    def confirm(self, prompt: str, kind: str = "danger") -> bool:
+        self.asks += 1
+        return True
+
+
+def test_legacy_confirm_only_never_grants_session() -> None:
+    # A confirmer with no confirm_action approves via confirm() every time and can
+    # never be remembered for the session — so a batch still asks on each call.
+    scope_of = lambda call: str(call.arguments.get("path", ""))  # noqa: E731
+    confirmer = _LegacyApproveConfirmer()
+    gate, tool = _delete_gate(confirmer, scope_of)
+    gate.execute(ToolCall(name="delete_file", arguments={"path": "/d/a"}))
+    gate.execute(ToolCall(name="delete_file", arguments={"path": "/d/a"}))
+    assert tool.ran is True
+    assert confirmer.asks == 2  # legacy path never grants a session
+
+
+def test_bogus_confirm_action_value_fails_closed() -> None:
+    class _Bogus:
+        def confirm(self, prompt: str, kind: str = "danger") -> bool:
+            return True
+
+        def confirm_action(self, prompt: str, kind: str = "danger") -> str:
+            return "yes"  # not "once"/"session" -> must be treated as decline
+
+    gate, tool = _delete_gate(_Bogus())
+    result = gate.execute(ToolCall(name="delete_file", arguments={"path": "/d/a"}))
+    assert tool.ran is False and result.ok is False  # unknown value fails closed

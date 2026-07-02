@@ -4,10 +4,12 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from autobot.core.types import Risk
 from autobot.tools.access import AccessBroker, AccessPolicy
 from autobot.tools.filesystem import FileTools, register_filesystem_tools
-from autobot.tools.registry import ToolRegistry
+from autobot.tools.registry import ToolError, ToolRegistry
 
 
 class _Yes:
@@ -100,8 +102,11 @@ def test_delete_file_removes_and_confirms(tmp_path: Path) -> None:
     assert not (tmp_path / "ws" / "gone.txt").exists()
 
 
-def test_delete_missing_file_is_reported_not_raised(tmp_path: Path) -> None:
-    assert "not found" in _tools(tmp_path).delete_file("nope.txt")
+def test_delete_missing_file_raises_tool_error(tmp_path: Path) -> None:
+    # A missing target must be a FAILURE, not a success-looking string (issue #40):
+    # otherwise dispatch records ok=True and the model over-claims "deleted".
+    with pytest.raises(ToolError):
+        _tools(tmp_path).delete_file("nope.txt")
 
 
 def test_registration_sets_expected_risk_levels(tmp_path: Path) -> None:
@@ -224,26 +229,25 @@ def test_list_files_denied_returns_message(tmp_path: Path) -> None:
     assert "access" in msg.lower() or "couldn't" in msg.lower() or "don't" in msg.lower()
 
 
-def test_move_file_missing_source_returns_message(tmp_path: Path) -> None:
-    tools = _tools(tmp_path)
-    msg = tools.move_file("ghost.txt", "dest.txt")
-    assert "not found" in msg or "source" in msg
+def test_move_file_missing_source_raises_tool_error(tmp_path: Path) -> None:
+    with pytest.raises(ToolError):
+        _tools(tmp_path).move_file("ghost.txt", "dest.txt")
 
 
-def test_move_file_denied_returns_message(tmp_path: Path) -> None:
+def test_move_file_denied_raises_tool_error(tmp_path: Path) -> None:
     broker, _pol = _denied_broker(tmp_path)
     tools = FileTools(broker)
-    msg = tools.move_file("a.txt", "b.txt")
-    assert msg
-    assert "access" in msg.lower() or "couldn't" in msg.lower() or "don't" in msg.lower()
+    with pytest.raises(ToolError) as ei:
+        tools.move_file("a.txt", "b.txt")
+    assert "access" in str(ei.value).lower() or "don't" in str(ei.value).lower()
 
 
-def test_delete_file_denied_returns_message(tmp_path: Path) -> None:
+def test_delete_file_denied_raises_tool_error(tmp_path: Path) -> None:
     broker, _pol = _denied_broker(tmp_path)
     tools = FileTools(broker)
-    msg = tools.delete_file("notes.txt")
-    assert msg
-    assert "access" in msg.lower() or "couldn't" in msg.lower() or "don't" in msg.lower()
+    with pytest.raises(ToolError) as ei:
+        tools.delete_file("notes.txt")
+    assert "access" in str(ei.value).lower() or "don't" in str(ei.value).lower()
 
 
 def test_delete_directory_is_refused(tmp_path: Path) -> None:
@@ -252,3 +256,48 @@ def test_delete_directory_is_refused(tmp_path: Path) -> None:
     subdir.mkdir(parents=True)
     msg = tools.delete_file("keep")
     assert "refusing" in msg or "folder" in msg
+
+
+def test_delete_missing_reports_failure_through_dispatch(tmp_path: Path) -> None:
+    tools = _tools(tmp_path)
+    reg = ToolRegistry()
+    for spec in tools.specs():
+        reg.register(spec)
+    result = reg.dispatch("delete_file", {"path": "nope.txt"})
+    assert result.ok is False  # was ok=True before the fix
+    assert "deleted" not in result.content.lower()
+
+
+# --- whitespace/Unicode-tolerant filename matching (issue #40) --------------
+
+
+def test_delete_file_matches_narrow_no_break_space(tmp_path: Path) -> None:
+    tools = _tools(tmp_path)
+    ws = tmp_path / "ws"
+    real = ws / ("Screenshot 9.25.25" + "\u202f" + "PM.png")  # real name (U+202F)
+    real.write_text("x")
+    msg = tools.delete_file("Screenshot 9.25.25 PM.png")  # model re-typed with a regular space
+    assert "deleted" in msg
+    assert not real.exists()
+
+
+def test_read_file_matches_narrow_no_break_space(tmp_path: Path) -> None:
+    tools = _tools(tmp_path)
+    ws = tmp_path / "ws"
+    (ws / ("Note 1.05.00" + "\u202f" + "AM.txt")).write_text("hello")
+    out = tools.read_file("Note 1.05.00 AM.txt")  # regular space
+    assert "hello" in out
+
+
+def test_move_file_matches_narrow_no_break_space(tmp_path: Path) -> None:
+    tools = _tools(tmp_path)
+    ws = tmp_path / "ws"
+    (ws / ("Clip 6.39.16" + "\u202f" + "PM.mov")).write_text("v")
+    msg = tools.move_file("Clip 6.39.16 PM.mov", "renamed.mov")  # source w/ regular space
+    assert "moved" in msg
+    assert (ws / "renamed.mov").exists()
+
+
+def test_delete_file_still_fails_when_truly_missing(tmp_path: Path) -> None:
+    with pytest.raises(ToolError):
+        _tools(tmp_path).delete_file("really-not-here.txt")
