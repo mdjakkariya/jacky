@@ -20,6 +20,7 @@ from enum import IntEnum
 from pathlib import Path
 from typing import ClassVar, Protocol
 
+from autobot.core.types import ToolCall
 from autobot.logging_setup import get_logger
 
 _log = get_logger("access")
@@ -320,3 +321,24 @@ class AccessBroker:
                     raise PermissionError(denied) from na
                 self._policy.grant(na.folder, write=(choice == "write"))
             return self._policy.check(resolved, write)
+
+
+def folder_scope_of(policy: AccessPolicy) -> Callable[[ToolCall], str]:
+    """Build a session-grant scope function keyed on a call's target folder.
+
+    For a path-bearing tool (``delete_file`` etc.) the scope is the resolved parent
+    folder, so a session grant means "this action, in this folder". Tools with no
+    ``path`` argument (``empty_trash``, ``uninstall_app``) get an empty scope, i.e. a
+    tool-name-only grant. Never raises — an unresolvable path yields ``""``.
+    """
+
+    def scope_of(call: ToolCall) -> str:
+        raw = call.arguments.get("path")
+        if isinstance(raw, str) and raw:
+            try:
+                return str(policy.resolve(raw).parent)
+            except Exception:
+                return ""
+        return ""
+
+    return scope_of

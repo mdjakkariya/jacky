@@ -584,6 +584,7 @@ def build(
     # Permission-aware: refuse a tool whose macOS permission is missing (and open the
     # right Settings pane) instead of letting it fail deep in AppleScript.
     from autobot import permissions
+    from autobot.tools.access import folder_scope_of
 
     gate = PermissionGate(
         registry,
@@ -591,6 +592,7 @@ def build(
         confirmer,
         permission_status=permissions.status_of,
         on_permission_needed=permissions.open_pane,
+        scope_of=folder_scope_of(access_policy),
     )
 
     from autobot.tools.access import AccessBroker

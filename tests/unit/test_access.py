@@ -186,3 +186,22 @@ def test_broker_ensure_resolves_relative_against_cwd(tmp_path: Path) -> None:
     # A relative path is created inside the cwd (the workspace, always granted).
     resolved = broker.ensure("sub/a.txt", write=True)
     assert resolved == (ws.resolve() / "sub" / "a.txt")
+
+
+def test_folder_scope_of_uses_target_parent(tmp_path: Path) -> None:
+    from autobot.core.types import ToolCall
+    from autobot.tools.access import AccessPolicy, folder_scope_of
+
+    policy = AccessPolicy(tmp_path / "access.json", tmp_path / "ws")
+    scope = folder_scope_of(policy)
+    target = str(tmp_path / "Desktop" / "a.png")
+    key = scope(ToolCall(name="delete_file", arguments={"path": target}))
+    assert key == str((tmp_path / "Desktop").resolve())
+
+
+def test_folder_scope_of_empty_without_path(tmp_path: Path) -> None:
+    from autobot.core.types import ToolCall
+    from autobot.tools.access import AccessPolicy, folder_scope_of
+
+    policy = AccessPolicy(tmp_path / "access.json", tmp_path / "ws")
+    assert folder_scope_of(policy)(ToolCall(name="empty_trash", arguments={})) == ""
