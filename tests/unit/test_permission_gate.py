@@ -405,3 +405,26 @@ def test_network_write_never_offers_session() -> None:
     gate.execute(ToolCall(name="send", arguments={}))
     gate.execute(ToolCall(name="send", arguments={}))
     assert confirmer.asks == 2  # network path uses confirm() each time, no grant
+
+
+class _LegacyApproveConfirmer:
+    """A confirm()-only confirmer (no confirm_action) that always approves."""
+
+    def __init__(self) -> None:
+        self.asks = 0
+
+    def confirm(self, prompt: str, kind: str = "danger") -> bool:
+        self.asks += 1
+        return True
+
+
+def test_legacy_confirm_only_never_grants_session() -> None:
+    # A confirmer with no confirm_action approves via confirm() every time and can
+    # never be remembered for the session — so a batch still asks on each call.
+    scope_of = lambda call: str(call.arguments.get("path", ""))  # noqa: E731
+    confirmer = _LegacyApproveConfirmer()
+    gate, tool = _delete_gate(confirmer, scope_of)
+    gate.execute(ToolCall(name="delete_file", arguments={"path": "/d/a"}))
+    gate.execute(ToolCall(name="delete_file", arguments={"path": "/d/a"}))
+    assert tool.ran is True
+    assert confirmer.asks == 2  # legacy path never grants a session
