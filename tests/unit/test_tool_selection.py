@@ -5,15 +5,19 @@ from __future__ import annotations
 from collections.abc import Callable
 
 from autobot.config import Settings
+from autobot.core.types import Risk
 from autobot.tools.registry import ToolRegistry, ToolSpec
 from autobot.tools.selection import (
     AllToolsSelector,
     EmbeddingToolSelector,
     LexicalToolSelector,
     _doc_key,
+    _stem_match,
     build_tool_selector,
     cosine,
     embed_doc,
+    identity_tool_names,
+    is_identity_tool,
     score_tools,
     tokenize,
 )
@@ -21,6 +25,13 @@ from autobot.tools.selection import (
 
 def _spec(name: str, desc: str = "", *, core: bool = False) -> ToolSpec:
     return ToolSpec(name=name, description=desc, parameters={}, handler=lambda: name, core=core)
+
+
+def _mcp(name: str, desc: str, *, risk: Risk = Risk.READ_ONLY) -> ToolSpec:
+    """A network (MCP) tool spec — used for identity-anchor tests."""
+    return ToolSpec(
+        name=name, description=desc, parameters={}, handler=lambda: name, risk=risk, network=True
+    )
 
 
 def test_tokenize_lowercases_drops_short_and_stopwords() -> None:
@@ -325,3 +336,78 @@ def test_embedding_falls_back_to_lexical_on_embedder_error() -> None:
 def test_build_tool_selector_picks_embedding() -> None:
     sel = build_tool_selector(Settings(tool_selection="embedding"), _reg())
     assert isinstance(sel, EmbeddingToolSelector)
+
+
+# --- issue #37: stemming recall + identity-anchor surfacing for deferred MCP tools ---
+
+
+def test_stem_match_allows_morphology_rejects_short_prefixes() -> None:
+    assert _stem_match("repo", "repositories")  # the #37 case
+    assert _stem_match("star", "stars")
+    assert _stem_match("issue", "issue")  # exact
+    assert not _stem_match("go", "google")  # prefix shorter than 4 → rejected
+    assert not _stem_match("repo", "meeting")  # unrelated
+
+
+def test_score_tools_stems_repo_to_repositories() -> None:
+    # "repo" (the user's word) must surface a ...repositories tool that exact matching
+    # missed — the core recall gap behind issue #37.
+    search = _spec("github__search_repositories", "Search for GitHub repositories.")
+    other = _spec("github__list_issues", "List issues.")
+    ranked = [s.name for s, _ in score_tools("check my public repo stars", [search, other])]
+    assert ranked and ranked[0] == "github__search_repositories"
+
+
+def test_is_identity_tool_detects_me_read_tools() -> None:
+    assert is_identity_tool(_mcp("github__get_me", "Get details of the authenticated user."))
+    assert is_identity_tool(_mcp("x__whoami", "Return the caller."))  # name match
+    assert is_identity_tool(_mcp("x__profile", "Details about the current user."))  # desc match
+
+
+def test_is_identity_tool_excludes_writes_and_local_tools() -> None:
+    # A WRITE tool that merely mentions the authenticated user is not an identity anchor.
+    assert not is_identity_tool(
+        _mcp("x__submit", "Submit as the authenticated user.", risk=Risk.WRITE)
+    )
+    # A local (non-network) tool named get_me is not an MCP identity anchor.
+    assert not is_identity_tool(_spec("get_me", "Get the authenticated user."))
+
+
+def test_identity_tool_names_collects_only_anchors() -> None:
+    specs = [
+        _mcp("gh__get_me", "The authenticated user."),
+        _mcp("gh__search_repositories", "Search repositories."),
+        _spec("battery_status", "battery", core=True),
+    ]
+    assert identity_tool_names(specs) == frozenset({"gh__get_me"})
+
+
+def test_lexical_select_always_advertises_identity_anchor() -> None:
+    reg = ToolRegistry()
+    reg.register(_spec("battery_status", "Check the battery.", core=True))
+    reg.register(_mcp("gh__get_me", "Get the authenticated user."))
+    reg.register(_mcp("gh__search_repositories", "Search repositories."))
+    # Query unrelated to GitHub: the identity anchor is still advertised (so a later
+    # "my ..." can resolve), while other gated github tools stay gated.
+    names = {s.name for s in _lexical(reg).select("what's my battery")}
+    assert "gh__get_me" in names
+    assert "gh__search_repositories" not in names
+
+
+def test_lexical_search_excludes_identity_anchor() -> None:
+    reg = ToolRegistry()
+    reg.register(_mcp("gh__get_me", "Get the authenticated user."))
+    reg.register(_mcp("gh__search_repositories", "Search repositories for code."))
+    # get_me is always advertised, so discovery search must not resurface it.
+    assert "gh__get_me" not in _lexical(reg).search("get the authenticated user")
+
+
+def test_embedding_select_always_advertises_identity_anchor() -> None:
+    reg = ToolRegistry()
+    reg.register(_mcp("gh__get_me", "Get the authenticated user."))
+    reg.register(_mcp("gh__search_repositories", "Search repositories."))
+    table = {"gh__get_me": [0.0, 1.0], "gh__search_repositories": [0.0, 1.0]}
+    sel = _embedding(reg, _fake_embedder(table, default=[1.0, 0.0]))  # query orthogonal → 0 sim
+    names = {s.name for s in sel.select("anything unrelated")}
+    assert "gh__get_me" in names  # surfaced despite zero similarity
+    assert "gh__search_repositories" not in names  # gated, no similarity → excluded
