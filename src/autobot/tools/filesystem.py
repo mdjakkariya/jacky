@@ -22,7 +22,7 @@ from __future__ import annotations
 import shutil
 
 from autobot.core.types import Risk
-from autobot.tools.access import AccessBroker, AccessDeniedError
+from autobot.tools.access import AccessBroker, AccessDeniedError, find_existing
 from autobot.tools.registry import ToolError, ToolRegistry, ToolSpec
 
 _PATH_PROP = {
@@ -52,10 +52,11 @@ class FileTools:
     def read_file(self, path: str) -> str:
         """Read a file's contents from the active folder (or a granted path)."""
         try:
-            target = self._broker.ensure(path, write=False)
+            resolved = self._broker.ensure(path, write=False)
         except (AccessDeniedError, PermissionError) as exc:
             return str(exc)
-        if not target.exists():
+        target = find_existing(resolved)
+        if target is None:
             return f"not found: {path}"
         if target.is_dir():
             return f"that's a folder, not a file: {path}"
@@ -85,11 +86,12 @@ class FileTools:
     def move_file(self, source: str, destination: str) -> str:
         """Move or rename a file (within the active folder or granted paths)."""
         try:
-            src = self._broker.ensure(source, write=True)
+            src_resolved = self._broker.ensure(source, write=True)
             dst = self._broker.ensure(destination, write=True)
         except (AccessDeniedError, PermissionError) as exc:
             raise ToolError(str(exc)) from exc
-        if not src.exists():
+        src = find_existing(src_resolved)
+        if src is None:
             raise ToolError(f"couldn't move — no file named {source}; nothing was moved")
         dst.parent.mkdir(parents=True, exist_ok=True)
         shutil.move(str(src), str(dst))
@@ -98,12 +100,13 @@ class FileTools:
     def delete_file(self, path: str) -> str:
         """Delete a file in the active folder (or a granted path); irreversible."""
         try:
-            target = self._broker.ensure(path, write=True)
+            resolved = self._broker.ensure(path, write=True)
         except (AccessDeniedError, PermissionError) as exc:
             raise ToolError(str(exc)) from exc
-        if not target.exists():
+        target = find_existing(resolved)
+        if target is None:
             raise ToolError(
-                f"couldn't delete — no file named {path} at {target.parent}; nothing was removed"
+                f"couldn't delete — no file named {path} at {resolved.parent}; nothing was removed"
             )
         if target.is_dir():
             return f"refusing to delete a folder: {path}"

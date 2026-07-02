@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import json
 import threading
+import unicodedata
 from collections.abc import Callable
 from dataclasses import dataclass
 from enum import IntEnum
@@ -82,6 +83,38 @@ def _is_denied(resolved: Path) -> bool:
     if resolved.name in _DENY_FILE_NAMES:
         return True
     return any(p in name for p in _DENY_NAME_PARTS)
+
+
+def _fold_name(name: str) -> str:
+    """Fold a filename for whitespace/Unicode-tolerant matching.
+
+    Normalizes to NFC and maps every Unicode whitespace character to a plain space, so a
+    name an LLM re-typed with a regular space matches a real macOS filename that uses a
+    narrow no-break space (U+202F, common in screenshot names). Nothing else is altered.
+    """
+    return "".join(" " if ch.isspace() else ch for ch in unicodedata.normalize("NFC", name))
+
+
+def find_existing(resolved: Path) -> Path | None:
+    """Return an existing file for ``resolved``, tolerant of whitespace/Unicode drift.
+
+    If ``resolved`` exists, return it unchanged. Otherwise look in its parent for a single
+    entry whose name matches ``resolved``'s under :func:`_fold_name` (so a regular space
+    matches a narrow no-break space). Returns the real path only when exactly one sibling
+    matches; returns ``None`` when there is no match or the match is ambiguous — it never
+    guesses which of several files to act on (important for destructive ops).
+    """
+    if resolved.exists():
+        return resolved
+    parent = resolved.parent
+    if not parent.is_dir():
+        return None
+    want = _fold_name(resolved.name)
+    try:
+        matches = [p for p in parent.iterdir() if _fold_name(p.name) == want]
+    except OSError:
+        return None
+    return matches[0] if len(matches) == 1 else None
 
 
 class AccessPolicy:

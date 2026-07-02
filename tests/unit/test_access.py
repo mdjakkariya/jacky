@@ -205,3 +205,49 @@ def test_folder_scope_of_empty_without_path(tmp_path: Path) -> None:
 
     policy = AccessPolicy(tmp_path / "access.json", tmp_path / "ws")
     assert folder_scope_of(policy)(ToolCall(name="empty_trash", arguments={})) == ""
+
+
+# --- whitespace/Unicode-tolerant filename matching (issue #40) --------------
+
+
+def test_fold_name_maps_narrow_no_break_space_to_regular() -> None:
+    from autobot.tools.access import _fold_name
+
+    narrow = "Screenshot at 9.25.25" + "\u202f" + "PM.png"  # real macOS name (U+202F)
+    plain = "Screenshot at 9.25.25" + " " + "PM.png"  # regular space (U+0020)
+    assert narrow != plain  # they differ byte-for-byte
+    assert _fold_name(narrow) == _fold_name(plain)  # but fold to the same
+
+
+def test_find_existing_returns_exact_when_present(tmp_path: Path) -> None:
+    from autobot.tools.access import find_existing
+
+    f = tmp_path / "plain.txt"
+    f.write_text("x")
+    assert find_existing(f) == f
+
+
+def test_find_existing_matches_narrow_no_break_space(tmp_path: Path) -> None:
+    from autobot.tools.access import find_existing
+
+    real = tmp_path / ("Screenshot 9.25.25" + "\u202f" + "PM.png")  # real macOS name (U+202F)
+    real.write_text("x")
+    queried = tmp_path / ("Screenshot 9.25.25" + " " + "PM.png")  # LLM re-typed, regular space
+    assert not queried.exists()
+    assert find_existing(queried) == real
+
+
+def test_find_existing_none_when_missing(tmp_path: Path) -> None:
+    from autobot.tools.access import find_existing
+
+    assert find_existing(tmp_path / "nope.txt") is None
+
+
+def test_find_existing_none_when_ambiguous(tmp_path: Path) -> None:
+    from autobot.tools.access import find_existing
+
+    (tmp_path / ("a" + "\u00a0" + "b.txt")).write_text("x")  # no-break space (U+00A0)
+    (tmp_path / ("a" + "\u202f" + "b.txt")).write_text("y")  # narrow no-break space -> same fold
+    q = tmp_path / ("a" + " " + "b.txt")  # regular space; not exact; folds to match BOTH
+    assert not q.exists()
+    assert find_existing(q) is None  # ambiguous -> refuse to guess

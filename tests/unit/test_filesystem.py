@@ -266,3 +266,38 @@ def test_delete_missing_reports_failure_through_dispatch(tmp_path: Path) -> None
     result = reg.dispatch("delete_file", {"path": "nope.txt"})
     assert result.ok is False  # was ok=True before the fix
     assert "deleted" not in result.content.lower()
+
+
+# --- whitespace/Unicode-tolerant filename matching (issue #40) --------------
+
+
+def test_delete_file_matches_narrow_no_break_space(tmp_path: Path) -> None:
+    tools = _tools(tmp_path)
+    ws = tmp_path / "ws"
+    real = ws / ("Screenshot 9.25.25" + "\u202f" + "PM.png")  # real name (U+202F)
+    real.write_text("x")
+    msg = tools.delete_file("Screenshot 9.25.25 PM.png")  # model re-typed with a regular space
+    assert "deleted" in msg
+    assert not real.exists()
+
+
+def test_read_file_matches_narrow_no_break_space(tmp_path: Path) -> None:
+    tools = _tools(tmp_path)
+    ws = tmp_path / "ws"
+    (ws / ("Note 1.05.00" + "\u202f" + "AM.txt")).write_text("hello")
+    out = tools.read_file("Note 1.05.00 AM.txt")  # regular space
+    assert "hello" in out
+
+
+def test_move_file_matches_narrow_no_break_space(tmp_path: Path) -> None:
+    tools = _tools(tmp_path)
+    ws = tmp_path / "ws"
+    (ws / ("Clip 6.39.16" + "\u202f" + "PM.mov")).write_text("v")
+    msg = tools.move_file("Clip 6.39.16 PM.mov", "renamed.mov")  # source w/ regular space
+    assert "moved" in msg
+    assert (ws / "renamed.mov").exists()
+
+
+def test_delete_file_still_fails_when_truly_missing(tmp_path: Path) -> None:
+    with pytest.raises(ToolError):
+        _tools(tmp_path).delete_file("really-not-here.txt")
