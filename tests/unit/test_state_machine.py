@@ -81,6 +81,7 @@ class _RecordingGate:
     def __init__(self, risk: Risk = Risk.WRITE) -> None:
         self.calls: list[ToolCall] = []
         self._risk = risk
+        self.cleared = 0
 
     def execute(self, call: ToolCall) -> ToolResult:
         self.calls.append(call)
@@ -88,6 +89,9 @@ class _RecordingGate:
 
     def risk_of(self, _name: str) -> Risk:
         return self._risk
+
+    def clear_session_grants(self) -> None:
+        self.cleared += 1
 
 
 class _RecordingTTS:
@@ -264,6 +268,13 @@ def test_new_chat_session_is_safe_without_llm_support() -> None:
     # _EchoLLM has no new_session(); the orchestrator must no-op, not crash.
     orch = _orchestrator("unused", _RecordingGate(), _RecordingTTS())
     orch.new_chat_session()  # should not raise
+
+
+def test_new_chat_session_clears_session_grants() -> None:
+    gate = _RecordingGate()
+    orch = _orchestrator("unused", gate)
+    orch.new_chat_session()
+    assert gate.cleared == 1
 
 
 def test_text_turn_ignores_blank_input() -> None:
