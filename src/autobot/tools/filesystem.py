@@ -11,9 +11,10 @@ user exactly where the file is, and ``read_file``/``list_files`` let it actually
 inspect the active folder — so it can confirm a file exists (or is really gone after a
 delete) instead of guessing.
 
-Handlers return human-readable strings and never raise out of the method; errors
-from the broker (``AccessDeniedError``, ``PermissionError``) are caught and returned
-as strings so a denied path can't crash the turn loop.
+Handlers return human-readable strings; expected errors (not-found, access-denied)
+are raised as :class:`~autobot.tools.registry.ToolError` so the registry maps them to
+``ok=False`` results. Unexpected errors are caught and returned as strings so a
+denied path can't crash the turn loop.
 """
 
 from __future__ import annotations
@@ -22,7 +23,7 @@ import shutil
 
 from autobot.core.types import Risk
 from autobot.tools.access import AccessBroker, AccessDeniedError
-from autobot.tools.registry import ToolRegistry, ToolSpec
+from autobot.tools.registry import ToolError, ToolRegistry, ToolSpec
 
 _PATH_PROP = {
     "type": "string",
@@ -87,9 +88,9 @@ class FileTools:
             src = self._broker.ensure(source, write=True)
             dst = self._broker.ensure(destination, write=True)
         except (AccessDeniedError, PermissionError) as exc:
-            return str(exc)
+            raise ToolError(str(exc)) from exc
         if not src.exists():
-            return f"source not found: {source}"
+            raise ToolError(f"couldn't move — no file named {source}; nothing was moved")
         dst.parent.mkdir(parents=True, exist_ok=True)
         shutil.move(str(src), str(dst))
         return f"moved {src.name} -> {dst.name} (now at {dst})"
@@ -99,9 +100,11 @@ class FileTools:
         try:
             target = self._broker.ensure(path, write=True)
         except (AccessDeniedError, PermissionError) as exc:
-            return str(exc)
+            raise ToolError(str(exc)) from exc
         if not target.exists():
-            return f"not found: {path}"
+            raise ToolError(
+                f"couldn't delete — no file named {path} at {target.parent}; nothing was removed"
+            )
         if target.is_dir():
             return f"refusing to delete a folder: {path}"
         target.unlink()
