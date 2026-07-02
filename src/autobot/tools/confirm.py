@@ -274,3 +274,9 @@ class VoiceConfirmer:
         finally:
             if self._on_clear is not None:
                 self._on_clear()
+
+    def confirm_action(self, prompt: str, kind: str = "danger") -> str:
+        """Confirm a gated action: "once" (proceed), "session" (proceed + remember), "" (cancel)."""
+        if self.confirm(prompt, kind):
+            return "once"
+        return ""

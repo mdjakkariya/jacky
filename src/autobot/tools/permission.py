@@ -46,6 +46,10 @@ class Confirmer(Protocol):
         """Pick one option's value (e.g. an access level); "" means cancel."""
         ...
 
+    def confirm_action(self, prompt: str, kind: str = "danger") -> str:
+        """Confirm a gated action: "once" (proceed), "session" (proceed + remember), "" (cancel)."""
+        ...
+
 
 class TerminalConfirmer:
     """Confirms via a ``[y/N]`` prompt on the terminal (default: No)."""
@@ -61,6 +65,10 @@ class TerminalConfirmer:
         """Confirm on stdin; a yes grants the least-privilege ``default``."""
         return default if self.confirm(prompt) else ""
 
+    def confirm_action(self, prompt: str, kind: str = "danger") -> str:
+        """Terminal has no session button: a yes proceeds once, anything else cancels."""
+        return "once" if self.confirm(prompt) else ""
+
 
 class AlwaysAllow:
     """A confirmer that approves everything (tests / non-interactive use)."""
@@ -73,6 +81,9 @@ class AlwaysAllow:
     ) -> str:
         return default
 
+    def confirm_action(self, prompt: str, kind: str = "danger") -> str:  # noqa: D102
+        return "once"
+
 
 class AlwaysDeny:
     """A confirmer that rejects everything (tests)."""
@@ -83,6 +94,9 @@ class AlwaysDeny:
     def choose(  # noqa: D102
         self, prompt: str, options: list[dict[str, str]], kind: str = "read", default: str = "read"
     ) -> str:
+        return ""
+
+    def confirm_action(self, prompt: str, kind: str = "danger") -> str:  # noqa: D102
         return ""
 
 

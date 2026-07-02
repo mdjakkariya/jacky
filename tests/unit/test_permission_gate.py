@@ -301,3 +301,10 @@ def test_network_destructive_kind_is_network() -> None:
     )
     gate.execute(ToolCall(name="slack__delete", arguments={}))
     assert rec.kinds == ["network"]  # egress tint takes precedence
+
+
+def test_builtin_confirmers_confirm_action() -> None:
+    from autobot.tools.permission import AlwaysAllow, AlwaysDeny
+
+    assert AlwaysAllow().confirm_action("go?") == "once"
+    assert AlwaysDeny().confirm_action("go?") == ""
