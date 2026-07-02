@@ -12,7 +12,7 @@ from typing import Any
 import pytest
 
 from autobot.config import Settings
-from autobot.core.types import ToolCall, ToolResult
+from autobot.core.types import Risk, ToolCall, ToolResult
 from autobot.llm.anthropic_llm import (
     TOOL_SEARCH_NAME,
     TOOL_SEARCH_TYPE,
@@ -780,3 +780,47 @@ def test_run_turn_surfaces_query_relevant_gated_tool_undeferred() -> None:
     by_name = {t.get("name"): t for t in model._client.messages.calls[0]["tools"]}
     assert "defer_loading" not in by_name["slack__send"]  # surfaced by relevance
     assert TOOL_SEARCH_NAME in by_name  # search tool still present as recall net
+
+
+def _mcp_spec(name: str, desc: str, *, risk: Risk = Risk.READ_ONLY) -> ToolSpec:
+    """A network (MCP) tool spec for _relevant_gated tests."""
+    return ToolSpec(
+        name=name, description=desc, parameters={}, handler=lambda: name, risk=risk, network=True
+    )
+
+
+def _relevant_gated_registry() -> ToolRegistry:
+    reg = ToolRegistry()
+    reg.register(_mcp_spec("github__get_me", "Get details of the authenticated user."))
+    reg.register(_mcp_spec("github__search_repositories", "Search for GitHub repositories."))
+    reg.register(_mcp_spec("github__list_repository_collaborators", "List repo collaborators."))
+    reg.register(_mcp_spec("github__create_issue", "Create an issue.", risk=Risk.WRITE))
+    reg.register(_mcp_spec("github__list_notifications", "List your notifications."))
+    return reg
+
+
+def test_relevant_gated_surfaces_identity_and_domain_tool() -> None:
+    # Issue #37: "check my public repo stars" must un-defer BOTH the identity anchor
+    # (get_me, always) and the stemmed domain match (search_repositories via "repo").
+    model = AnthropicLanguageModel(
+        Settings(llm_provider="anthropic"), _relevant_gated_registry(), client=FakeClient([])
+    )
+    rel = model._relevant_gated("check my public repo stars")
+    assert "github__get_me" in rel  # identity anchor — always surfaced
+    assert "github__search_repositories" in rel  # stemmed lexical: repo -> repositories
+
+
+def test_relevant_gated_caps_query_matches_but_keeps_identity() -> None:
+    # With the relevant cap at 1, only the single best query match is surfaced, yet the
+    # identity anchor is added on top (identity is not subject to the query-match cap).
+    model = AnthropicLanguageModel(
+        Settings(llm_provider="anthropic", tool_relevant_limit=1),
+        _relevant_gated_registry(),
+        client=FakeClient([]),
+    )
+    rel = model._relevant_gated("search repositories")
+    assert "github__search_repositories" in rel  # top query match
+    assert "github__get_me" in rel  # identity still added despite the cap
+    # The cap bounds the query-matched, non-identity tools to tool_relevant_limit (=1).
+    non_identity = rel - {"github__get_me"}
+    assert len(non_identity) <= 1
