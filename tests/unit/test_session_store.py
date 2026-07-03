@@ -46,6 +46,37 @@ def test_append_is_incremental_not_rewrite(tmp_path: Path) -> None:
     assert [m["content"] for m in loaded.history] == ["one", "two"]
 
 
+def test_create_writes_no_file_until_append(tmp_path: Path) -> None:
+    # create() must be lazy: no file on disk until the first append. This is what
+    # keeps a harness rebuild (startup, or a settings-triggered reload) or an unused
+    # "New chat" from leaving a ghost meta-header-only file behind.
+    store = SessionStore(str(tmp_path))
+    s = store.create(cwd="/proj", model="gpt-x")
+    assert store.load(s.id) is None
+    assert store.list() == []
+
+    store.append(s, [{"role": "user", "content": "hi"}])
+    loaded = store.load(s.id)
+    assert loaded is not None
+    assert loaded.history == [{"role": "user", "content": "hi"}]
+    assert [row["id"] for row in store.list()] == [s.id]
+
+
+def test_list_skips_header_only_sessions(tmp_path: Path) -> None:
+    store = SessionStore(str(tmp_path))
+    # A hand-written legacy/out-of-band file with only a meta header, no msg lines.
+    ghost_id = "ghost123"
+    meta_only = {"type": "meta", "id": ghost_id, "cwd": "/ghost", "model": "m"}
+    (tmp_path / f"{ghost_id}.jsonl").write_text(json.dumps(meta_only) + "\n", encoding="utf-8")
+
+    real = store.create(cwd="/real", model="m")
+    store.append(real, [{"role": "user", "content": "hi"}])
+
+    ids = [row["id"] for row in store.list()]
+    assert ghost_id not in ids
+    assert real.id in ids
+
+
 def test_load_skips_structurally_malformed_lines(tmp_path: Path) -> None:
     # A truncated/hand-edited transcript can contain valid-JSON but structurally-wrong
     # lines: a msg record with no "message", a bare non-object, or a non-dict message.

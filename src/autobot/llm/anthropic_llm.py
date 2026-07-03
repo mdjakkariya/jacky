@@ -795,6 +795,14 @@ class AnthropicLanguageModel:
     def finalize_turn(self, session: Session) -> list[dict[str, Any]]:
         """Record usage, compact if over threshold, trim to the hard backstop.
 
+        Known edge case: ``new = session.history[self._turn_start:]`` below slices by
+        a pre-turn index captured in :meth:`begin_turn`. If ``_send`` calls
+        :meth:`_drop_oldest_turn` mid-turn (front-trimming to fit the window), that
+        index can shift relative to the list, so the persisted slice may
+        under/over-capture this turn's messages. The live conversation in
+        ``session.history`` stays correct either way — only the JSONL transcript
+        written by the harness is affected. Tracked in issue #58.
+
         Returns:
             This turn's new history entries, for the harness to persist to the
             transcript. Empty if the turn failed (its history was rolled back).

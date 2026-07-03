@@ -36,11 +36,12 @@ class SessionStore:
         return self._root / f"{session_id}.jsonl"
 
     def create(self, cwd: str, model: str) -> Session:
-        """Create a new session and write its meta header line."""
+        """Make a new session.
+
+        The file is written lazily on first `append` — a session that never
+        records a turn leaves no ghost file on disk.
+        """
         session = Session(id=self.new_id(), cwd=cwd, model=model)
-        meta = {"type": "meta", "id": session.id, "cwd": cwd, "model": model}
-        with self._path(session.id).open("w", encoding="utf-8") as fh:
-            fh.write(json.dumps(meta) + "\n")
         _log.info("session created id=%s cwd=%s model=%s", session.id, cwd, model)
         return session
 
@@ -92,13 +93,32 @@ class SessionStore:
         return session
 
     def list(self) -> list[dict[str, Any]]:
-        """Summaries of stored sessions (id/cwd/model/mtime), most recent first."""
+        """Summaries of stored sessions (id/cwd/model/mtime), most recent first.
+
+        Skips header-only (zero-message) files defensively: a session that never
+        recorded a turn shouldn't clutter the resume picker. ``create()`` no longer
+        writes a file at all, so this guards legacy or hand-created files only.
+        """
         rows: list[dict[str, Any]] = []
         for path in self._root.glob("*.jsonl"):
             try:
-                first = path.read_text(encoding="utf-8").splitlines()[0]
+                lines = path.read_text(encoding="utf-8").splitlines()
+                first = lines[0]
                 meta = json.loads(first)
             except (OSError, IndexError, json.JSONDecodeError):
+                continue
+            has_msg = False
+            for line in lines[1:]:
+                if not line.strip():
+                    continue
+                try:
+                    rec = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if isinstance(rec, dict) and rec.get("type") == "msg":
+                    has_msg = True
+                    break
+            if not has_msg:
                 continue
             rows.append(
                 {

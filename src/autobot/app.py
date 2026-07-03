@@ -297,6 +297,7 @@ def _build_llm(
     """
     log = get_logger("app")
     store = SessionStore(settings.agent_session_dir)
+
     from autobot.tools.access import active_policy
 
     _pol = active_policy()
