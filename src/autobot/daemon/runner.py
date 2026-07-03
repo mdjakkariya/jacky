@@ -185,6 +185,8 @@ def serve(settings: Settings | None = None) -> None:
         on_action=orchestrator.run_tool,
         mcp_provider=orchestrator.mcp_provider,
         on_meeting=on_meeting,
+        on_list_sessions=orchestrator.list_sessions,
+        on_resume_session=orchestrator.resume_session,
     )
 
 

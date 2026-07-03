@@ -282,9 +282,6 @@ def _summary_window_chars(settings: Settings) -> int:
     return 8000
 
 
-_DEFAULT_AGENT_SESSION_DIR = "~/.autobot/agent_sessions"
-
-
 def _build_llm(
     settings: Settings,
     registry: ToolRegistry,
@@ -299,8 +296,11 @@ def _build_llm(
     summary, delivery mode, usage) — the adapters themselves are stateless across turns.
     """
     log = get_logger("app")
-    store = SessionStore(_DEFAULT_AGENT_SESSION_DIR)
-    cwd = str(Path.cwd())
+    store = SessionStore(settings.agent_session_dir)
+    from autobot.tools.access import active_policy
+
+    _pol = active_policy()
+    cwd = str(_pol.cwd) if _pol is not None else str(Path.cwd())
     if settings.llm_provider == "anthropic":
         try:
             from autobot.llm.anthropic_llm import AnthropicLanguageModel

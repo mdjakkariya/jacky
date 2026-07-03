@@ -148,3 +148,7 @@ class AgentHarness:
             return False
         self._session = loaded
         return True
+
+    def list_sessions(self) -> list[dict[str, Any]]:
+        """Summaries of all stored sessions (id/cwd/model/mtime), most recent first."""
+        return self._store.list()

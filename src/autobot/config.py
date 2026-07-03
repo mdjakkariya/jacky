@@ -51,6 +51,7 @@ _DEFAULT_TTS_VOICE = "~/.autobot/voices/en_US-ryan-high.onnx"
 # Absolute (under ~/.autobot) so it works regardless of the working directory —
 # e.g. launched from the bundled .app, whose CWD is "/".
 _DEFAULT_SESSION_DIR = "~/.autobot/sessions"
+_DEFAULT_AGENT_SESSION_DIR = "~/.autobot/agent_sessions"
 _DEFAULT_LOG_DIR = "~/.autobot/logs"
 _DEFAULT_LOG_LEVEL = "DEBUG"
 _DEFAULT_LOG_CONSOLE_LEVEL = "WARNING"
@@ -252,6 +253,9 @@ class Settings:
     # Keep only the most recent N session transcripts; older ones are pruned on
     # startup so the sessions folder never accumulates hundreds of files.
     session_keep: int = 20
+    # Resumable agent conversation sessions (JSONL via SessionStore); separate from
+    # session_dir's per-run debug transcripts so session_keep pruning can't delete them.
+    agent_session_dir: str = _DEFAULT_AGENT_SESSION_DIR
     show_debug: bool = True
     log_dir: str = _DEFAULT_LOG_DIR
     log_level: str = _DEFAULT_LOG_LEVEL

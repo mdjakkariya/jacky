@@ -204,6 +204,41 @@ def test_post_new_session_ok_without_callback() -> None:
     assert TestClient(create_app(EventBus())).post("/session/new").json() == {"ok": True}
 
 
+def test_get_sessions_returns_list_from_callback() -> None:
+    rows = [{"id": "abc123", "cwd": "/tmp/x", "model": "qwen3:8b", "mtime": 1.0}]
+    app = create_app(EventBus(), on_list_sessions=lambda: rows)
+    assert TestClient(app).get("/sessions").json() == rows
+
+
+def test_get_sessions_returns_empty_list_without_callback() -> None:
+    # No engine callback wired (e.g. demo mode) -> empty list, not an error.
+    assert TestClient(create_app(EventBus())).get("/sessions").json() == []
+
+
+def test_post_sessions_resume_known_id_returns_ok_true() -> None:
+    calls: list[str] = []
+
+    def on_resume_session(session_id: str) -> bool:
+        calls.append(session_id)
+        return session_id == "known"
+
+    app = create_app(EventBus(), on_resume_session=on_resume_session)
+    body = TestClient(app).post("/sessions/resume", json={"id": "known"}).json()
+    assert body == {"ok": True}
+    assert calls == ["known"]
+
+
+def test_post_sessions_resume_unknown_id_returns_ok_false() -> None:
+    app = create_app(EventBus(), on_resume_session=lambda session_id: session_id == "known")
+    body = TestClient(app).post("/sessions/resume", json={"id": "unknown"}).json()
+    assert body == {"ok": False}
+
+
+def test_post_sessions_resume_without_callback_returns_ok_false() -> None:
+    body = TestClient(create_app(EventBus())).post("/sessions/resume", json={"id": "x"}).json()
+    assert body == {"ok": False}
+
+
 def test_post_action_runs_tool_through_callback() -> None:
     calls: list[tuple[str, dict[str, object]]] = []
 

@@ -442,6 +442,18 @@ class Orchestrator:
             get_buffer().mark_session()
         _log.info("new chat session started")
 
+    def list_sessions(self) -> list[dict[str, Any]]:
+        """Summaries of stored agent sessions (id/cwd/model/mtime), for the daemon."""
+        fn = getattr(self._llm, "list_sessions", None)
+        result = fn() if callable(fn) else []
+        return result if isinstance(result, list) else []
+
+    def resume_session(self, session_id: str) -> bool:
+        """Resume a stored agent session by id. Held under the turn lock like a new turn."""
+        with self._turn_lock:
+            fn = getattr(self._llm, "resume", None)
+            return bool(fn(session_id)) if callable(fn) else False
+
     def run_tool(self, name: str, arguments: dict[str, Any]) -> str:
         """Run one registered tool through the permission gate — for a UI action.
 
