@@ -78,8 +78,9 @@ class Settings:
     """All runtime-tunable configuration for the assistant."""
 
     # --- language model ---
-    # Which brain: "ollama" (local, default) or "anthropic" (cloud, opt-in). The
-    # Anthropic API key lives in the Keychain, never in this file.
+    # Which brain: "ollama" (local, default), "anthropic" (cloud, opt-in), or
+    # "openai" (any OpenAI-compatible endpoint, opt-in). API keys live in the
+    # Keychain, never in this file.
     llm_provider: str = "ollama"
     llm_model: str = _DEFAULT_LLM_MODEL
     ollama_host: str = _DEFAULT_OLLAMA_HOST

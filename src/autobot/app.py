@@ -316,6 +316,20 @@ def _build_llm(
         except ValueError as exc:
             log.warning("cloud LLM unavailable, falling back to local: %s", exc)
             print(f"[llm] cloud unavailable ({exc}) — using local Ollama.")
+    if settings.llm_provider == "openai":
+        from autobot.agent.providers.openai_compatible import OpenAICompatibleModel
+        from autobot.tools.selection import build_tool_selector
+
+        log.info(
+            "llm provider=openai base_url=%s model=%s (OFF-DEVICE)",
+            settings.openai_base_url or "(default)",
+            settings.llm_model,
+        )
+        selector = build_tool_selector(settings, registry)
+        openai_model = OpenAICompatibleModel(
+            settings, registry, transcript, memory=memory, selector=selector
+        )
+        return AgentHarness(openai_model)
     from autobot.tools.selection import build_tool_selector
 
     selector = build_tool_selector(settings, registry)
