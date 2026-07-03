@@ -428,12 +428,14 @@ class OllamaLanguageModel:
                 {"role": "tool", "tool_name": call.name, "content": result.content}
             )
 
-    def finalize_turn(self, session: Session) -> None:
-        """Persist this turn append-only, then post-turn compact + report usage."""
-        session.history.extend([self._user_msg, *self._messages[self._sent_start :]])
+    def finalize_turn(self, session: Session) -> list[dict[str, Any]]:
+        """Persist this turn append-only, then post-turn compact; return new messages."""
+        new = [self._user_msg, *self._messages[self._sent_start :]]
+        session.history.extend(new)
         session.history = trim_history(session.history, _HARD_MAX_MESSAGES)
         self._compact_if_needed(session, self._last_prompt_tokens, source="post-turn")
         self._report_usage(session)
+        return new
 
     def final_answer_no_tools(self, session: Session) -> str:
         """One tools-disabled call to synthesize a reply when the round cap is hit."""

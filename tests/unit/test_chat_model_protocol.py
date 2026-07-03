@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from typing import Any
+
 from autobot.agent.chat_model import ChatModel, ChatResponse
 from autobot.agent.session import Session
 from autobot.core.types import ToolCall, ToolResult
@@ -19,7 +21,9 @@ class _MinimalModel:
     def final_answer_no_tools(self, session: Session) -> str:
         return ""
 
-    def finalize_turn(self, session: Session) -> None: ...
+    def finalize_turn(self, session: Session) -> list[dict[str, Any]]:
+        return []
+
     def complete(self, prompt: str, *, temperature: float = 0.0) -> str:
         return ""
 

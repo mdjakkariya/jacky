@@ -71,7 +71,6 @@ class AgentHarness:
 
     def run_turn(self, user_text: str, execute: ToolExecutor) -> str:
         """Handle one user turn end-to-end; tool calls run through ``execute`` (the gate)."""
-        start = len(self._session.history)
         self._model.begin_turn(self._session, user_text)
         failed: dict[str, str] = {}  # anti-thrash: call key -> failure text
         seen: dict[str, int] = {}  # doom-loop: call key -> times issued this turn
@@ -118,8 +117,8 @@ class AgentHarness:
                 break
         else:
             reply = self._model.final_answer_no_tools(self._session)
-        self._model.finalize_turn(self._session)
-        self._store.append(self._session, self._session.history[start:])
+        new_events = self._model.finalize_turn(self._session)
+        self._store.append(self._session, new_events)
         return reply
 
     def complete(self, prompt: str, *, temperature: float = 0.0) -> str:

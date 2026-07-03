@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -12,7 +13,16 @@ from autobot.core.types import ToolCall, ToolResult
 
 
 class FakeChatModel:
-    """Scriptable ChatModel: returns queued ChatResponses; records interactions."""
+    """Scriptable ChatModel: returns queued ChatResponses; records interactions.
+
+    ``finalize_turn`` simulates real-adapter compaction: it returns the messages
+    this turn appended to ``session.history`` (as the protocol requires), but then
+    shrinks ``session.history`` itself down to just its last entry — mirroring how
+    a real adapter's post-turn compaction reassigns ``session.history`` to a
+    SHORTER list. Any test relying on ``session.history[start:]`` after the turn
+    would find those messages gone; only the harness persisting the *returned*
+    messages survives this.
+    """
 
     def __init__(self, responses: list[ChatResponse], *, final: str = "FINAL") -> None:
         self._responses = list(responses)
@@ -43,9 +53,12 @@ class FakeChatModel:
     def final_answer_no_tools(self, session: Session) -> str:
         return self._final
 
-    def finalize_turn(self, session: Session) -> None:
+    def finalize_turn(self, session: Session) -> list[dict[str, Any]]:
         self.finalized += 1
         session.last_usage = {"used": 1}
+        new = list(session.history)
+        session.history = session.history[-1:]  # simulate compaction: shrink in place
+        return new
 
     def complete(self, prompt: str, *, temperature: float = 0.0) -> str:
         return "ONESHOT"
@@ -139,3 +152,54 @@ def test_turn_transcript_is_persisted_via_the_store(store: SessionStore) -> None
     assert loaded is not None
     contents = [m.get("content") for m in loaded.history]
     assert "hi" in contents and "hello" in contents
+
+
+def test_turn_persisted_even_when_finalize_turn_compacts_history(store: SessionStore) -> None:
+    """Regression: a compaction/trim turn must not lose its messages from the transcript.
+
+    ``FakeChatModel.finalize_turn`` simulates real-adapter compaction by shrinking
+    ``session.history`` down to just its last entry. Before the fix, the harness
+    persisted ``session.history[start:]`` — sliced from the ALREADY-SHRUNK history —
+    which is empty (or wrong) on a compaction turn, silently dropping the turn from
+    the JSONL transcript. The fix persists ``finalize_turn``'s *return value*
+    instead, which is captured before the shrink.
+    """
+    model = FakeChatModel([ChatResponse(text="hello", tool_calls=[])])
+    harness = AgentHarness(model, store)
+    harness.run_turn("hi", _ok_executor)
+
+    # In-memory session.history was compacted down to one entry by the fake.
+    assert len(harness.session.history) == 1
+
+    # But the transcript on disk must still contain this turn's messages.
+    loaded = store.load(harness.session.id)
+    assert loaded is not None
+    contents = [m.get("content") for m in loaded.history]
+    assert "hi" in contents
+    assert "hello" in contents
+
+
+def test_resume_swaps_to_a_stored_session(store: SessionStore) -> None:
+    model = FakeChatModel([ChatResponse(text="hello", tool_calls=[])])
+    harness = AgentHarness(model, store)
+    original_id = harness.session.id
+
+    other = store.create("/elsewhere", "some-model")
+    store.append(other, [{"role": "user", "content": "from another session"}])
+
+    assert harness.resume(other.id) is True
+    assert harness.session.id == other.id
+    assert harness.session.id != original_id
+    contents = [m.get("content") for m in harness.session.history]
+    assert "from another session" in contents
+
+
+def test_resume_unknown_id_returns_false_and_leaves_session_unchanged(
+    store: SessionStore,
+) -> None:
+    model = FakeChatModel([ChatResponse(text="hello", tool_calls=[])])
+    harness = AgentHarness(model, store)
+    original = harness.session
+
+    assert harness.resume("does-not-exist") is False
+    assert harness.session is original

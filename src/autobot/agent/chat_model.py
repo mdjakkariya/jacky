@@ -11,7 +11,7 @@ or resume a conversation without knowing provider message shapes.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 
 if TYPE_CHECKING:
     from autobot.agent.session import Session
@@ -59,8 +59,15 @@ class ChatModel(Protocol):
         """One tools-disabled call to synthesize a reply when the round cap is hit."""
         ...
 
-    def finalize_turn(self, session: Session) -> None:
-        """Post-turn housekeeping: compaction, usage reporting, history trim."""
+    def finalize_turn(self, session: Session) -> list[dict[str, Any]]:
+        """Post-turn housekeeping: compaction, usage reporting, history trim.
+
+        Returns:
+            This turn's new provider-native messages, for the harness to persist
+            to the transcript — ``session.history`` may be reassigned (shortened)
+            by compaction/trim during this call, so callers must not slice it
+            afterwards to recover the turn's messages.
+        """
         ...
 
     def complete(self, prompt: str, *, temperature: float = 0.0) -> str:

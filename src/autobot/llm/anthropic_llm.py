@@ -792,13 +792,21 @@ class AnthropicLanguageModel:
         )
         return text_from_content(content) or "Sorry, that took too many steps."
 
-    def finalize_turn(self, session: Session) -> None:
-        """Record usage, compact if over threshold, trim to the hard backstop."""
+    def finalize_turn(self, session: Session) -> list[dict[str, Any]]:
+        """Record usage, compact if over threshold, trim to the hard backstop.
+
+        Returns:
+            This turn's new history entries, for the harness to persist to the
+            transcript. Empty if the turn failed (its history was rolled back).
+        """
         # A failed send already rolled back this turn's history and returned the
         # error reply; skip the post-turn tail so the context meter keeps the last
         # successful turn's value (matches the pre-harness run_turn early-return).
         if self._turn_failed:
-            return
+            return []
+        # Capture before _maybe_compact/trim_history run below — both may reassign
+        # session.history to a SHORTER list, so this must happen first.
+        new = list(session.history[self._turn_start :])
         # "This turn in" = freshly-processed input (uncached input + newly cached
         # tokens), NOT input_tokens alone — once the prefix is cached, input_tokens
         # collapses to a handful while cache_write holds the real new content (e.g. a
@@ -817,6 +825,9 @@ class AnthropicLanguageModel:
         # the prompt to a small stable prefix); a hard message cap is the last backstop.
         self._maybe_compact(session, self._prompt_total)
         session.history = trim_history(session.history, _HARD_MAX_MESSAGES)
+        if not self._prompt_total or not self._window:
+            session.last_usage = None
+            return new
         session.last_usage = {
             "used": self._prompt_total,
             "window": self._window,
@@ -829,6 +840,7 @@ class AnthropicLanguageModel:
             # (the UI then hides the cost row instead of showing a misleading $0.00).
             "price": session.cost.usd if session.cost.priced else None,
         }
+        return new
 
     def complete(self, prompt: str, *, temperature: float = 0.0) -> str:
         """One-shot completion via the Anthropic Messages API (no tools).

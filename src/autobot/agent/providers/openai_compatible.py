@@ -240,9 +240,10 @@ class OpenAICompatibleModel:
         self._messages.append(assistant)
         return text or "Sorry, that took too many steps."
 
-    def finalize_turn(self, session: Session) -> None:
-        """Persist this turn append-only, then post-turn compact + report usage."""
-        session.history.extend([self._user_msg, *self._messages[self._sent_start :]])
+    def finalize_turn(self, session: Session) -> list[dict[str, Any]]:
+        """Persist this turn append-only, then post-turn compact; return new messages."""
+        new = [self._user_msg, *self._messages[self._sent_start :]]
+        session.history.extend(new)
         session.history = trim_history(session.history, _HARD_MAX_MESSAGES)
         if needs_compaction(
             self._last_prompt_tokens, self._context_tokens, self._settings.compact_at
@@ -261,7 +262,7 @@ class OpenAICompatibleModel:
         )
         if not self._last_prompt_tokens or not self._context_tokens:
             session.last_usage = None
-            return
+            return new
         session.last_usage = {
             "used": self._last_prompt_tokens,
             "window": self._context_tokens,
@@ -271,6 +272,7 @@ class OpenAICompatibleModel:
             "turn_out": self._last_eval_tokens,
             "model": self._settings.llm_model,
         }
+        return new
 
     def complete(self, prompt: str, *, temperature: float = 0.0) -> str:
         """One-shot completion (no tools, no history)."""
