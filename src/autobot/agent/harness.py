@@ -25,6 +25,9 @@ _log = get_logger("harness")
 
 _MAX_TOOL_ROUNDS = 8  # cap the plan→tool→result loop so it can't spin forever
 _DOOM_LIMIT = 4  # abort if one identical (name+args) call repeats this many times
+# Phase 2 TODO: when polling/wait tools arrive, key this on CONSECUTIVE identical
+# calls with no intervening progress (not a per-turn total) so legitimate polling
+# with identical args isn't cut off.
 
 
 def _call_key(call: ToolCall) -> str:

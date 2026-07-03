@@ -812,6 +812,11 @@ class AnthropicLanguageModel:
 
     def finalize_turn(self) -> None:
         """Record usage, compact if over threshold, trim to the hard backstop."""
+        # A failed send already rolled back this turn's history and returned the
+        # error reply; skip the post-turn tail so the context meter keeps the last
+        # successful turn's value (matches the pre-harness run_turn early-return).
+        if self._turn_failed:
+            return
         self._last_prompt_total = self._prompt_total
         self._last_cache_read = self._cache_read
         self._last_cache_write = self._cache_write

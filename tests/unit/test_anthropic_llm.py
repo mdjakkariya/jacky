@@ -837,3 +837,45 @@ def test_relevant_gated_caps_query_matches_but_keeps_identity() -> None:
     # The cap bounds the query-matched, non-identity tools to tool_relevant_limit (=1).
     non_identity = rel - {"github__get_me"}
     assert len(non_identity) <= 1
+
+
+def test_failed_cloud_send_does_not_clear_context_meter() -> None:
+    # A failed cloud send rolls back history and returns an error reply, but
+    # finalize_turn() should NOT run so the context meter keeps the last successful
+    # turn's value (matches the pre-harness run_turn early-return behavior).
+    class _FailOnSecond:
+        """First call succeeds; second raises an exception."""
+
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def create(self, **_kwargs: Any) -> Any:
+            self.calls += 1
+            if self.calls == 1:
+                return SimpleNamespace(
+                    content=[_block(type="text", text="First reply")],
+                    usage=SimpleNamespace(input_tokens=5, output_tokens=2),
+                )
+            raise Exception("boom")
+
+    client = SimpleNamespace(messages=_FailOnSecond())
+    model = AnthropicLanguageModel(Settings(llm_provider="anthropic"), _registry(), client=client)
+
+    def executor(call: ToolCall) -> ToolResult:
+        return ToolResult(name=call.name, content="ok", ok=True)
+
+    # First turn: successful send
+    harness = AgentHarness(model)
+    reply1 = harness.run_turn("hi", executor)
+    assert reply1 == "First reply"
+    usage_after_first = model.context_usage()
+    assert usage_after_first is not None
+    assert usage_after_first["used"] > 0  # context meter has a value
+
+    # Second turn: failed send
+    reply2 = harness.run_turn("again", executor)
+    assert "isn't responding" in reply2  # error reply from cloud_error_reply
+    usage_after_failed = model.context_usage()
+
+    # The meter should still show the first turn's value, not be cleared
+    assert usage_after_failed == usage_after_first
