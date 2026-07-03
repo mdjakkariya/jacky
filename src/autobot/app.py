@@ -14,9 +14,10 @@ from __future__ import annotations
 from collections.abc import Callable
 from typing import TYPE_CHECKING
 
+from autobot.agent.harness import AgentHarness
 from autobot.config import Settings
 from autobot.core.events import AmplitudeSink, ChoicesSink, VisibilitySink
-from autobot.core.interfaces import AudioSource, LanguageModel, SpeechToText, TextToSpeech
+from autobot.core.interfaces import AudioSource, SpeechToText, TextToSpeech
 from autobot.io.audio import PushToTalkRecorder
 from autobot.llm.ollama_llm import OllamaLanguageModel
 from autobot.logging_setup import get_logger, setup_logging
@@ -284,7 +285,7 @@ def _build_llm(
     registry: ToolRegistry,
     transcript: Transcript,
     memory: MemoryStore | None,
-) -> LanguageModel:
+) -> AgentHarness:
     """Pick the language-model backend: local Ollama (default) or Anthropic (opt-in).
 
     Cloud is disclosed and degrades gracefully — a missing key or the missing
@@ -305,7 +306,7 @@ def _build_llm(
                 f"[llm] CLOUD mode — Claude ({settings.anthropic_model}). Your requests and "
                 "remembered profile are sent to Anthropic. Actions still run locally."
             )
-            return llm  # type: ignore[return-value]
+            return AgentHarness(llm)
         except ImportError:
             log.warning("cloud LLM extra missing, falling back to local")
             print(
@@ -318,9 +319,8 @@ def _build_llm(
     from autobot.tools.selection import build_tool_selector
 
     selector = build_tool_selector(settings, registry)
-    return OllamaLanguageModel(  # type: ignore[return-value]
-        settings, registry, transcript, memory=memory, selector=selector
-    )
+    model = OllamaLanguageModel(settings, registry, transcript, memory=memory, selector=selector)
+    return AgentHarness(model)
 
 
 def build(
