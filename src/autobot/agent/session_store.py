@@ -76,9 +76,11 @@ class SessionStore:
                 rec = json.loads(line)
             except json.JSONDecodeError:
                 continue
+            if not isinstance(rec, dict):  # a valid-JSON non-object line (e.g. a bare list)
+                continue
             if rec.get("type") == "meta":
                 meta = rec
-            elif rec.get("type") == "msg":
+            elif rec.get("type") == "msg" and isinstance(rec.get("message"), dict):
                 history.append(rec["message"])
         session = Session(
             id=meta.get("id", session_id),

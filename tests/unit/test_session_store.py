@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 from autobot.agent.session_store import SessionStore
@@ -43,3 +44,24 @@ def test_append_is_incremental_not_rewrite(tmp_path: Path) -> None:
     loaded = store.load(s.id)
     assert loaded is not None
     assert [m["content"] for m in loaded.history] == ["one", "two"]
+
+
+def test_load_skips_structurally_malformed_lines(tmp_path: Path) -> None:
+    # A truncated/hand-edited transcript can contain valid-JSON but structurally-wrong
+    # lines: a msg record with no "message", a bare non-object, or a non-dict message.
+    # load() must skip those (not raise) and return only well-formed messages, in order.
+    store = SessionStore(str(tmp_path))
+    s = store.create(cwd="/p", model="m")
+    records: list[object] = [
+        {"type": "msg", "message": {"role": "user", "content": "good1"}},
+        {"type": "msg"},  # no "message" key
+        [1, 2, 3],  # valid JSON, not an object
+        {"type": "msg", "message": "not-a-dict"},  # message is not a dict
+        {"type": "msg", "message": {"role": "assistant", "content": "good2"}},
+    ]
+    with (tmp_path / f"{s.id}.jsonl").open("a", encoding="utf-8") as fh:
+        for rec in records:
+            fh.write(json.dumps(rec) + "\n")
+    loaded = store.load(s.id)
+    assert loaded is not None
+    assert [m["content"] for m in loaded.history] == ["good1", "good2"]
