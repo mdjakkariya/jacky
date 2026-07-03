@@ -3,8 +3,13 @@ from __future__ import annotations
 from typing import Any
 
 from autobot.agent.chat_model import ChatModel, ChatResponse
+from autobot.agent.session import Session
 from autobot.config import Settings
 from autobot.tools.registry import ToolRegistry
+
+
+def _session() -> Session:
+    return Session(id="t", cwd=".", model="m")
 
 
 class _Blk:
@@ -56,8 +61,9 @@ def test_anthropic_is_a_chat_model() -> None:
 
 def test_send_returns_text_when_no_tool_use() -> None:
     m = _model([_Blk(type="text", text="hello")])
-    m.begin_turn("hi")
-    resp = m.send()
+    s = _session()
+    m.begin_turn(s, "hi")
+    resp = m.send(s)
     assert isinstance(resp, ChatResponse)
     assert resp.text == "hello"
     assert resp.tool_calls == []
@@ -65,6 +71,7 @@ def test_send_returns_text_when_no_tool_use() -> None:
 
 def test_send_surfaces_tool_use() -> None:
     m = _model([_Blk(type="tool_use", id="t1", name="get_time", input={})])
-    m.begin_turn("time?")
-    resp = m.send()
+    s = _session()
+    m.begin_turn(s, "time?")
+    resp = m.send(s)
     assert [c.name for c in resp.tool_calls] == ["get_time"]

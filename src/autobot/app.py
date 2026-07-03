@@ -12,9 +12,11 @@ audit log and sandboxed filesystem tools) in front of the language model.
 from __future__ import annotations
 
 from collections.abc import Callable
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 from autobot.agent.harness import AgentHarness
+from autobot.agent.session_store import SessionStore
 from autobot.config import Settings
 from autobot.core.events import AmplitudeSink, ChoicesSink, VisibilitySink
 from autobot.core.interfaces import AudioSource, SpeechToText, TextToSpeech
@@ -280,6 +282,9 @@ def _summary_window_chars(settings: Settings) -> int:
     return 8000
 
 
+_DEFAULT_AGENT_SESSION_DIR = "~/.autobot/agent_sessions"
+
+
 def _build_llm(
     settings: Settings,
     registry: ToolRegistry,
@@ -289,9 +294,13 @@ def _build_llm(
     """Pick the LLM backend: local Ollama (default), Anthropic, or an OpenAI-compatible endpoint.
 
     The latter two are opt-in. Cloud is disclosed and degrades gracefully — a missing key or
-    the missing ``cloud`` extra falls back to local rather than failing startup.
+    the missing ``cloud`` extra falls back to local rather than failing startup. Every backend
+    is wrapped in an :class:`AgentHarness`, which owns the conversation `Session` (history,
+    summary, delivery mode, usage) — the adapters themselves are stateless across turns.
     """
     log = get_logger("app")
+    store = SessionStore(_DEFAULT_AGENT_SESSION_DIR)
+    cwd = str(Path.cwd())
     if settings.llm_provider == "anthropic":
         try:
             from autobot.llm.anthropic_llm import AnthropicLanguageModel
@@ -306,7 +315,7 @@ def _build_llm(
                 f"[llm] CLOUD mode — Claude ({settings.anthropic_model}). Your requests and "
                 "remembered profile are sent to Anthropic. Actions still run locally."
             )
-            return AgentHarness(llm)
+            return AgentHarness(llm, store, cwd=cwd, model_name=settings.anthropic_model)
         except ImportError:
             log.warning("cloud LLM extra missing, falling back to local")
             print(
@@ -334,12 +343,12 @@ def _build_llm(
         openai_model = OpenAICompatibleModel(
             settings, registry, transcript, memory=memory, selector=selector
         )
-        return AgentHarness(openai_model)
+        return AgentHarness(openai_model, store, cwd=cwd, model_name=settings.llm_model)
     from autobot.tools.selection import build_tool_selector
 
     selector = build_tool_selector(settings, registry)
     model = OllamaLanguageModel(settings, registry, transcript, memory=memory, selector=selector)
-    return AgentHarness(model)
+    return AgentHarness(model, store, cwd=cwd, model_name=settings.llm_model)
 
 
 def build(

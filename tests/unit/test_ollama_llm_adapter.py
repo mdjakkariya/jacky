@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 from autobot.agent.chat_model import ChatModel, ChatResponse
+from autobot.agent.session import Session
 from autobot.config import Settings
 from autobot.core.types import ToolCall, ToolResult
 from autobot.tools.registry import ToolRegistry
@@ -33,10 +34,15 @@ def test_ollama_is_a_chat_model() -> None:
     assert isinstance(_model({"content": "hi"}), ChatModel)
 
 
+def _session() -> Session:
+    return Session(id="t", cwd=".", model="m")
+
+
 def test_begin_then_send_returns_text_when_no_tool_calls() -> None:
     m = _model({"content": "hello there", "tool_calls": []})
-    m.begin_turn("hi")
-    resp = m.send()
+    s = _session()
+    m.begin_turn(s, "hi")
+    resp = m.send(s)
     assert isinstance(resp, ChatResponse)
     assert resp.text == "hello there"
     assert resp.tool_calls == []
@@ -44,8 +50,9 @@ def test_begin_then_send_returns_text_when_no_tool_calls() -> None:
 
 def test_send_surfaces_tool_calls() -> None:
     m = _model({"content": "", "tool_calls": [{"function": {"name": "get_time", "arguments": {}}}]})
-    m.begin_turn("time?")
-    resp = m.send()
+    s = _session()
+    m.begin_turn(s, "time?")
+    resp = m.send(s)
     assert [c.name for c in resp.tool_calls] == ["get_time"]
 
 
@@ -54,9 +61,10 @@ def test_record_results_appends_tool_messages() -> None:
     from autobot.llm.ollama_llm import OllamaLanguageModel
 
     m = OllamaLanguageModel(Settings(), ToolRegistry(), client=client)
-    m.begin_turn("go")
-    m.send()
-    m.record_results([(ToolCall(name="get_time"), ToolResult(name="get_time", content="noon"))])
-    m.send()  # second send must include the tool result in the messages
+    s = _session()
+    m.begin_turn(s, "go")
+    m.send(s)
+    m.record_results(s, [(ToolCall(name="get_time"), ToolResult(name="get_time", content="noon"))])
+    m.send(s)  # second send must include the tool result in the messages
     roles = [msg.get("role") for msg in client.sent[-1]]
     assert "tool" in roles

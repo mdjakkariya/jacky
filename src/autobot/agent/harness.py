@@ -7,6 +7,12 @@ through the injected executor (the permission gate) → feed results back → re
 until the model returns no tool calls (the final answer), a round only re-issues
 already-failed calls, an identical call repeats past the doom-loop guard, or the
 round cap is hit (then one tools-disabled call forces a final answer).
+
+The harness owns the conversation :class:`~autobot.agent.session.Session` (not the
+model): it creates the initial session, threads it through every primitive call,
+and persists each turn's new messages via the injected
+:class:`~autobot.agent.session_store.SessionStore` once the turn finalizes. This is
+what keeps the provider adapters stateless across turns.
 """
 
 from __future__ import annotations
@@ -19,6 +25,8 @@ from autobot.logging_setup import get_logger
 
 if TYPE_CHECKING:
     from autobot.agent.chat_model import ChatModel
+    from autobot.agent.session import Session
+    from autobot.agent.session_store import SessionStore
     from autobot.core.types import ToolExecutor
 
 _log = get_logger("harness")
@@ -36,23 +44,40 @@ def _call_key(call: ToolCall) -> str:
 
 
 class AgentHarness:
-    """Runs one user turn end-to-end against a :class:`ChatModel`."""
+    """Runs one user turn end-to-end against a :class:`ChatModel`, owning the Session."""
 
     def __init__(
-        self, model: ChatModel, *, max_rounds: int = _MAX_TOOL_ROUNDS, doom_limit: int = _DOOM_LIMIT
+        self,
+        model: ChatModel,
+        store: SessionStore,
+        *,
+        cwd: str = ".",
+        model_name: str = "",
+        max_rounds: int = _MAX_TOOL_ROUNDS,
+        doom_limit: int = _DOOM_LIMIT,
     ) -> None:
         self._model = model
+        self._store = store
+        self._cwd = cwd
+        self._model_name = model_name
         self._max_rounds = max_rounds
         self._doom_limit = doom_limit
+        self._session = store.create(cwd, model_name)
+
+    @property
+    def session(self) -> Session:
+        """The current conversation session."""
+        return self._session
 
     def run_turn(self, user_text: str, execute: ToolExecutor) -> str:
         """Handle one user turn end-to-end; tool calls run through ``execute`` (the gate)."""
-        self._model.begin_turn(user_text)
+        start = len(self._session.history)
+        self._model.begin_turn(self._session, user_text)
         failed: dict[str, str] = {}  # anti-thrash: call key -> failure text
         seen: dict[str, int] = {}  # doom-loop: call key -> times issued this turn
         reply = ""
         for _ in range(self._max_rounds):
-            resp = self._model.send()
+            resp = self._model.send(self._session)
             if not resp.tool_calls:
                 reply = resp.text
                 break
@@ -62,7 +87,7 @@ class AgentHarness:
             last_fail = ""
             doomed = False
             for call in resp.tool_calls:
-                discovery = self._model.handle_discovery(call)
+                discovery = self._model.handle_discovery(self._session, call)
                 if discovery is not None:
                     all_repeat = False  # discovery is real progress, not a failing repeat
                     results.append((call, ToolResult(name=call.name, content=discovery, ok=True)))
@@ -82,7 +107,7 @@ class AgentHarness:
                         failed[key] = out
                         last_fail = out
                 results.append((call, ToolResult(name=call.name, content=out, ok=ok)))
-            self._model.record_results(results)
+            self._model.record_results(self._session, results)
             if doomed:
                 _log.info("stopping: identical tool call repeated past doom-loop guard")
                 reply = "I kept trying the same step without progress, so I stopped."
@@ -92,8 +117,9 @@ class AgentHarness:
                 reply = last_fail or "I couldn't complete that, so I stopped."
                 break
         else:
-            reply = self._model.final_answer_no_tools()
-        self._model.finalize_turn()
+            reply = self._model.final_answer_no_tools(self._session)
+        self._model.finalize_turn(self._session)
+        self._store.append(self._session, self._session.history[start:])
         return reply
 
     def complete(self, prompt: str, *, temperature: float = 0.0) -> str:
@@ -101,13 +127,25 @@ class AgentHarness:
         return self._model.complete(prompt, temperature=temperature)
 
     def context_usage(self) -> dict[str, Any] | None:
-        """Delegate the context-meter payload to the model."""
-        return self._model.context_usage()
+        """The current session's context-meter payload."""
+        return self._session.last_usage
 
     def new_session(self) -> None:
-        """Delegate session reset to the model."""
-        self._model.new_session()
+        """Discard the current conversation and start a fresh session."""
+        self._session = self._store.create(self._session.cwd, self._session.model)
 
     def set_delivery_mode(self, mode: str) -> None:
-        """Delegate delivery-mode selection to the model."""
-        self._model.set_delivery_mode(mode)
+        """Set how the next reply is delivered ('chat' = text, else spoken)."""
+        self._session.delivery_mode = mode
+
+    def resume(self, session_id: str) -> bool:
+        """Replace the current session with a stored one, or leave it unchanged.
+
+        Returns:
+            ``True`` if ``session_id`` was found and loaded, ``False`` otherwise.
+        """
+        loaded = self._store.load(session_id)
+        if loaded is None:
+            return False
+        self._session = loaded
+        return True

@@ -31,6 +31,7 @@ from autobot.session_log import NullTranscript, Transcript
 from autobot.tools.registry import ToolRegistry, ToolSpec
 
 if TYPE_CHECKING:
+    from autobot.agent.session import Session
     from autobot.memory.store import MemoryStore
 
 _log = get_logger("llm")
@@ -407,30 +408,9 @@ class AnthropicLanguageModel:
         self._registry = registry
         self._transcript = transcript or NullTranscript()
         self._memory = memory
-        self._history: list[dict[str, Any]] = []
-        # The real size of the most recent prompt we sent (input + cache read + cache
-        # write), for the context meter — input_tokens alone is misleading once the
-        # prefix is cached. 0 until the first turn.
-        self._last_prompt_total = 0
-        self._last_cache_read = 0
-        self._last_cache_write = 0
-        # This turn's fresh input / generated output (the incremental cost of the last
-        # exchange) — for the meter's "This turn" line. 0 until the first turn.
-        self._last_turn_in = 0
-        self._last_turn_out = 0
-        # Running summary of older turns once the context crosses compact_at — we keep
-        # the recent turns verbatim and fold everything older into this (cheaper, and
-        # preserves the gist instead of dropping it).
-        self._summary = ""
-        # Running token/cost tally for this session, surfaced in the log + chat meter.
-        # ``_session_cost_priced`` distinguishes "$0.00 so far" from "no list price for
-        # this model" — only the latter hides the cost row in the UI.
-        self._session_in = 0
-        self._session_out = 0
-        self._session_cost = 0.0
-        self._session_cost_priced = False
-        # Per-turn buffers shared by the ChatModel primitives.
-        self._turn_start = 0  # index in _history where this turn began (rollback point)
+        # Per-turn buffers shared by the ChatModel primitives. Valid only during one
+        # serialized turn; re-initialized in begin_turn from the passed session.
+        self._turn_start = 0  # index in session.history where this turn began (rollback point)
         self._tools: list[dict[str, Any]] = []  # this turn's assembled tools payload
         self._overhead = 0  # estimated system+tools token overhead this turn
         self._turn_in = 0
@@ -488,6 +468,7 @@ class AnthropicLanguageModel:
 
     def _log_usage(
         self,
+        session: Session,
         turn_in: int,
         turn_out: int,
         cache_read: int = 0,
@@ -496,24 +477,25 @@ class AnthropicLanguageModel:
     ) -> None:
         """Log this turn's context size, cache hit/miss, and an estimated cost.
 
-        ``cache_read`` / ``cache_write`` are the prompt-cache tokens: a healthy
-        multi-turn session shows cache_read climbing after the first turn. If
-        cache_read stays 0 across turns, caching isn't working (prefix changed, or
-        the prefix is under the model's minimum) — that's the signal to investigate.
+        Updates ``session.cost`` (the running per-session tally). ``cache_read`` /
+        ``cache_write`` are the prompt-cache tokens: a healthy multi-turn session shows
+        cache_read climbing after the first turn. If cache_read stays 0 across turns,
+        caching isn't working (prefix changed, or the prefix is under the model's
+        minimum) — that's the signal to investigate.
         """
         if turn_in == 0 and turn_out == 0 and cache_read == 0 and cache_write == 0:
             return  # no usage reported (e.g. the request failed before any response)
         model = self._settings.anthropic_model
-        self._session_in += turn_in
-        self._session_out += turn_out
+        session.cost.in_tokens += turn_in
+        session.cost.out_tokens += turn_out
         cost = estimate_cost_usd(
             model, turn_in, turn_out, cache_read=cache_read, cache_write=cache_write
         )
         self._transcript.record_usage(turn_in, turn_out, cost)
         cost_str = f"{cost:.5f}" if cost is not None else "n/a"
         if cost is not None:
-            self._session_cost += cost
-            self._session_cost_priced = True
+            session.cost.usd += cost
+            session.cost.priced = True
         pct = round(100 * prompt_total / self._window) if prompt_total and self._window else 0
         _log.info(
             "cloud usage model=%s input_tokens=%d output_tokens=%d cache_read=%d cache_write=%d "
@@ -526,17 +508,13 @@ class AnthropicLanguageModel:
             prompt_total,
             pct,
             cost_str,
-            self._session_in + self._session_out,
-            self._session_cost,
+            session.cost.in_tokens + session.cost.out_tokens,
+            session.cost.usd,
         )
 
-    def set_delivery_mode(self, mode: str) -> None:
-        """Set how the next reply is delivered ('chat' = text, else spoken/voice)."""
-        self._delivery_mode = mode
-
-    def _system(self) -> str:
+    def _system(self, session: Session) -> str:
         """System prompt + memory profile + running summary of compacted older turns."""
-        parts = [system_prompt(getattr(self, "_delivery_mode", "voice"))]
+        parts = [system_prompt(session.delivery_mode)]
         if self._memory is not None:
             ctx = self._memory.context()
             if ctx:
@@ -549,17 +527,17 @@ class AnthropicLanguageModel:
         meeting = meeting_state_line()
         if meeting:
             parts.append(meeting)
-        if self._summary:
-            parts.append(f"Summary of earlier conversation: {self._summary}")
+        if session.summary:
+            parts.append(f"Summary of earlier conversation: {session.summary}")
         return "\n\n".join(parts)
 
-    def _summarize(self, older: list[dict[str, Any]]) -> str:
+    def _summarize(self, session: Session, older: list[dict[str, Any]]) -> str:
         """Fold older turns (and any prior summary) into a concise summary via Claude.
 
         A separate, tool-free call; on failure we keep the previous summary so a
         transient error never loses memory.
         """
-        body = (f"Previous summary: {self._summary}\n\n" if self._summary else "") + "\n".join(
+        body = (f"Previous summary: {session.summary}\n\n" if session.summary else "") + "\n".join(
             f"{m.get('role', '?')}: {_text_of(m)}" for m in older
         )
         try:
@@ -570,12 +548,12 @@ class AnthropicLanguageModel:
                 system=_SUMMARIZE_INSTRUCTION,
                 messages=[{"role": "user", "content": body}],
             )
-            return text_from_content(_get(resp, "content")) or self._summary
+            return text_from_content(_get(resp, "content")) or session.summary
         except Exception:
             _log.warning("cloud summarization failed; keeping previous summary")
-            return self._summary
+            return session.summary
 
-    def _maybe_compact(self, prompt_total: int) -> None:
+    def _maybe_compact(self, session: Session, prompt_total: int) -> None:
         """At the compaction threshold, summarize older turns and keep the recent ones.
 
         Preserves the gist (vs. dropping turns) and shrinks the prompt to a small,
@@ -583,18 +561,18 @@ class AnthropicLanguageModel:
         """
         if not self._window or prompt_total < int(self._settings.compact_at * self._window):
             return
-        kept = trim_history(self._history, _KEEP_RECENT_MESSAGES)  # clean recent tail
-        older = self._history[: len(self._history) - len(kept)]
+        kept = trim_history(session.history, _KEEP_RECENT_MESSAGES)  # clean recent tail
+        older = session.history[: len(session.history) - len(kept)]
         if not older:
             return
-        self._summary = self._summarize(older)
-        self._history = kept
+        session.summary = self._summarize(session, older)
+        session.history = kept
         _log.info("compacted (cloud) summarized=%d kept=%d", len(older), len(kept))
 
-    def _history_tokens(self) -> int:
+    def _history_tokens(self, session: Session) -> int:
         """Rough token estimate of the conversation history (char/4, not exact)."""
         chars = 0
-        for m in self._history:
+        for m in session.history:
             c = m.get("content")
             if isinstance(c, str):
                 chars += len(c)
@@ -603,18 +581,18 @@ class AnthropicLanguageModel:
                     chars += len(str(b.get("text") or b.get("content") or b.get("input") or ""))
         return chars // _CHARS_PER_TOKEN
 
-    def _drop_oldest_turn(self) -> bool:
+    def _drop_oldest_turn(self, session: Session) -> bool:
         """Remove the oldest complete turn from the front. False if only one is left."""
-        if len(self._history) <= 1:
+        if len(session.history) <= 1:
             return False
-        self._history.pop(0)
-        while len(self._history) > 1 and self._history[0].get("role") != "user":
-            self._history.pop(0)
+        session.history.pop(0)
+        while len(session.history) > 1 and session.history[0].get("role") != "user":
+            session.history.pop(0)
         return True
 
-    def _truncate_last_user(self) -> bool:
+    def _truncate_last_user(self, session: Session) -> bool:
         """Halve the newest user message's text (last resort for one giant message)."""
-        for m in reversed(self._history):
+        for m in reversed(session.history):
             if m.get("role") == "user" and isinstance(m.get("content"), str):
                 text = m["content"]
                 if len(text) > 4000:
@@ -623,17 +601,17 @@ class AnthropicLanguageModel:
                 return False
         return False
 
-    def _fit_to_budget(self, budget: int) -> None:
+    def _fit_to_budget(self, session: Session, budget: int) -> None:
         """Trim oldest turns only when over ``budget``.
 
         Trims down to a headroom target, so we drop a chunk and leave room. This keeps
         the cached prefix stable across many turns (cache hits) instead of trimming one
         message every turn (which invalidates the cache every time).
         """
-        if self._history_tokens() <= budget:
+        if self._history_tokens(session) <= budget:
             return  # under budget: don't touch history, keep the cache warm
         target = int(budget * _TRIM_HEADROOM)
-        while self._history_tokens() > target and self._drop_oldest_turn():
+        while self._history_tokens(session) > target and self._drop_oldest_turn(session):
             pass
 
     def _budget(self, overhead: int) -> int:
@@ -646,7 +624,7 @@ class AnthropicLanguageModel:
             8_000, self._window - self._settings.anthropic_max_tokens - overhead - _CONTEXT_SAFETY
         )
 
-    def _send(self, tools: list[dict[str, Any]], overhead: int) -> Any:
+    def _send(self, session: Session, tools: list[dict[str, Any]], overhead: int) -> Any:
         """Create one message, trimming to fit the (dynamic) window.
 
         Retries on a 'too long' rejection (learning the real window from it, so any
@@ -654,14 +632,14 @@ class AnthropicLanguageModel:
         """
         truncated = False
         for _ in range(8):
-            self._fit_to_budget(self._budget(overhead))
+            self._fit_to_budget(session, self._budget(overhead))
             try:
                 return self._client.messages.create(
                     model=self._settings.anthropic_model,
                     max_tokens=self._settings.anthropic_max_tokens,
                     temperature=self._settings.llm_temperature,
-                    system=self._system(),
-                    messages=with_cache_breakpoint(self._history),
+                    system=self._system(session),
+                    messages=with_cache_breakpoint(session.history),
                     tools=tools,
                 )
             except Exception as exc:
@@ -671,10 +649,10 @@ class AnthropicLanguageModel:
                 if limit and limit < self._window:
                     _log.info("cloud context window learned=%d (was %d)", limit, self._window)
                     self._window = limit  # self-correct: tightens _budget next loop
-                if self._drop_oldest_turn():
+                if self._drop_oldest_turn(session):
                     _log.warning("cloud prompt too long — dropped oldest turn, retrying")
                     continue
-                if not truncated and self._truncate_last_user():
+                if not truncated and self._truncate_last_user(session):
                     truncated = True
                     _log.warning("cloud prompt too long — truncated newest message, retrying")
                     continue
@@ -724,34 +702,34 @@ class AnthropicLanguageModel:
         relevant |= identity_tool_names(self._registry.specs())
         return frozenset(relevant)
 
-    def begin_turn(self, user_text: str) -> None:
+    def begin_turn(self, session: Session, user_text: str) -> None:
         """Start a turn: assemble tools, append the user message, reset counters."""
         self._tools = self._assemble_tools(user_text)
         self._overhead = (
-            len(self._system()) + sum(len(str(t)) for t in self._tools)
+            len(self._system(session)) + sum(len(str(t)) for t in self._tools)
         ) // _CHARS_PER_TOKEN
-        self._turn_start = len(self._history)
-        self._history.append({"role": "user", "content": user_text})
+        self._turn_start = len(session.history)
+        session.history.append({"role": "user", "content": user_text})
         self._turn_in = self._turn_out = self._cache_read = self._cache_write = 0
         self._prompt_total = 0
         self._turn_failed = False
         self._turn_error = ""
 
-    def send(self) -> ChatResponse:
+    def send(self, session: Session) -> ChatResponse:
         """Send once; record the assistant blocks; return text + tool calls.
 
         On a cloud failure the turn is abandoned (history rolled back to the start)
         and the stashed error reply is returned directly as the response text (with
         no tool calls), so the harness's round loop breaks and surfaces it as-is.
         """
-        problem = _first_pairing_problem(self._history)
+        problem = _first_pairing_problem(session.history)
         if problem:
             _log.error("history integrity broken before send: %s", problem)
         try:
-            resp = self._send(self._tools, self._overhead)
+            resp = self._send(session, self._tools, self._overhead)
         except Exception as exc:  # cloud rejected/unreachable — stay useful
             _log.warning("cloud request failed: %s", exc)
-            del self._history[self._turn_start :]  # abandon this turn; keep history valid
+            del session.history[self._turn_start :]  # abandon this turn; keep history valid
             self._turn_failed = True
             self._turn_error = (
                 too_long_reply() if is_too_long_error(exc) else cloud_error_reply(exc)
@@ -767,16 +745,18 @@ class AnthropicLanguageModel:
         self._cache_write += cw
         self._prompt_total = in_tok + cr + cw
         content = _get(resp, "content") or []
-        self._history.append({"role": "assistant", "content": [_block_to_dict(b) for b in content]})
+        session.history.append(
+            {"role": "assistant", "content": [_block_to_dict(b) for b in content]}
+        )
         self._last_content = content  # kept so record_results can pair by block id
         calls = parse_tool_uses(content)
         return ChatResponse(text=text_from_content(content), tool_calls=calls)
 
-    def handle_discovery(self, call: ToolCall) -> str | None:
+    def handle_discovery(self, session: Session, call: ToolCall) -> str | None:
         """Anthropic discovers tools server-side (Tool Search Tool), so never inline."""
         return None
 
-    def record_results(self, results: list[tuple[ToolCall, ToolResult]]) -> None:
+    def record_results(self, session: Session, results: list[tuple[ToolCall, ToolResult]]) -> None:
         """Append a user message of tool_results, paired to the last tool_use ids by order."""
         use_ids = [
             _get(b, "id") for b in (self._last_content or []) if _get(b, "type") == "tool_use"
@@ -785,9 +765,9 @@ class AnthropicLanguageModel:
             {"type": "tool_result", "tool_use_id": uid, "content": res.content}
             for uid, (_call, res) in zip(use_ids, results, strict=False)
         ]
-        self._history.append({"role": "user", "content": blocks})
+        session.history.append({"role": "user", "content": blocks})
 
-    def final_answer_no_tools(self) -> str:
+    def final_answer_no_tools(self, session: Session) -> str:
         """One tools-disabled call to synthesize a final reply when the round cap is hit.
 
         The history ends with the last round's tool_results (a complete pairing), so
@@ -800,39 +780,55 @@ class AnthropicLanguageModel:
                 model=self._settings.anthropic_model,
                 max_tokens=self._settings.anthropic_max_tokens,
                 temperature=self._settings.llm_temperature,
-                system=self._system(),
-                messages=with_cache_breakpoint(self._history),
+                system=self._system(session),
+                messages=with_cache_breakpoint(session.history),
             )
         except Exception:
             _log.warning("cloud forced final answer failed")
             return "Sorry, that took too many steps."
         content = _get(resp, "content") or []
-        self._history.append({"role": "assistant", "content": [_block_to_dict(b) for b in content]})
+        session.history.append(
+            {"role": "assistant", "content": [_block_to_dict(b) for b in content]}
+        )
         return text_from_content(content) or "Sorry, that took too many steps."
 
-    def finalize_turn(self) -> None:
+    def finalize_turn(self, session: Session) -> None:
         """Record usage, compact if over threshold, trim to the hard backstop."""
         # A failed send already rolled back this turn's history and returned the
         # error reply; skip the post-turn tail so the context meter keeps the last
         # successful turn's value (matches the pre-harness run_turn early-return).
         if self._turn_failed:
             return
-        self._last_prompt_total = self._prompt_total
-        self._last_cache_read = self._cache_read
-        self._last_cache_write = self._cache_write
         # "This turn in" = freshly-processed input (uncached input + newly cached
         # tokens), NOT input_tokens alone — once the prefix is cached, input_tokens
         # collapses to a handful while cache_write holds the real new content (e.g. a
         # big paste). cache_read is excluded (it's the cheap, already-seen prefix).
-        self._last_turn_in = self._turn_in + self._cache_write
-        self._last_turn_out = self._turn_out
+        last_turn_in = self._turn_in + self._cache_write
+        last_turn_out = self._turn_out
         self._log_usage(
-            self._turn_in, self._turn_out, self._cache_read, self._cache_write, self._prompt_total
+            session,
+            self._turn_in,
+            self._turn_out,
+            self._cache_read,
+            self._cache_write,
+            self._prompt_total,
         )
         # Summarize older turns once we cross the threshold (keeps the gist, shrinks
         # the prompt to a small stable prefix); a hard message cap is the last backstop.
-        self._maybe_compact(self._prompt_total)
-        self._history = trim_history(self._history, _HARD_MAX_MESSAGES)
+        self._maybe_compact(session, self._prompt_total)
+        session.history = trim_history(session.history, _HARD_MAX_MESSAGES)
+        session.last_usage = {
+            "used": self._prompt_total,
+            "window": self._window,
+            "cache_read": self._cache_read,
+            "cache_write": self._cache_write,
+            "turn_in": last_turn_in,
+            "turn_out": last_turn_out,
+            "model": self._settings.anthropic_model,
+            # Estimated session cost in USD; None when this model has no list price
+            # (the UI then hides the cost row instead of showing a misleading $0.00).
+            "price": session.cost.usd if session.cost.priced else None,
+        }
 
     def complete(self, prompt: str, *, temperature: float = 0.0) -> str:
         """One-shot completion via the Anthropic Messages API (no tools).
@@ -860,53 +856,10 @@ class AnthropicLanguageModel:
             if _get(block, "type") == "text"
         ).strip()
 
-    def new_session(self) -> None:
-        """Discard all conversation history and start a fresh session.
-
-        Clears the running summary, per-turn usage trackers, and the session token/cost
-        tally, so both the context meter and the session price reset to empty. The model
-        config (window, client) is untouched — only the conversation is wiped. Drives the
-        chat's "New chat" action.
-        """
-        self._history = []
-        self._summary = ""
-        self._last_prompt_total = 0
-        self._last_cache_read = 0
-        self._last_cache_write = 0
-        self._last_turn_in = 0
-        self._last_turn_out = 0
-        self._session_in = 0
-        self._session_out = 0
-        self._session_cost = 0.0
-        self._session_cost_priced = False
-        _log.info("cloud session reset (new chat)")
-
     @property
     def context_window(self) -> int:
         """The model's prompt-token window (dynamic; for the context meter)."""
         return self._window
-
-    def context_usage(self) -> dict[str, Any] | None:
-        """Context-meter payload for this session, or None before the first turn."""
-        if not self._last_prompt_total:
-            return None
-        return {
-            "used": self._last_prompt_total,
-            "window": self._window,
-            "cache_read": self._last_cache_read,
-            "cache_write": self._last_cache_write,
-            "turn_in": self._last_turn_in,
-            "turn_out": self._last_turn_out,
-            "model": self._settings.anthropic_model,
-            # Estimated session cost in USD; None when this model has no list price
-            # (the UI then hides the cost row instead of showing a misleading $0.00).
-            "price": self._session_cost if self._session_cost_priced else None,
-        }
-
-    @property
-    def last_prompt_tokens(self) -> int:
-        """Real size of the most recent prompt (input + cache read + cache write)."""
-        return self._last_prompt_total
 
 
 def _require_key() -> str:

@@ -35,6 +35,7 @@ from autobot.tools.builtin import FIND_TOOLS
 from autobot.tools.registry import ToolRegistry
 
 if TYPE_CHECKING:
+    from autobot.agent.session import Session
     from autobot.core.interfaces import ToolSelector
     from autobot.memory.store import MemoryStore
 
@@ -70,13 +71,11 @@ class OpenAICompatibleModel:
         self._memory = memory
         self._round_query = ""
         self._pinned: set[str] = set()
-        self._history: list[dict[str, Any]] = []
-        self._summary = ""
-        self._delivery_mode = "voice"
         self._last_prompt_tokens = 0
         self._last_eval_tokens = 0
         self._context_tokens = settings.context_tokens or _DEFAULT_CONTEXT_TOKENS
-        # Per-turn buffers shared by the ChatModel primitives.
+        # Per-turn buffers shared by the ChatModel primitives. Valid only during one
+        # serialized turn; re-initialized in begin_turn from the passed session.
         self._messages: list[dict[str, Any]] = []
         self._sent_start = 0
         self._user_msg: dict[str, Any] = {}
@@ -97,9 +96,9 @@ class OpenAICompatibleModel:
         )
 
     # --- prompt assembly (mirrors Ollama) ---
-    def _assemble(self, user_msg: dict[str, Any]) -> list[dict[str, Any]]:
+    def _assemble(self, session: Session, user_msg: dict[str, Any]) -> list[dict[str, Any]]:
         messages: list[dict[str, Any]] = [
-            {"role": "system", "content": system_prompt(self._delivery_mode)}
+            {"role": "system", "content": system_prompt(session.delivery_mode)}
         ]
         if self._memory is not None:
             profile = self._memory.context()
@@ -111,11 +110,11 @@ class OpenAICompatibleModel:
         meeting = meeting_state_line()
         if meeting:
             messages.append({"role": "system", "content": meeting})
-        if self._summary:
+        if session.summary:
             messages.append(
-                {"role": "system", "content": f"Summary of earlier conversation: {self._summary}"}
+                {"role": "system", "content": f"Summary of earlier conversation: {session.summary}"}
             )
-        messages += self._history
+        messages += session.history
         messages.append(user_msg)
         return messages
 
@@ -194,19 +193,19 @@ class OpenAICompatibleModel:
         return text, calls, assistant
 
     # --- ChatModel primitives ---
-    def begin_turn(self, user_text: str) -> None:
+    def begin_turn(self, session: Session, user_text: str) -> None:
         """Start a turn: reset per-turn state, compact pre-flight, assemble messages."""
         self._user_msg = {"role": "user", "content": user_text}
         self._round_query = user_text
         self._pinned = set()
-        estimated = estimate_tokens(self._assemble(self._user_msg))
+        estimated = estimate_tokens(self._assemble(session, self._user_msg))
         if needs_compaction(estimated, self._context_tokens, self._settings.compact_at):
-            self._compact()
-        self._messages = self._assemble(self._user_msg)
+            self._compact(session)
+        self._messages = self._assemble(session, self._user_msg)
         self._sent_start = len(self._messages)
         self._last_tool_calls = []
 
-    def send(self) -> ChatResponse:
+    def send(self, session: Session) -> ChatResponse:
         """Call the model once, record the assistant message, return text + tool calls."""
         resp = self._create(self._messages)
         text, calls, assistant = self._parse(resp)
@@ -214,13 +213,13 @@ class OpenAICompatibleModel:
         self._last_tool_calls = assistant.get("tool_calls", [])
         return ChatResponse(text=text, tool_calls=calls)
 
-    def handle_discovery(self, call: ToolCall) -> str | None:
+    def handle_discovery(self, session: Session, call: ToolCall) -> str | None:
         """Service a ``find_tools`` call inline; ``None`` for any normal tool call."""
         if call.name == FIND_TOOLS.name and self._selector is not None:
             return self._discover_tools(call.arguments.get("intent", ""))
         return None
 
-    def record_results(self, results: list[tuple[ToolCall, ToolResult]]) -> None:
+    def record_results(self, session: Session, results: list[tuple[ToolCall, ToolResult]]) -> None:
         """Append tool results, paired to the last assistant tool_calls' ids by order."""
         ids = [tc.get("id") for tc in self._last_tool_calls]
         for i, (call, result) in enumerate(results):
@@ -229,7 +228,7 @@ class OpenAICompatibleModel:
                 {"role": "tool", "tool_call_id": tool_call_id, "content": result.content}
             )
 
-    def final_answer_no_tools(self) -> str:
+    def final_answer_no_tools(self, session: Session) -> str:
         """One tools-disabled call to synthesize a reply when the round cap is hit."""
         _log.info("tool-round cap reached; forcing a final answer without tools")
         try:
@@ -241,14 +240,14 @@ class OpenAICompatibleModel:
         self._messages.append(assistant)
         return text or "Sorry, that took too many steps."
 
-    def finalize_turn(self) -> None:
+    def finalize_turn(self, session: Session) -> None:
         """Persist this turn append-only, then post-turn compact + report usage."""
-        self._history.extend([self._user_msg, *self._messages[self._sent_start :]])
-        self._history = trim_history(self._history, _HARD_MAX_MESSAGES)
+        session.history.extend([self._user_msg, *self._messages[self._sent_start :]])
+        session.history = trim_history(session.history, _HARD_MAX_MESSAGES)
         if needs_compaction(
             self._last_prompt_tokens, self._context_tokens, self._settings.compact_at
         ):
-            self._compact()
+            self._compact(session)
         pct = (
             round(100 * self._last_prompt_tokens / self._context_tokens)
             if self._context_tokens
@@ -260,6 +259,18 @@ class OpenAICompatibleModel:
             self._context_tokens,
             pct,
         )
+        if not self._last_prompt_tokens or not self._context_tokens:
+            session.last_usage = None
+            return
+        session.last_usage = {
+            "used": self._last_prompt_tokens,
+            "window": self._context_tokens,
+            "cache_read": None,
+            "cache_write": None,
+            "turn_in": self._last_prompt_tokens,
+            "turn_out": self._last_eval_tokens,
+            "model": self._settings.llm_model,
+        }
 
     def complete(self, prompt: str, *, temperature: float = 0.0) -> str:
         """One-shot completion (no tools, no history)."""
@@ -270,41 +281,15 @@ class OpenAICompatibleModel:
         )
         return (getattr(resp.choices[0].message, "content", None) or "").strip()
 
-    def context_usage(self) -> dict[str, Any] | None:
-        """Context-meter payload, or None pre-turn (no prompt-cache billing here)."""
-        if not self._last_prompt_tokens or not self._context_tokens:
-            return None
-        return {
-            "used": self._last_prompt_tokens,
-            "window": self._context_tokens,
-            "cache_read": None,
-            "cache_write": None,
-            "turn_in": self._last_prompt_tokens,
-            "turn_out": self._last_eval_tokens,
-            "model": self._settings.llm_model,
-        }
-
-    def new_session(self) -> None:
-        """Discard conversation history and start fresh."""
-        self._history = []
-        self._summary = ""
-        self._last_prompt_tokens = 0
-        self._last_eval_tokens = 0
-        _log.info("session reset (new chat)")
-
-    def set_delivery_mode(self, mode: str) -> None:
-        """Set how the next reply is delivered ('chat' = text, else spoken)."""
-        self._delivery_mode = mode
-
     # --- compaction (mirrors Ollama) ---
-    def _compact(self) -> None:
+    def _compact(self, session: Session) -> None:
         keep = self._settings.keep_recent_messages
-        kept = trim_history(self._history, keep) if keep > 0 else []
-        older = self._history[: len(self._history) - len(kept)]
+        kept = trim_history(session.history, keep) if keep > 0 else []
+        older = session.history[: len(session.history) - len(kept)]
         if not older:
             return
         body = (
-            f"Previous summary: {self._summary}\n\n" if self._summary else ""
+            f"Previous summary: {session.summary}\n\n" if session.summary else ""
         ) + render_messages(older)
         try:
             resp = self._client.chat.completions.create(
@@ -315,11 +300,11 @@ class OpenAICompatibleModel:
                 ],
                 temperature=0.0,
             )
-            self._summary = (
+            session.summary = (
                 getattr(resp.choices[0].message, "content", None) or ""
-            ).strip() or self._summary
+            ).strip() or session.summary
         except Exception:
             _log.warning("summarization failed; keeping previous summary")
             return
-        self._history = kept
+        session.history = kept
         _log.info("compacted summarized=%d kept=%d", len(older), len(kept))

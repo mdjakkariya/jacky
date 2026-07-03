@@ -6,15 +6,21 @@ exercised entirely offline. Mirrors the pattern in test_anthropic_llm.py.
 
 from __future__ import annotations
 
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
 from autobot.agent.harness import AgentHarness
+from autobot.agent.session_store import SessionStore
 from autobot.config import Settings
 from autobot.core.types import ToolCall, ToolResult
 from autobot.llm.ollama_llm import OllamaLanguageModel
 from autobot.tools.registry import ToolRegistry, ToolSpec
 from autobot.tools.selection import LexicalToolSelector
+
+
+def _harness(model: OllamaLanguageModel, tmp_path: Path) -> AgentHarness:
+    return AgentHarness(model, SessionStore(str(tmp_path)))
 
 
 def _tc(name: str, args: dict[str, Any]) -> dict[str, Any]:
@@ -69,15 +75,15 @@ def _model(responses: list[Any]) -> OllamaLanguageModel:
     )
 
 
-def test_run_turn_no_tools_returns_text() -> None:
+def test_run_turn_no_tools_returns_text(tmp_path: Path) -> None:
     model = _model([_resp(content="Hello there.")])
     assert (
-        AgentHarness(model).run_turn("hi", lambda c: ToolResult(name=c.name, content=""))
+        _harness(model, tmp_path).run_turn("hi", lambda c: ToolResult(name=c.name, content=""))
         == "Hello there."
     )
 
 
-def test_run_turn_chains_two_tools_in_one_turn() -> None:
+def test_run_turn_chains_two_tools_in_one_turn(tmp_path: Path) -> None:
     # Round 1: list_files. Round 2 (using the result): open_path. Round 3: final text.
     responses = [
         _resp(tool_calls=[_tc("list_files", {"path": "~/Downloads"})]),
@@ -91,12 +97,12 @@ def test_run_turn_chains_two_tools_in_one_turn() -> None:
         executed.append(call.name)
         return ToolResult(name=call.name, content="ok", ok=True)
 
-    reply = AgentHarness(model).run_turn("open my latest screenshot", execute)
+    reply = _harness(model, tmp_path).run_turn("open my latest screenshot", execute)
     assert reply == "Opened your latest screenshot."
     assert executed == ["list_files", "open_path"]  # chained across rounds
 
 
-def test_run_turn_does_not_rerun_a_failing_tool_call() -> None:
+def test_run_turn_does_not_rerun_a_failing_tool_call(tmp_path: Path) -> None:
     # The model re-issues the same failing call; the loop runs it once, then stops.
     responses = [
         _resp(tool_calls=[_tc("open_path", {"path": "/nope"})]),
@@ -109,18 +115,18 @@ def test_run_turn_does_not_rerun_a_failing_tool_call() -> None:
         runs["n"] += 1
         return ToolResult(name=call.name, content="No access. Do NOT retry.", ok=False)
 
-    reply = AgentHarness(model).run_turn("open it", execute)
+    reply = _harness(model, tmp_path).run_turn("open it", execute)
     assert runs["n"] == 1  # the identical repeat was short-circuited
     assert "do not retry" in reply.lower()
 
 
-def test_run_turn_forces_final_answer_at_round_cap() -> None:
+def test_run_turn_forces_final_answer_at_round_cap(tmp_path: Path) -> None:
     # 8 rounds all ask for a (distinct) tool, never converging; at the cap a final
     # tools-disabled call synthesizes the reply (not a canned apology).
     responses = [_resp(tool_calls=[_tc("list_files", {"path": f"/p{i}"})]) for i in range(8)]
     responses.append(_resp(content="Here's what I found so far."))  # forced final, no tools
     model = _model(responses)
-    reply = AgentHarness(model).run_turn(
+    reply = _harness(model, tmp_path).run_turn(
         "dig forever", lambda c: ToolResult(name=c.name, content="ok", ok=True)
     )
     assert reply == "Here's what I found so far."
@@ -128,7 +134,7 @@ def test_run_turn_forces_final_answer_at_round_cap() -> None:
     assert "tools" not in model._client.calls[-1]
 
 
-def test_run_turn_mixed_round_continues_when_one_call_is_new() -> None:
+def test_run_turn_mixed_round_continues_when_one_call_is_new(tmp_path: Path) -> None:
     # A round that mixes a previously-failed repeat with a brand-new call must NOT
     # stop early: the new call runs and the loop proceeds to a final answer.
     responses = [
@@ -149,12 +155,12 @@ def test_run_turn_mixed_round_continues_when_one_call_is_new() -> None:
         ok = call.name != "open_path"
         return ToolResult(name=call.name, content="ok" if ok else "No access.", ok=ok)
 
-    reply = AgentHarness(model).run_turn("open then list", execute)
+    reply = _harness(model, tmp_path).run_turn("open then list", execute)
     assert reply == "Here's the listing."  # did not stop early
     assert runs == ["open_path", "list_files"]  # failed repeat not re-run; new call ran once
 
 
-def test_history_keeps_tool_messages_across_turns() -> None:
+def test_history_keeps_tool_messages_across_turns(tmp_path: Path) -> None:
     # Turn 1 runs a tool; turn 2 must see the prior tool exchange in the sent messages.
     model = _model(
         [
@@ -163,7 +169,7 @@ def test_history_keeps_tool_messages_across_turns() -> None:
             _resp(content="Closed it."),
         ]
     )
-    harness = AgentHarness(model)
+    harness = _harness(model, tmp_path)
     harness.run_turn("open a", lambda c: ToolResult(name=c.name, content="ok", ok=True))
     harness.run_turn("close it", lambda c: ToolResult(name=c.name, content="ok", ok=True))
     sent = model._client.calls[-1]["messages"]
@@ -171,7 +177,7 @@ def test_history_keeps_tool_messages_across_turns() -> None:
     assert "tool" in roles  # the prior turn's tool result is carried into turn 2
 
 
-def test_selector_gates_advertised_tools() -> None:
+def test_selector_gates_advertised_tools(tmp_path: Path) -> None:
     reg = ToolRegistry()
     reg.register(
         ToolSpec(
@@ -195,7 +201,7 @@ def test_selector_gates_advertised_tools() -> None:
     model = OllamaLanguageModel(
         Settings(context_tokens=4096), reg, client=client, selector=selector
     )
-    AgentHarness(model).run_turn(
+    _harness(model, tmp_path).run_turn(
         "what's my battery?", lambda c: ToolResult(name=c.name, content="")
     )
     advertised = {t["function"]["name"] for t in client.calls[0]["tools"]}
@@ -203,12 +209,12 @@ def test_selector_gates_advertised_tools() -> None:
     assert "slack__send" not in advertised  # gated, irrelevant to a battery query
 
 
-def test_no_selector_advertises_all_tools() -> None:
+def test_no_selector_advertises_all_tools(tmp_path: Path) -> None:
     client = _FakeOllama([_resp(content="hi")])
     model = OllamaLanguageModel(
         Settings(context_tokens=4096), _registry(), client=client
     )  # no selector → legacy behavior
-    AgentHarness(model).run_turn("hi", lambda c: ToolResult(name=c.name, content=""))
+    _harness(model, tmp_path).run_turn("hi", lambda c: ToolResult(name=c.name, content=""))
     advertised = {t["function"]["name"] for t in client.calls[0]["tools"]}
     assert advertised == {"list_files", "open_path"}
 
@@ -239,13 +245,13 @@ def _selector(reg: ToolRegistry) -> LexicalToolSelector:
     return LexicalToolSelector(reg, budget=20, core_extra=frozenset(), core_remove=frozenset())
 
 
-def test_find_tools_is_always_advertised_with_selector() -> None:
+def test_find_tools_is_always_advertised_with_selector(tmp_path: Path) -> None:
     reg = _battery_slack_registry()
     client = _FakeOllama([_resp(content="100%.")])
     model = OllamaLanguageModel(
         Settings(context_tokens=4096), reg, client=client, selector=_selector(reg)
     )
-    AgentHarness(model).run_turn(
+    _harness(model, tmp_path).run_turn(
         "what's my battery?", lambda c: ToolResult(name=c.name, content="")
     )
     advertised = {t["function"]["name"] for t in client.calls[0]["tools"]}
@@ -254,7 +260,7 @@ def test_find_tools_is_always_advertised_with_selector() -> None:
     assert "slack__send" not in advertised  # gated + irrelevant → not yet advertised
 
 
-def test_find_tools_call_pins_matches_for_next_round() -> None:
+def test_find_tools_call_pins_matches_for_next_round(tmp_path: Path) -> None:
     reg = _battery_slack_registry()
     # Round 1: the model can't see a slack tool, so it calls find_tools.
     # Round 2: it should now see slack__send (pinned) and call it.
@@ -274,7 +280,7 @@ def test_find_tools_call_pins_matches_for_next_round() -> None:
         executed.append(call.name)
         return ToolResult(name=call.name, content="sent", ok=True)
 
-    reply = AgentHarness(model).run_turn("tell the team hi on slack", execute)
+    reply = _harness(model, tmp_path).run_turn("tell the team hi on slack", execute)
     assert reply == "Sent your message."
     # find_tools was NOT dispatched through the executor (the loop owns it):
     assert executed == ["slack__send"]
@@ -286,7 +292,7 @@ def test_find_tools_call_pins_matches_for_next_round() -> None:
     assert any(m.get("role") == "tool" and m.get("tool_name") == "find_tools" for m in round2_msgs)
 
 
-def test_pins_reset_between_turns() -> None:
+def test_pins_reset_between_turns(tmp_path: Path) -> None:
     reg = _battery_slack_registry()
     responses = [
         _resp(tool_calls=[_tc("find_tools", {"intent": "send a message on slack"})]),
@@ -297,7 +303,7 @@ def test_pins_reset_between_turns() -> None:
     model = OllamaLanguageModel(
         Settings(context_tokens=4096), reg, client=client, selector=_selector(reg)
     )
-    harness = AgentHarness(model)
+    harness = _harness(model, tmp_path)
     harness.run_turn("message slack", lambda c: ToolResult(name=c.name, content="", ok=True))
     assert "slack__send" in model._pinned  # pinned during turn 1
     harness.run_turn("what's my battery?", lambda c: ToolResult(name=c.name, content="", ok=True))

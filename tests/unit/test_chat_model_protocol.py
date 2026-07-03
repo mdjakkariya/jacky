@@ -1,32 +1,27 @@
 from __future__ import annotations
 
-from typing import Any
-
 from autobot.agent.chat_model import ChatModel, ChatResponse
+from autobot.agent.session import Session
 from autobot.core.types import ToolCall, ToolResult
 
 
 class _MinimalModel:
-    def begin_turn(self, user_text: str) -> None: ...
-    def send(self) -> ChatResponse:
+    def begin_turn(self, session: Session, user_text: str) -> None: ...
+    def send(self, session: Session) -> ChatResponse:
         return ChatResponse(text="hi", tool_calls=[])
 
-    def record_results(self, results: list[tuple[ToolCall, ToolResult]]) -> None: ...
-    def handle_discovery(self, call: ToolCall) -> str | None:
+    def record_results(
+        self, session: Session, results: list[tuple[ToolCall, ToolResult]]
+    ) -> None: ...
+    def handle_discovery(self, session: Session, call: ToolCall) -> str | None:
         return None
 
-    def final_answer_no_tools(self) -> str:
+    def final_answer_no_tools(self, session: Session) -> str:
         return ""
 
-    def finalize_turn(self) -> None: ...
+    def finalize_turn(self, session: Session) -> None: ...
     def complete(self, prompt: str, *, temperature: float = 0.0) -> str:
         return ""
-
-    def context_usage(self) -> dict[str, Any] | None:
-        return None
-
-    def new_session(self) -> None: ...
-    def set_delivery_mode(self, mode: str) -> None: ...
 
 
 def test_minimal_model_satisfies_chat_model_protocol() -> None:
