@@ -185,6 +185,58 @@ Every decision continues to be written to `AuditLog`.
   adapter** (JSON-RPC over stdio) so Zed/JetBrains/Kiro drive the same harness — the
   concrete "port to any IDE without rebuilding the core" mechanism.
 
+### 4.6 Differentiators & UX principles (research-backed)
+
+What makes Jack better *to use* than existing coding CLIs, and the principles the
+build must uphold. Each ties to a documented pain point in today's tools.
+
+**The seven differentiators:**
+
+1. **One resumable session, every surface.** The #1 complaint about terminal agents is
+   context loss — "each session starts fresh." Our sessions persist (transcript +
+   summary + checkpoints) and are **resumable and portable**: start a task in the CLI,
+   continue it in the macOS chat drawer (or later an IDE) — *same session id, same
+   context*. No re-establishing context across days or surfaces.
+2. **Coding by voice (macOS).** No other coding agent lets you dictate a change
+   hands-free and watch the plan card appear. Unique to Jack's heritage.
+3. **Any LLM via your key — no lock-in, no surprise pricing.** Directly answers the
+   Cursor credit-pricing / cost-overrun frustration. Bring OpenAI-compatible,
+   Anthropic, Gemini, OpenRouter, or a local endpoint; swap with one flag.
+4. **Warm daemon = instant, stateful CLI.** No cold start (vs. Aider ~2.5s); context
+   lives in the daemon across invocations, so `jack "…"` is immediate and remembers.
+5. **Temporal change graph, not transcript soup.** "A long transcript is a tax on
+   memory." Our primary artifact is the **checkpoint timeline** — a scrubbable graph of
+   what changed each turn, with one-command rewind — not 1,500 lines of logs.
+6. **Trust-persistence-safe by design.** Countering "approve once, exploit forever":
+   session grants are **narrow, explicit, time/scope-bounded, revocable, and audited**
+   — a grant shows exactly what it permits (`Bash(git *)`, not "all commands"), is
+   listed in `jack grants`, and expires with the session.
+7. **Privacy-first, transparent egress.** Secret redaction before any send, per-turn
+   disclosure of *which endpoint receives which bytes*, and a **"0 bytes left your
+   machine" badge** when a local model is selected. Trust as a visible feature.
+
+**UX principles (apply to every surface):**
+
+- **Summary before detail; never dump.** Surface the plan/outcome first; logs and full
+  diffs are progressive-disclosure, one keystroke away. Counters diff-overload and
+  "default to apply-all."
+- **Steer before act.** The plan card is editable — reorder, strike, or amend steps
+  before approving. Progressive autonomy dial (`plan → confirm → auto`) the user raises
+  as trust builds; supervised by default.
+- **Always an escape hatch.** Every turn is undoable (checkpoints); Ctrl-C is graceful
+  (saves partial work); the model can be interrupted and redirected mid-stream.
+- **Ambient cost/context meter + budget guard.** Live tokens/$/ETA always visible; a
+  `max_spend`/`max_time` guard pauses and asks before blowing a budget.
+- **Explain on demand.** "Why this change?" on any hunk; the agent's reasoning is
+  available but not forced into the stream.
+- **Honest failure & doom-loop candor.** On repeated failure the agent *says so*
+  ("I've tried this twice; here's what I know, here are options") instead of silently
+  looping — surfacing the doom-loop guard as a trust signal.
+- **Keyboard-first.** Single-key approvals (`a`/`e`/`q`, `y`/`s`/`n`), fast and
+  muscle-memory-friendly.
+- **Right surface for the task.** CLI for flow/automation, drawer for visual/diff work,
+  voice for hands-free — one engine underneath, so switching costs nothing.
+
 ## 5. Data flow (one coding turn)
 
 ```
