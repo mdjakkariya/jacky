@@ -15,7 +15,6 @@ from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from autobot.core.interfaces import ToolSelector
-    from autobot.core.types import ToolExecutor
 
 from autobot.agent.chat_model import ChatResponse
 from autobot.config import Settings
@@ -30,7 +29,6 @@ _log = get_logger("llm")
 
 _DEFAULT_CONTEXT_TOKENS = 4096  # fallback when the model's window can't be detected
 _HARD_MAX_MESSAGES = 100  # safety backstop so history can't grow unbounded
-_MAX_TOOL_ROUNDS = 8  # cap the plan→tool→result loop so it can't spin forever (cloud parity)
 _CHARS_PER_TOKEN = 4  # rough English token estimate for pre-flight compaction
 
 _SUMMARIZE_INSTRUCTION = (
@@ -454,17 +452,6 @@ class OllamaLanguageModel:
         message = _get(response, "message")
         self._messages.append(_to_message_dict(message))
         return message_content(message) or "Sorry, that took too many steps."
-
-    def run_turn(self, user_text: str, execute: ToolExecutor) -> str:
-        """Handle one user turn end-to-end via the harness.
-
-        This method satisfies the LanguageModel protocol by delegating to
-        AgentHarness, which drives the ChatModel primitives this class now
-        implements.
-        """
-        from autobot.agent.harness import AgentHarness
-
-        return AgentHarness(self).run_turn(user_text, execute)
 
     def complete(self, prompt: str, *, temperature: float = 0.0) -> str:
         """One-shot completion via Ollama chat (no tools advertised).

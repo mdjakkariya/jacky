@@ -318,7 +318,9 @@ def _build_llm(
     from autobot.tools.selection import build_tool_selector
 
     selector = build_tool_selector(settings, registry)
-    return OllamaLanguageModel(settings, registry, transcript, memory=memory, selector=selector)
+    return OllamaLanguageModel(  # type: ignore[return-value]
+        settings, registry, transcript, memory=memory, selector=selector
+    )
 
 
 def build(
