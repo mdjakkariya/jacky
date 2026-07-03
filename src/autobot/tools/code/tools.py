@@ -1,0 +1,95 @@
+r"""Code-editing tools for the coder profile (path-jailed, OS-neutral).
+
+Code-oriented siblings of the assistant's ``fileio`` tools, aligned with claude-code's
+``FileReadTool``/``FileWriteTool``/``FileEditTool``: ``read_file`` returns
+``{n}\t{line}`` line-numbered text (so edits can cite lines), ``write_file`` is
+**create-only** (never clobbers an existing file — that is what ``edit_file`` and, later,
+checkpoints are for), and ``edit_file``/``multi_edit`` apply search/replace blocks via
+:mod:`autobot.tools.code.edits`. Every path is resolved through the shared
+:class:`~autobot.tools.access.AccessBroker`, so the workspace jail, folder grants, and
+audit log apply exactly as they do for the assistant's file tools.
+"""
+
+from __future__ import annotations
+
+from pathlib import Path
+
+from autobot.logging_setup import get_logger
+from autobot.tools.access import AccessBroker, AccessDeniedError
+
+_log = get_logger("coder")
+
+_READ_CHAR_CAP = 100_000  # max chars returned into the conversation
+_READ_LINE_CAP = 2000  # max lines returned in one read_file call (claude-code default)
+
+
+def _read_text(resolved: Path) -> tuple[str | None, str]:
+    """Read a text file. Returns (text, "") on success or (None, error_message)."""
+    if not resolved.exists():
+        return None, f"There's no file at {resolved}."
+    if resolved.is_dir():
+        return None, f"'{resolved.name}' is a folder, not a file."
+    try:
+        data = resolved.read_bytes()
+    except OSError as exc:
+        return None, f"I couldn't read {resolved.name}: {exc}"
+    if b"\x00" in data[:4096]:
+        return None, f"'{resolved.name}' looks like a binary file, so I can't read it as text."
+    return data.decode("utf-8", errors="replace"), ""
+
+
+def read_file(path: str, broker: AccessBroker, offset: int = 1, limit: int = 0) -> str:
+    r"""Return a text file's contents, line-numbered (``{n}\t{line}``), bounded.
+
+    Args:
+        path: File path (relative paths resolve against the active folder).
+        broker: The access broker enforcing the workspace jail and grants.
+        offset: 1-based first line to return (values < 1 are treated as 1).
+        limit: Max lines to return; 0 (default) means up to ``_READ_LINE_CAP``.
+    """
+    if not path:
+        return "Which file should I read? Tell me its path."
+    try:
+        resolved = broker.ensure(path, write=False)
+    except (AccessDeniedError, PermissionError) as exc:
+        return str(exc)
+    text, err = _read_text(resolved)
+    if text is None:
+        return err
+    lines = text.split("\n")
+    if lines and lines[-1] == "":  # a final newline yields a trailing "" — not a line
+        lines = lines[:-1]
+    total = len(lines)
+    start = max(1, offset)
+    count = limit if limit and limit > 0 else _READ_LINE_CAP
+    window = lines[start - 1 : start - 1 + count]
+    numbered = "\n".join(f"{start + idx}\t{line}" for idx, line in enumerate(window))
+    if len(numbered) > _READ_CHAR_CAP:
+        numbered = numbered[:_READ_CHAR_CAP] + "\n…(truncated)"
+    shown = start - 1 + len(window)
+    tail = f"\n…({total - shown} more line(s); read with a higher offset)" if shown < total else ""
+    _log.info("read_file name=%r lines=%d offset=%d", resolved.name, len(window), start)
+    return f"{resolved.name} (lines {start}-{shown} of {total}):\n{numbered}{tail}"
+
+
+def write_file(path: str, content: str, broker: AccessBroker) -> str:
+    """Create a NEW text file (gated; create-only — refuses to overwrite an existing one)."""
+    if not path:
+        return "Where should I save it? Tell me the file path."
+    try:
+        resolved = broker.ensure(path, write=True)
+    except (AccessDeniedError, PermissionError) as exc:
+        return str(exc)
+    if resolved.exists():
+        return (
+            f"'{resolved.name}' already exists — use edit_file or multi_edit to change it "
+            "(write_file only creates new files)."
+        )
+    try:
+        resolved.parent.mkdir(parents=True, exist_ok=True)
+        resolved.write_text(content, encoding="utf-8")
+    except OSError as exc:
+        return f"I couldn't write {resolved.name}: {exc}"
+    n = len(content)
+    _log.info("write_file name=%r chars=%d", resolved.name, n)
+    return f"Wrote {n} character{'s' if n != 1 else ''} to {resolved.name}."
