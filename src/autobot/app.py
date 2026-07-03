@@ -286,10 +286,10 @@ def _build_llm(
     transcript: Transcript,
     memory: MemoryStore | None,
 ) -> AgentHarness:
-    """Pick the language-model backend: local Ollama (default) or Anthropic (opt-in).
+    """Pick the LLM backend: local Ollama (default), Anthropic, or an OpenAI-compatible endpoint.
 
-    Cloud is disclosed and degrades gracefully — a missing key or the missing
-    ``cloud`` extra falls back to local rather than failing startup.
+    The latter two are opt-in. Cloud is disclosed and degrades gracefully — a missing key or
+    the missing ``cloud`` extra falls back to local rather than failing startup.
     """
     log = get_logger("app")
     if settings.llm_provider == "anthropic":
@@ -324,6 +324,11 @@ def _build_llm(
             "llm provider=openai base_url=%s model=%s (OFF-DEVICE)",
             settings.openai_base_url or "(default)",
             settings.llm_model,
+        )
+        print(
+            f"[llm] CLOUD mode — OpenAI-compatible ({settings.llm_model} @ "
+            f"{settings.openai_base_url or 'default endpoint'}). Your requests and remembered "
+            "profile are sent to that endpoint. Actions still run locally."
         )
         selector = build_tool_selector(settings, registry)
         openai_model = OpenAICompatibleModel(

@@ -16,7 +16,7 @@ class _Msg:
 
 
 class _ToolCallObj:
-    def __init__(self, call_id: str, name: str, arguments: str) -> None:
+    def __init__(self, call_id: str | None, name: str, arguments: str) -> None:
         self.id = call_id
         self.type = "function"
         self.function = type("F", (), {"name": name, "arguments": arguments})()
@@ -100,6 +100,33 @@ def test_record_results_appends_tool_message_with_tool_call_id() -> None:
     tool_msgs = [x for x in last if x.get("role") == "tool"]
     assert tool_msgs and tool_msgs[0]["tool_call_id"] == "call_9"
     assert tool_msgs[0]["content"] == "noon"
+
+
+def test_idless_duplicate_tool_calls_get_distinct_tool_call_ids() -> None:
+    # Two id-less calls to the same tool in one round: the fallback must not collapse
+    # both to the same id, or OpenAI's uniqueness requirement (and result pairing) breaks.
+    tc1 = _ToolCallObj(None, "get_time", '{"tz": "utc"}')
+    tc2 = _ToolCallObj(None, "get_time", '{"tz": "pst"}')
+    client = _FakeOpenAI(_Resp(_Msg(None, tool_calls=[tc1, tc2])))
+    m = OpenAICompatibleModel(
+        Settings(llm_provider="openai", openai_base_url="http://x/v1", llm_model="gpt-x"),
+        ToolRegistry(),
+        client=client,
+    )
+    m.begin_turn("times?")
+    resp = m.send()
+    m.record_results(
+        [
+            (resp.tool_calls[0], ToolResult(name="get_time", content="noon")),
+            (resp.tool_calls[1], ToolResult(name="get_time", content="4am")),
+        ]
+    )
+    m.send()
+    last = client.chat.completions.sent[-1]
+    tool_msgs = [x for x in last if x.get("role") == "tool"]
+    ids = [msg["tool_call_id"] for msg in tool_msgs]
+    assert len(ids) == 2
+    assert len(set(ids)) == 2, f"expected distinct tool_call_ids, got {ids}"
 
 
 def test_bad_json_arguments_degrade_to_empty_dict() -> None:

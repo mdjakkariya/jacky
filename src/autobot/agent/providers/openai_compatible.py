@@ -41,6 +41,9 @@ if TYPE_CHECKING:
 _log = get_logger("provider")
 
 _DEFAULT_CONTEXT_TOKENS = 8192
+# Mirrors Ollama's backstop (`llm/ollama_llm.py`) on purpose — kept as a local constant
+# rather than a shared import so the two providers can diverge independently (Anthropic
+# intentionally uses a different backstop). Not drift; don't "fix" by unifying.
 _HARD_MAX_MESSAGES = 100
 _SUMMARIZE_INSTRUCTION = (
     "Summarize the conversation so far in a few sentences. Preserve the user's goals, "
@@ -173,7 +176,10 @@ class OpenAICompatibleModel:
                 args = {}
             if not isinstance(args, dict):
                 args = {}
-            call_id = getattr(tc, "id", None) or name
+            # Fall back to a position-unique id (not just ``name``) so two id-less calls to
+            # the same tool in one round don't collide — OpenAI requires unique
+            # tool_call_ids, and ``record_results`` pairs by this same position anyway.
+            call_id = getattr(tc, "id", None) or f"{name}_{len(recorded_calls)}"
             calls.append(ToolCall(name=name, arguments=args))
             recorded_calls.append(
                 {

@@ -112,7 +112,7 @@ def test_get_settings_returns_config_and_secret_flags(tmp_path: object) -> None:
     body = _settings_client(tmp_path).get("/settings").json()
     assert body["llm_provider"] == "ollama"  # default
     assert "_secrets" in body
-    assert set(body["_secrets"]) == {"anthropic_api_key", "web_api_key"}
+    assert set(body["_secrets"]) == {"anthropic_api_key", "openai_api_key", "web_api_key"}
 
 
 def test_post_settings_persists_and_ignores_unknown_keys(tmp_path: object) -> None:
@@ -137,6 +137,7 @@ def test_setup_reports_needs_setup_until_settings_saved(tmp_path: object) -> Non
     body = client.get("/setup").json()
     assert body["needs_setup"] is True  # no settings file yet -> first run
     assert "has_anthropic_key" in body and "voice_present" in body
+    assert "has_openai_key" in body
     # Saving any setting writes the file -> no longer a first run.
     client.post("/settings", json={"llm_provider": "anthropic"})
     assert client.get("/setup").json()["needs_setup"] is False

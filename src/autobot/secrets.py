@@ -14,12 +14,9 @@ touching a real keyring.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Protocol
+from typing import Protocol
 
 from autobot.logging_setup import get_logger
-
-if TYPE_CHECKING:
-    pass
 
 _log = get_logger("app")
 

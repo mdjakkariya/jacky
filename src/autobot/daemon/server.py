@@ -41,7 +41,7 @@ _log = get_logger("daemon")
 
 # Secrets the Settings view may store (Keychain account names). Anything else is
 # rejected so the endpoint can't write arbitrary Keychain items.
-_SECRET_NAMES = ("anthropic_api_key", "web_api_key")
+_SECRET_NAMES = ("anthropic_api_key", "openai_api_key", "web_api_key")
 
 # Valid values for the ``risk`` field on the /mcp/servers/{id}/tools/{tool} endpoint.
 _VALID_MCP_RISKS = frozenset({"read_only", "write", "destructive"})
@@ -216,6 +216,7 @@ def create_app(
             "needs_setup": not _Path(path).expanduser().exists(),
             "provider": settings.llm_provider,
             "has_anthropic_key": has_secret("anthropic_api_key"),
+            "has_openai_key": has_secret("openai_api_key"),
             "ollama_models": _installed_ollama_models(settings.ollama_host),
             "voice_present": voice.exists(),
         }
