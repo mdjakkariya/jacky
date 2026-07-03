@@ -305,7 +305,7 @@ def _build_llm(
                 f"[llm] CLOUD mode — Claude ({settings.anthropic_model}). Your requests and "
                 "remembered profile are sent to Anthropic. Actions still run locally."
             )
-            return llm
+            return llm  # type: ignore[return-value]
         except ImportError:
             log.warning("cloud LLM extra missing, falling back to local")
             print(

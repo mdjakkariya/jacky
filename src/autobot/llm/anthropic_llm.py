@@ -1,9 +1,11 @@
-"""Anthropic (Claude) implementation of :class:`~autobot.core.interfaces.LanguageModel`.
+"""Anthropic (Claude) implementation of :class:`~autobot.agent.chat_model.ChatModel`.
 
-The optional cloud brain. Same contract as the local Ollama model
-(``run_turn(user_text, execute) -> reply``): it advertises the registry's tools,
-runs any tool calls **through the injected executor** (so the local permission
-gate still guards every action), feeds results back, and returns the final reply.
+The optional cloud brain. Implements the same provider-agnostic turn primitives
+as the local Ollama model (``begin_turn``/``send``/``handle_discovery``/
+``record_results``/``final_answer_no_tools``/``finalize_turn``); the shared
+:class:`~autobot.agent.harness.AgentHarness` drives the tool-round loop, running
+any tool calls **through the injected executor** (so the local permission gate
+still guards every action), feeding results back, and returning the final reply.
 
 Privacy: enabling this sends the conversation text, the injected memory profile,
 and tool schemas/results to Anthropic — but never audio, and never the actions
@@ -16,13 +18,13 @@ client — no network, no key.
 
 from __future__ import annotations
 
-import json
 import re
 from collections.abc import Sequence
 from typing import TYPE_CHECKING, Any
 
+from autobot.agent.chat_model import ChatResponse
 from autobot.config import Settings
-from autobot.core.types import ToolCall, ToolExecutor
+from autobot.core.types import ToolCall, ToolResult
 from autobot.llm.ollama_llm import _SUMMARIZE_INSTRUCTION, system_prompt
 from autobot.logging_setup import get_logger
 from autobot.session_log import NullTranscript, Transcript
@@ -33,7 +35,6 @@ if TYPE_CHECKING:
 
 _log = get_logger("llm")
 
-_MAX_TOOL_ROUNDS = 8  # cap the plan→tool→result loop so it can't spin forever
 _HARD_MAX_MESSAGES = 400  # absolute backstop on list growth; the token budget governs first
 _TRIM_HEADROOM = 0.8  # when we must trim, trim down to this fraction of budget — so we
 # trim in chunks (not one message per turn), keeping the cached prefix stable for many
@@ -428,6 +429,18 @@ class AnthropicLanguageModel:
         self._session_out = 0
         self._session_cost = 0.0
         self._session_cost_priced = False
+        # Per-turn buffers shared by the ChatModel primitives.
+        self._turn_start = 0  # index in _history where this turn began (rollback point)
+        self._tools: list[dict[str, Any]] = []  # this turn's assembled tools payload
+        self._overhead = 0  # estimated system+tools token overhead this turn
+        self._turn_in = 0
+        self._turn_out = 0
+        self._cache_read = 0
+        self._cache_write = 0
+        self._prompt_total = 0
+        self._turn_failed = False  # a send failed this turn -> loop should end
+        self._turn_error = ""  # the reply to return when a send failed
+        self._last_content: Any = []  # last assistant response's content blocks
         if client is not None:  # injected (tests)
             self._client = client
         else:
@@ -711,106 +724,71 @@ class AnthropicLanguageModel:
         relevant |= identity_tool_names(self._registry.specs())
         return frozenset(relevant)
 
-    def run_turn(self, user_text: str, execute: ToolExecutor) -> str:
-        """Handle one turn end-to-end; tool calls run through ``execute`` (the gate).
-
-        Keeps an **append-only** full history (incl. ``tool_use`` / ``tool_result``
-        blocks) so the model has a faithful record of what it did, and so the prefix
-        stays byte-stable for prompt caching. The history is trimmed to fit the context
-        window *before* sending (and on a 'too long' rejection it trims more and
-        retries), so a long session can't get permanently stuck. A cache breakpoint on
-        the last block caches tools + system + prior turns; per-turn we log usage.
-        """
-        tools = self._assemble_tools(user_text)
-        overhead = (len(self._system()) + sum(len(str(t)) for t in tools)) // _CHARS_PER_TOKEN
-        # Append-only: everything for this turn is added to the live history. On a
-        # request failure we roll back to here so a half-built turn can't corrupt it.
-        start = len(self._history)
+    def begin_turn(self, user_text: str) -> None:
+        """Start a turn: assemble tools, append the user message, reset counters."""
+        self._tools = self._assemble_tools(user_text)
+        self._overhead = (
+            len(self._system()) + sum(len(str(t)) for t in self._tools)
+        ) // _CHARS_PER_TOKEN
+        self._turn_start = len(self._history)
         self._history.append({"role": "user", "content": user_text})
+        self._turn_in = self._turn_out = self._cache_read = self._cache_write = 0
+        self._prompt_total = 0
+        self._turn_failed = False
+        self._turn_error = ""
 
-        reply = ""
-        turn_in = turn_out = cache_read = cache_write = prompt_total = 0
-        # Anti-thrash: a tool call that already failed this turn is never re-run (so a
-        # blocking grant card shows once and stays, not flickering on each retry); a
-        # round that only repeats failed calls ends the loop with that explanation.
-        failed: dict[str, str] = {}
-        for _ in range(_MAX_TOOL_ROUNDS):
-            problem = _first_pairing_problem(self._history)
-            if problem:  # should never happen — but if it does, say exactly where
-                _log.error("history integrity broken before send: %s", problem)
-            try:
-                resp = self._send(tools, overhead)
-            except Exception as exc:  # cloud rejected/unreachable — stay useful
-                _log.warning("cloud request failed: %s", exc)
-                del self._history[start:]  # abandon this turn; keep history valid
-                return too_long_reply() if is_too_long_error(exc) else cloud_error_reply(exc)
-            usage = _get(resp, "usage")
-            in_tok = int(_get(usage, "input_tokens") or 0)
-            cr = int(_get(usage, "cache_read_input_tokens") or 0)
-            cw = int(_get(usage, "cache_creation_input_tokens") or 0)
-            turn_in += in_tok
-            turn_out += int(_get(usage, "output_tokens") or 0)
-            cache_read += cr
-            cache_write += cw
-            prompt_total = in_tok + cr + cw  # the real size of this call's prompt
-            content = _get(resp, "content") or []
-            # Record the assistant turn (text and/or tool_use blocks) faithfully.
-            self._history.append(
-                {"role": "assistant", "content": [_block_to_dict(b) for b in content]}
+    def send(self) -> ChatResponse:
+        """Send once; record the assistant blocks; return text + tool calls.
+
+        On a cloud failure the turn is abandoned (history rolled back to the start)
+        and the stashed error reply is returned directly as the response text (with
+        no tool calls), so the harness's round loop breaks and surfaces it as-is.
+        """
+        problem = _first_pairing_problem(self._history)
+        if problem:
+            _log.error("history integrity broken before send: %s", problem)
+        try:
+            resp = self._send(self._tools, self._overhead)
+        except Exception as exc:  # cloud rejected/unreachable — stay useful
+            _log.warning("cloud request failed: %s", exc)
+            del self._history[self._turn_start :]  # abandon this turn; keep history valid
+            self._turn_failed = True
+            self._turn_error = (
+                too_long_reply() if is_too_long_error(exc) else cloud_error_reply(exc)
             )
-            calls = parse_tool_uses(content)
-            if not calls:
-                reply = text_from_content(content)
-                break
-            _log.info("planned tools=%s (cloud)", [c.name for c in calls])
-            results: list[dict[str, Any]] = []
-            all_repeat = True  # did this round only re-issue calls that already failed?
-            last_fail = ""
-            for block in content:
-                if _get(block, "type") != "tool_use":
-                    continue
-                args = _get(block, "input") if isinstance(_get(block, "input"), dict) else {}
-                call = ToolCall(name=_get(block, "name"), arguments=args)
-                key = call.name + "\0" + json.dumps(args, sort_keys=True, default=str)
-                if key in failed:
-                    out = failed[key]  # already failed — reuse, don't re-run (no re-prompt)
-                    last_fail = out
-                else:
-                    all_repeat = False
-                    result = execute(call)  # through the local permission gate
-                    out = result.content
-                    if not result.ok:
-                        failed[key] = result.content
-                        last_fail = result.content
-                results.append(
-                    {"type": "tool_result", "tool_use_id": _get(block, "id"), "content": out}
-                )
-            self._history.append({"role": "user", "content": results})
-            if all_repeat:  # model is just retrying a failing step — stop and explain
-                _log.info("stopping: round repeated only previously-failed tool calls")
-                reply = last_fail or "I couldn't complete that, so I stopped."
-                break
-        else:
-            reply = self._final_answer_no_tools()
+            return ChatResponse(text=self._turn_error, tool_calls=[])
+        usage = _get(resp, "usage")
+        in_tok = int(_get(usage, "input_tokens") or 0)
+        cr = int(_get(usage, "cache_read_input_tokens") or 0)
+        cw = int(_get(usage, "cache_creation_input_tokens") or 0)
+        self._turn_in += in_tok
+        self._turn_out += int(_get(usage, "output_tokens") or 0)
+        self._cache_read += cr
+        self._cache_write += cw
+        self._prompt_total = in_tok + cr + cw
+        content = _get(resp, "content") or []
+        self._history.append({"role": "assistant", "content": [_block_to_dict(b) for b in content]})
+        self._last_content = content  # kept so record_results can pair by block id
+        calls = parse_tool_uses(content)
+        return ChatResponse(text=text_from_content(content), tool_calls=calls)
 
-        self._last_prompt_total = prompt_total
-        self._last_cache_read = cache_read
-        self._last_cache_write = cache_write
-        # "This turn in" = freshly-processed input (uncached input + newly cached
-        # tokens), NOT input_tokens alone — once the prefix is cached, input_tokens
-        # collapses to a handful while cache_write holds the real new content (e.g. a
-        # big paste). cache_read is excluded (it's the cheap, already-seen prefix).
-        self._last_turn_in = turn_in + cache_write
-        self._last_turn_out = turn_out
-        self._log_usage(turn_in, turn_out, cache_read, cache_write, prompt_total)
-        # Summarize older turns once we cross the threshold (keeps the gist, shrinks
-        # the prompt to a small stable prefix); a hard message cap is the last backstop.
-        self._maybe_compact(prompt_total)
-        self._history = trim_history(self._history, _HARD_MAX_MESSAGES)
-        return reply
+    def handle_discovery(self, call: ToolCall) -> str | None:
+        """Anthropic discovers tools server-side (Tool Search Tool), so never inline."""
+        return None
 
-    def _final_answer_no_tools(self) -> str:
-        """One tools-disabled call to synthesize a final reply when the cap is hit.
+    def record_results(self, results: list[tuple[ToolCall, ToolResult]]) -> None:
+        """Append a user message of tool_results, paired to the last tool_use ids by order."""
+        use_ids = [
+            _get(b, "id") for b in (self._last_content or []) if _get(b, "type") == "tool_use"
+        ]
+        blocks = [
+            {"type": "tool_result", "tool_use_id": uid, "content": res.content}
+            for uid, (_call, res) in zip(use_ids, results, strict=False)
+        ]
+        self._history.append({"role": "user", "content": blocks})
+
+    def final_answer_no_tools(self) -> str:
+        """One tools-disabled call to synthesize a final reply when the round cap is hit.
 
         The history ends with the last round's tool_results (a complete pairing), so
         a tool-free request yields a clean final reply. Appends the assistant message
@@ -831,6 +809,25 @@ class AnthropicLanguageModel:
         content = _get(resp, "content") or []
         self._history.append({"role": "assistant", "content": [_block_to_dict(b) for b in content]})
         return text_from_content(content) or "Sorry, that took too many steps."
+
+    def finalize_turn(self) -> None:
+        """Record usage, compact if over threshold, trim to the hard backstop."""
+        self._last_prompt_total = self._prompt_total
+        self._last_cache_read = self._cache_read
+        self._last_cache_write = self._cache_write
+        # "This turn in" = freshly-processed input (uncached input + newly cached
+        # tokens), NOT input_tokens alone — once the prefix is cached, input_tokens
+        # collapses to a handful while cache_write holds the real new content (e.g. a
+        # big paste). cache_read is excluded (it's the cheap, already-seen prefix).
+        self._last_turn_in = self._turn_in + self._cache_write
+        self._last_turn_out = self._turn_out
+        self._log_usage(
+            self._turn_in, self._turn_out, self._cache_read, self._cache_write, self._prompt_total
+        )
+        # Summarize older turns once we cross the threshold (keeps the gist, shrinks
+        # the prompt to a small stable prefix); a hard message cap is the last backstop.
+        self._maybe_compact(self._prompt_total)
+        self._history = trim_history(self._history, _HARD_MAX_MESSAGES)
 
     def complete(self, prompt: str, *, temperature: float = 0.0) -> str:
         """One-shot completion via the Anthropic Messages API (no tools).

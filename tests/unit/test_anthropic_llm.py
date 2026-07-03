@@ -11,6 +11,7 @@ from typing import Any
 
 import pytest
 
+from autobot.agent.harness import AgentHarness
 from autobot.config import Settings
 from autobot.core.types import Risk, ToolCall, ToolResult
 from autobot.llm.anthropic_llm import (
@@ -111,7 +112,7 @@ def test_run_turn_executes_tool_then_returns_final_text() -> None:
         executed.append(call)
         return ToolResult(name=call.name, content="Opened Safari.")
 
-    reply = model.run_turn("open safari", execute)
+    reply = AgentHarness(model).run_turn("open safari", execute)
     assert reply == "Opened Safari for you."
     assert executed == [ToolCall(name="open_app", arguments={"name": "Safari"})]
     # Second API call carried the tool_result back to the model.
@@ -143,7 +144,7 @@ def test_run_turn_stops_repeating_a_failing_tool_call() -> None:
         runs["n"] += 1
         return ToolResult(name=call.name, content="No access. Do NOT retry.", ok=False)
 
-    reply = model.run_turn("open it", execute)
+    reply = AgentHarness(model).run_turn("open it", execute)
     assert runs["n"] == 1  # ran once; the identical repeat was short-circuited
     assert "do not retry" in reply.lower()
 
@@ -161,8 +162,9 @@ def test_history_keeps_tool_blocks_across_turns() -> None:
     model = AnthropicLanguageModel(
         Settings(llm_provider="anthropic"), _registry(), client=FakeClient(responses)
     )
-    model.run_turn("open safari", lambda c: ToolResult(name=c.name, content="Opened Safari."))
-    model.run_turn("close it", lambda c: ToolResult(name=c.name, content=""))
+    harness = AgentHarness(model)
+    harness.run_turn("open safari", lambda c: ToolResult(name=c.name, content="Opened Safari."))
+    harness.run_turn("close it", lambda c: ToolResult(name=c.name, content=""))
 
     # The 3rd API call (turn 2) carries the full prior turn: the tool_use AND its
     # tool_result are in the sent messages, so the model knows what it did.
@@ -263,7 +265,9 @@ def test_recovers_from_prompt_too_long_by_trimming_and_retrying() -> None:
     msgs = _TooLongThenOk(fail_times=3)
     model._client = SimpleNamespace(messages=msgs)
 
-    reply = model.run_turn("new question", lambda c: ToolResult(name=c.name, content=""))
+    reply = AgentHarness(model).run_turn(
+        "new question", lambda c: ToolResult(name=c.name, content="")
+    )
     assert reply == "ok now"  # recovered, not the error reply
     assert msgs.calls == 4  # 3 rejections (each drops a turn) + 1 success
     assert len(model._history) < 14  # oldest turns were trimmed away
@@ -282,7 +286,7 @@ def test_proactive_trim_drops_a_giant_old_turn_before_sending() -> None:
     model._history.append({"role": "user", "content": "x" * 1_000_000})  # ~250k tokens
     model._history.append({"role": "assistant", "content": [{"type": "text", "text": "y"}]})
 
-    model.run_turn("hello", lambda c: ToolResult(name=c.name, content=""))
+    AgentHarness(model).run_turn("hello", lambda c: ToolResult(name=c.name, content=""))
     joined = "".join(str(m.get("content", "")) for m in model._history)
     assert "x" * 1000 not in joined  # the giant turn was dropped to fit the window
 
@@ -337,7 +341,7 @@ def test_learns_smaller_window_from_error_then_fits() -> None:
         model._history.append({"role": "user", "content": f"old {i}"})
         model._history.append({"role": "assistant", "content": [{"type": "text", "text": "r"}]})
     model._client = SimpleNamespace(messages=_Small())
-    reply = model.run_turn("hi", lambda c: ToolResult(name=c.name, content=""))
+    reply = AgentHarness(model).run_turn("hi", lambda c: ToolResult(name=c.name, content=""))
     assert reply == "ok"
     assert model.context_window == 32768  # learned from the rejection, not hardcoded
 
@@ -365,7 +369,7 @@ def test_compaction_summarizes_older_turns_and_keeps_recent() -> None:
         model._history.append({"role": "user", "content": f"u{i}"})
         model._history.append({"role": "assistant", "content": [{"type": "text", "text": f"a{i}"}]})
 
-    reply = model.run_turn("now", lambda c: ToolResult(name=c.name, content=""))
+    reply = AgentHarness(model).run_turn("now", lambda c: ToolResult(name=c.name, content=""))
     assert reply == "ok"
     assert model._summary == "OLDER STUFF SUMMARY"  # older turns folded into a summary
     assert len(model._history) <= 21  # only the recent tail kept verbatim
@@ -403,7 +407,7 @@ def test_too_long_even_after_trim_returns_calm_reply_and_rolls_back() -> None:
         _registry(),
         client=SimpleNamespace(messages=_AlwaysTooLong()),
     )
-    reply = model.run_turn("hi", lambda c: ToolResult(name=c.name, content=""))
+    reply = AgentHarness(model).run_turn("hi", lambda c: ToolResult(name=c.name, content=""))
     assert reply == too_long_reply()
     assert model._history == []  # the half-built turn was rolled back
 
@@ -411,7 +415,10 @@ def test_too_long_even_after_trim_returns_calm_reply_and_rolls_back() -> None:
 def test_run_turn_no_tools_returns_text() -> None:
     responses = [SimpleNamespace(content=[_block(type="text", text="Hello there.")])]
     model = AnthropicLanguageModel(Settings(), _registry(), client=FakeClient(responses))
-    assert model.run_turn("hi", lambda c: ToolResult(name=c.name, content="")) == "Hello there."
+    assert (
+        AgentHarness(model).run_turn("hi", lambda c: ToolResult(name=c.name, content=""))
+        == "Hello there."
+    )
 
 
 class BoomMessages:
@@ -445,7 +452,9 @@ def test_run_turn_returns_calm_reply_on_api_error() -> None:
     model = AnthropicLanguageModel(
         Settings(llm_provider="anthropic"), _registry(), client=BoomClient(err)
     )
-    reply = model.run_turn("how are you", lambda c: ToolResult(name=c.name, content=""))
+    reply = AgentHarness(model).run_turn(
+        "how are you", lambda c: ToolResult(name=c.name, content="")
+    )
     assert "isn't responding" in reply
     assert "404" not in reply
 
@@ -498,7 +507,7 @@ def test_context_usage_reports_session_price_for_priced_model() -> None:
     model = AnthropicLanguageModel(
         Settings(llm_provider="anthropic"), _registry(), client=FakeClient([resp])
     )
-    model.run_turn("hi", lambda c: ToolResult(name=c.name, content=""))
+    AgentHarness(model).run_turn("hi", lambda c: ToolResult(name=c.name, content=""))
     usage = model.context_usage()
     assert usage is not None
     assert usage["price"] == 6.0
@@ -516,7 +525,7 @@ def test_context_usage_price_is_none_for_unpriced_model() -> None:
         _registry(),
         client=FakeClient([resp]),
     )
-    model.run_turn("hi", lambda c: ToolResult(name=c.name, content=""))
+    AgentHarness(model).run_turn("hi", lambda c: ToolResult(name=c.name, content=""))
     usage = model.context_usage()
     assert usage is not None
     assert usage["price"] is None
@@ -533,9 +542,9 @@ def test_session_price_resets_on_new_session() -> None:
     model = AnthropicLanguageModel(
         Settings(llm_provider="anthropic"), _registry(), client=FakeClient([_resp(), _resp()])
     )
-    model.run_turn("hi", lambda c: ToolResult(name=c.name, content=""))
+    AgentHarness(model).run_turn("hi", lambda c: ToolResult(name=c.name, content=""))
     model.new_session()
-    model.run_turn("hi again", lambda c: ToolResult(name=c.name, content=""))
+    AgentHarness(model).run_turn("hi again", lambda c: ToolResult(name=c.name, content=""))
     usage = model.context_usage()
     assert usage is not None
     assert usage["price"] == 6.0  # one turn's cost, not two accumulated
@@ -549,7 +558,7 @@ def test_run_turn_accumulates_token_usage() -> None:
     model = AnthropicLanguageModel(
         Settings(llm_provider="anthropic"), _registry(), client=FakeClient([resp])
     )
-    model.run_turn("hi", lambda c: ToolResult(name=c.name, content=""))
+    AgentHarness(model).run_turn("hi", lambda c: ToolResult(name=c.name, content=""))
     assert model._session_in == 120
     assert model._session_out == 8
 
@@ -583,7 +592,9 @@ def test_run_turn_forces_final_answer_at_round_cap() -> None:
     model = AnthropicLanguageModel(
         Settings(llm_provider="anthropic"), _registry(), client=FakeClient(responses)
     )
-    reply = model.run_turn("loop", lambda c: ToolResult(name=c.name, content="ok", ok=True))
+    reply = AgentHarness(model).run_turn(
+        "loop", lambda c: ToolResult(name=c.name, content="ok", ok=True)
+    )
     assert reply == "Here's what I managed."  # forced final answer, not the canned line
     # The 9th (final) create was made with no tools.
     assert "tools" not in model._client.messages.calls[-1]
@@ -631,7 +642,7 @@ def test_run_turn_advertises_tiered_tools_when_search_supported() -> None:
         _tiered_registry(),
         client=FakeClient([resp]),
     )
-    model.run_turn("hi", lambda c: ToolResult(name=c.name, content=""))
+    AgentHarness(model).run_turn("hi", lambda c: ToolResult(name=c.name, content=""))
     sent = model._client.messages.calls[0]["tools"]
     by_name = {t.get("name"): t for t in sent}
     assert "defer_loading" not in by_name["battery_status"]  # core advertised normally
@@ -651,7 +662,7 @@ def test_run_turn_advertises_all_tools_when_search_off() -> None:
         _tiered_registry(),
         client=FakeClient([resp]),
     )
-    model.run_turn("hi", lambda c: ToolResult(name=c.name, content=""))
+    AgentHarness(model).run_turn("hi", lambda c: ToolResult(name=c.name, content=""))
     sent = model._client.messages.calls[0]["tools"]
     names = {t.get("name") for t in sent}
     assert names == {"battery_status", "slack__send"}  # every tool, legacy shape
@@ -776,7 +787,9 @@ def test_run_turn_surfaces_query_relevant_gated_tool_undeferred() -> None:
         _tiered_registry(),
         client=FakeClient([resp]),
     )
-    model.run_turn("send a slack message", lambda c: ToolResult(name=c.name, content=""))
+    AgentHarness(model).run_turn(
+        "send a slack message", lambda c: ToolResult(name=c.name, content="")
+    )
     by_name = {t.get("name"): t for t in model._client.messages.calls[0]["tools"]}
     assert "defer_loading" not in by_name["slack__send"]  # surfaced by relevance
     assert TOOL_SEARCH_NAME in by_name  # search tool still present as recall net
