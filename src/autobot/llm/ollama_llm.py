@@ -15,9 +15,11 @@ from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from autobot.core.interfaces import ToolSelector
+    from autobot.core.types import ToolExecutor
 
+from autobot.agent.chat_model import ChatResponse
 from autobot.config import Settings
-from autobot.core.types import ToolCall, ToolExecutor
+from autobot.core.types import ToolCall, ToolResult
 from autobot.logging_setup import get_logger
 from autobot.memory.store import MemoryStore
 from autobot.session_log import NullTranscript, Transcript
@@ -286,6 +288,10 @@ class OllamaLanguageModel:
         self._last_eval_tokens = 0  # this turn's generated output (for the "This turn" line)
         self._context_tokens = self._resolve_context()
         _log.info("context window=%d tokens model=%s", self._context_tokens, settings.llm_model)
+        # Per-turn buffers shared by the ChatModel primitives (begin_turn/send/…).
+        self._messages: list[dict[str, Any]] = []  # this turn's working message list
+        self._sent_start = 0  # index in _messages where this turn's tool exchange begins
+        self._user_msg: dict[str, Any] = {}  # this turn's user message (persisted at finalize)
 
     def _resolve_context(self) -> int:
         """Detect the model's context window (or use the configured override)."""
@@ -396,78 +402,69 @@ class OllamaLanguageModel:
         """Set how the next reply is delivered ('chat' = text, else spoken/voice)."""
         self._delivery_mode = mode
 
-    def run_turn(self, user_text: str, execute: ToolExecutor) -> str:
-        """Handle one user turn end-to-end; see the interface for the contract.
-
-        Runs a bounded multi-round tool loop: the model may call tools, see their
-        results, and decide the next action, until it returns no tool calls (the
-        final answer) or the round cap is hit (then one tools-disabled call forces a
-        final answer). A tool call that already failed this turn is reused, never
-        re-run, so a flapping step can't spin the loop.
-        """
-        user_msg = {"role": "user", "content": user_text}
+    def begin_turn(self, user_text: str) -> None:
+        """Start a turn: reset per-turn state, compact pre-flight, assemble messages."""
+        self._user_msg = {"role": "user", "content": user_text}
         self._round_query = user_text  # relevance signal for tool selection this turn
         self._pinned = set()  # find_tools discoveries are per-turn; never leak across turns
-
         # Proactive: compact BEFORE sending if this prompt would cross the budget.
-        estimated = estimate_tokens(self._assemble(user_msg))
+        estimated = estimate_tokens(self._assemble(self._user_msg))
         self._compact_if_needed(estimated, source="preflight")
+        self._messages = self._assemble(self._user_msg)
+        self._sent_start = len(self._messages)
 
-        messages = self._assemble(user_msg)
-        sent_start = len(messages)  # everything appended below is this turn's tool exchange
-        failed: dict[str, str] = {}  # anti-thrash: name+args -> failure text
-        reply = ""
-        for _ in range(_MAX_TOOL_ROUNDS):
-            response = self._chat(messages)
-            message = _get(response, "message")
-            calls = normalize_tool_calls(message)
-            # Record the assistant turn faithfully (text and/or tool_calls).
-            messages.append(_to_message_dict(message))
-            if not calls:
-                _log.debug("planned no tool calls model=%s", self._settings.llm_model)
-                reply = message_content(message)
-                break
-            _log.info(
-                "planned tools=%s model=%s", [c.name for c in calls], self._settings.llm_model
+    def send(self) -> ChatResponse:
+        """Call the model once, record the assistant message, return text + tool calls."""
+        response = self._chat(self._messages)
+        message = _get(response, "message")
+        calls = normalize_tool_calls(message)
+        self._messages.append(_to_message_dict(message))  # record assistant turn faithfully
+        if not calls:
+            _log.debug("planned no tool calls model=%s", self._settings.llm_model)
+        return ChatResponse(text=message_content(message), tool_calls=calls)
+
+    def handle_discovery(self, call: ToolCall) -> str | None:
+        """Service a ``find_tools`` call inline; ``None`` for any normal tool call."""
+        if call.name == FIND_TOOLS.name and self._selector is not None:
+            return self._discover_tools(call.arguments.get("intent", ""))
+        return None
+
+    def record_results(self, results: list[tuple[ToolCall, ToolResult]]) -> None:
+        """Append this round's tool results to the working messages, in call order."""
+        for call, result in results:
+            self._messages.append(
+                {"role": "tool", "tool_name": call.name, "content": result.content}
             )
-            all_repeat = True  # did this round only re-issue calls that already failed?
-            last_fail = ""  # most recent cached failure text this round; used only when all_repeat
-            for call in calls:
-                if call.name == FIND_TOOLS.name and self._selector is not None:
-                    all_repeat = False  # discovery is real progress, not a failing repeat
-                    summary = self._discover_tools(call.arguments.get("intent", ""))
-                    messages.append({"role": "tool", "tool_name": call.name, "content": summary})
-                    continue
-                key = call.name + "\0" + json.dumps(call.arguments, sort_keys=True, default=str)
-                if key in failed:
-                    out = failed[key]  # already failed — reuse, don't re-run
-                    last_fail = out
-                else:
-                    all_repeat = False
-                    # Execution goes through the injected executor (the permission
-                    # gate), never the registry directly — this is the gate's seam.
-                    result = execute(call)
-                    out = result.content
-                    if not result.ok:
-                        failed[key] = out
-                        last_fail = out
-                # In call order: the native API pairs results to calls by order.
-                messages.append({"role": "tool", "tool_name": call.name, "content": out})
-            if all_repeat:  # model is just retrying a failing step — stop and explain
-                _log.info("stopping: round repeated only previously-failed tool calls")
-                reply = last_fail or "I couldn't complete that, so I stopped."
-                break
-        else:
-            reply = self._final_answer_no_tools(messages)
 
-        # Persist this turn append-only: the user message + everything appended in the
-        # loop (assistant tool_calls and each tool result), so a later turn has a real
-        # record of what was done and the KV-cache prefix stays stable.
-        self._history.extend([user_msg, *messages[sent_start:]])
-        self._history = trim_history(self._history, _HARD_MAX_MESSAGES)  # hard backstop
+    def finalize_turn(self) -> None:
+        """Persist this turn append-only, then post-turn compact + report usage."""
+        self._history.extend([self._user_msg, *self._messages[self._sent_start :]])
+        self._history = trim_history(self._history, _HARD_MAX_MESSAGES)
         self._compact_if_needed(self._last_prompt_tokens, source="post-turn")
         self._report_usage()
-        return reply
+
+    def final_answer_no_tools(self) -> str:
+        """One tools-disabled call to synthesize a reply when the round cap is hit."""
+        _log.info("tool-round cap reached; forcing a final answer without tools")
+        try:
+            response = self._chat(self._messages, with_tools=False)
+        except Exception:
+            _log.exception("forced final answer failed")
+            return "Sorry, that took too many steps."
+        message = _get(response, "message")
+        self._messages.append(_to_message_dict(message))
+        return message_content(message) or "Sorry, that took too many steps."
+
+    def run_turn(self, user_text: str, execute: ToolExecutor) -> str:
+        """Handle one user turn end-to-end via the harness.
+
+        This method satisfies the LanguageModel protocol by delegating to
+        AgentHarness, which drives the ChatModel primitives this class now
+        implements.
+        """
+        from autobot.agent.harness import AgentHarness
+
+        return AgentHarness(self).run_turn(user_text, execute)
 
     def complete(self, prompt: str, *, temperature: float = 0.0) -> str:
         """One-shot completion via Ollama chat (no tools advertised).
@@ -497,22 +494,6 @@ class OllamaLanguageModel:
         else:
             response = self._client.chat(**kwargs)
         return str(message_content(_get(response, "message"))).strip()
-
-    def _final_answer_no_tools(self, messages: list[dict[str, Any]]) -> str:
-        """One tools-disabled call to synthesize a reply when the round cap is hit.
-
-        The history ends with the last round's tool results, so a tool-free call
-        yields a clean final reply. Appends the assistant message so it is persisted.
-        """
-        _log.info("tool-round cap reached; forcing a final answer without tools")
-        try:
-            response = self._chat(messages, with_tools=False)
-        except Exception:
-            _log.exception("forced final answer failed")
-            return "Sorry, that took too many steps."
-        message = _get(response, "message")
-        messages.append(_to_message_dict(message))
-        return message_content(message) or "Sorry, that took too many steps."
 
     def context_usage(self) -> dict[str, Any] | None:
         """Context-meter payload, or None pre-turn.

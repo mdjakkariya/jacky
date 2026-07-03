@@ -109,6 +109,7 @@ def test_trim_history_starts_on_a_clean_user_turn() -> None:
 def test_ollama_persists_tool_exchange_in_history() -> None:
     # The local model must keep the assistant tool call + tool result in history
     # (not just the final text), so a later "close it" can resolve what it opened.
+    from autobot.agent.harness import AgentHarness
     from autobot.config import Settings
     from autobot.core.types import ToolResult
     from autobot.llm.ollama_llm import OllamaLanguageModel
@@ -152,8 +153,16 @@ def test_ollama_persists_tool_exchange_in_history() -> None:
     m._summary = ""
     m._last_prompt_tokens = 0
     m._context_tokens = 8192
+    m._messages = []
+    m._sent_start = 0
+    m._user_msg = {}
+    m._round_query = ""
+    m._pinned = set()
+    m._delivery_mode = "chat"
 
-    reply = m.run_turn("open safari", lambda c: ToolResult(name=c.name, content="Opened Safari."))
+    reply = AgentHarness(m).run_turn(
+        "open safari", lambda c: ToolResult(name=c.name, content="Opened Safari.")
+    )
     assert reply == "Opened it."
     roles = [msg.get("role") for msg in m._history]
     assert "tool" in roles  # the tool result is persisted, not dropped

@@ -9,6 +9,7 @@ from __future__ import annotations
 from types import SimpleNamespace
 from typing import Any
 
+from autobot.agent.harness import AgentHarness
 from autobot.config import Settings
 from autobot.core.types import ToolCall, ToolResult
 from autobot.llm.ollama_llm import OllamaLanguageModel
@@ -70,7 +71,10 @@ def _model(responses: list[Any]) -> OllamaLanguageModel:
 
 def test_run_turn_no_tools_returns_text() -> None:
     model = _model([_resp(content="Hello there.")])
-    assert model.run_turn("hi", lambda c: ToolResult(name=c.name, content="")) == "Hello there."
+    assert (
+        AgentHarness(model).run_turn("hi", lambda c: ToolResult(name=c.name, content=""))
+        == "Hello there."
+    )
 
 
 def test_run_turn_chains_two_tools_in_one_turn() -> None:
@@ -87,7 +91,7 @@ def test_run_turn_chains_two_tools_in_one_turn() -> None:
         executed.append(call.name)
         return ToolResult(name=call.name, content="ok", ok=True)
 
-    reply = model.run_turn("open my latest screenshot", execute)
+    reply = AgentHarness(model).run_turn("open my latest screenshot", execute)
     assert reply == "Opened your latest screenshot."
     assert executed == ["list_files", "open_path"]  # chained across rounds
 
@@ -105,7 +109,7 @@ def test_run_turn_does_not_rerun_a_failing_tool_call() -> None:
         runs["n"] += 1
         return ToolResult(name=call.name, content="No access. Do NOT retry.", ok=False)
 
-    reply = model.run_turn("open it", execute)
+    reply = AgentHarness(model).run_turn("open it", execute)
     assert runs["n"] == 1  # the identical repeat was short-circuited
     assert "do not retry" in reply.lower()
 
@@ -116,7 +120,9 @@ def test_run_turn_forces_final_answer_at_round_cap() -> None:
     responses = [_resp(tool_calls=[_tc("list_files", {"path": f"/p{i}"})]) for i in range(8)]
     responses.append(_resp(content="Here's what I found so far."))  # forced final, no tools
     model = _model(responses)
-    reply = model.run_turn("dig forever", lambda c: ToolResult(name=c.name, content="ok", ok=True))
+    reply = AgentHarness(model).run_turn(
+        "dig forever", lambda c: ToolResult(name=c.name, content="ok", ok=True)
+    )
     assert reply == "Here's what I found so far."
     # The final call was made with tools disabled.
     assert "tools" not in model._client.calls[-1]
@@ -143,7 +149,7 @@ def test_run_turn_mixed_round_continues_when_one_call_is_new() -> None:
         ok = call.name != "open_path"
         return ToolResult(name=call.name, content="ok" if ok else "No access.", ok=ok)
 
-    reply = model.run_turn("open then list", execute)
+    reply = AgentHarness(model).run_turn("open then list", execute)
     assert reply == "Here's the listing."  # did not stop early
     assert runs == ["open_path", "list_files"]  # failed repeat not re-run; new call ran once
 
@@ -157,8 +163,9 @@ def test_history_keeps_tool_messages_across_turns() -> None:
             _resp(content="Closed it."),
         ]
     )
-    model.run_turn("open a", lambda c: ToolResult(name=c.name, content="ok", ok=True))
-    model.run_turn("close it", lambda c: ToolResult(name=c.name, content="ok", ok=True))
+    harness = AgentHarness(model)
+    harness.run_turn("open a", lambda c: ToolResult(name=c.name, content="ok", ok=True))
+    harness.run_turn("close it", lambda c: ToolResult(name=c.name, content="ok", ok=True))
     sent = model._client.calls[-1]["messages"]
     roles = [m.get("role") for m in sent]
     assert "tool" in roles  # the prior turn's tool result is carried into turn 2
@@ -188,7 +195,9 @@ def test_selector_gates_advertised_tools() -> None:
     model = OllamaLanguageModel(
         Settings(context_tokens=4096), reg, client=client, selector=selector
     )
-    model.run_turn("what's my battery?", lambda c: ToolResult(name=c.name, content=""))
+    AgentHarness(model).run_turn(
+        "what's my battery?", lambda c: ToolResult(name=c.name, content="")
+    )
     advertised = {t["function"]["name"] for t in client.calls[0]["tools"]}
     assert "battery_status" in advertised  # core, always advertised
     assert "slack__send" not in advertised  # gated, irrelevant to a battery query
@@ -199,7 +208,7 @@ def test_no_selector_advertises_all_tools() -> None:
     model = OllamaLanguageModel(
         Settings(context_tokens=4096), _registry(), client=client
     )  # no selector → legacy behavior
-    model.run_turn("hi", lambda c: ToolResult(name=c.name, content=""))
+    AgentHarness(model).run_turn("hi", lambda c: ToolResult(name=c.name, content=""))
     advertised = {t["function"]["name"] for t in client.calls[0]["tools"]}
     assert advertised == {"list_files", "open_path"}
 
@@ -236,7 +245,9 @@ def test_find_tools_is_always_advertised_with_selector() -> None:
     model = OllamaLanguageModel(
         Settings(context_tokens=4096), reg, client=client, selector=_selector(reg)
     )
-    model.run_turn("what's my battery?", lambda c: ToolResult(name=c.name, content=""))
+    AgentHarness(model).run_turn(
+        "what's my battery?", lambda c: ToolResult(name=c.name, content="")
+    )
     advertised = {t["function"]["name"] for t in client.calls[0]["tools"]}
     assert "find_tools" in advertised  # always, even when no gated tool matched
     assert "battery_status" in advertised  # core
@@ -263,7 +274,7 @@ def test_find_tools_call_pins_matches_for_next_round() -> None:
         executed.append(call.name)
         return ToolResult(name=call.name, content="sent", ok=True)
 
-    reply = model.run_turn("tell the team hi on slack", execute)
+    reply = AgentHarness(model).run_turn("tell the team hi on slack", execute)
     assert reply == "Sent your message."
     # find_tools was NOT dispatched through the executor (the loop owns it):
     assert executed == ["slack__send"]
@@ -286,9 +297,10 @@ def test_pins_reset_between_turns() -> None:
     model = OllamaLanguageModel(
         Settings(context_tokens=4096), reg, client=client, selector=_selector(reg)
     )
-    model.run_turn("message slack", lambda c: ToolResult(name=c.name, content="", ok=True))
+    harness = AgentHarness(model)
+    harness.run_turn("message slack", lambda c: ToolResult(name=c.name, content="", ok=True))
     assert "slack__send" in model._pinned  # pinned during turn 1
-    model.run_turn("what's my battery?", lambda c: ToolResult(name=c.name, content="", ok=True))
+    harness.run_turn("what's my battery?", lambda c: ToolResult(name=c.name, content="", ok=True))
     assert model._pinned == set()  # reset at the start of turn 2
     # Turn 2's first round must NOT carry turn 1's pin into the advertised set:
     turn2_tools = {t["function"]["name"] for t in client.calls[-1]["tools"]}
