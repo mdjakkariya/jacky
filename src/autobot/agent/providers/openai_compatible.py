@@ -1,0 +1,319 @@
+"""OpenAI-compatible ``chat.completions`` adapter implementing :class:`ChatModel`.
+
+Speaks the OpenAI Chat Completions dialect, which OpenAI, OpenRouter, Groq,
+Together, DeepSeek, Mistral, local vLLM/LM Studio, Gemini's OpenAI-compat
+endpoint, and Ollama's ``/v1`` all accept — so "any LLM via API key" is one
+adapter parameterized by base URL + model + key. Structure mirrors
+:class:`~autobot.llm.ollama_llm.OllamaLanguageModel` (same message shape); the
+differences are the SDK call, response parsing, and ``tool_call_id`` pairing.
+
+Using a cloud endpoint sends the conversation + tool schemas/results to that
+provider — a disclosed, opt-in exception (like the Anthropic path). The key is
+read from the keyring; audio never leaves the device.
+"""
+
+from __future__ import annotations
+
+import json
+from typing import TYPE_CHECKING, Any
+
+from autobot.agent.chat_model import ChatResponse
+from autobot.config import Settings
+from autobot.core.types import ToolCall, ToolResult
+from autobot.llm.ollama_llm import (
+    active_folder_line,
+    estimate_tokens,
+    meeting_state_line,
+    needs_compaction,
+    render_messages,
+    system_prompt,
+    trim_history,
+)
+from autobot.logging_setup import get_logger
+from autobot.session_log import NullTranscript, Transcript
+from autobot.tools.builtin import FIND_TOOLS
+from autobot.tools.registry import ToolRegistry
+
+if TYPE_CHECKING:
+    from autobot.core.interfaces import ToolSelector
+    from autobot.memory.store import MemoryStore
+
+_log = get_logger("provider")
+
+_DEFAULT_CONTEXT_TOKENS = 8192
+_HARD_MAX_MESSAGES = 100
+_SUMMARIZE_INSTRUCTION = (
+    "Summarize the conversation so far in a few sentences. Preserve the user's goals, "
+    "key facts, decisions, and any tool/web results. Be concise; this replaces older turns."
+)
+
+
+class OpenAICompatibleModel:
+    """Runs turns against any OpenAI-compatible chat.completions endpoint."""
+
+    def __init__(
+        self,
+        settings: Settings,
+        registry: ToolRegistry,
+        transcript: Transcript | None = None,
+        memory: MemoryStore | None = None,
+        client: Any | None = None,
+        selector: ToolSelector | None = None,
+    ) -> None:
+        self._settings = settings
+        self._registry = registry
+        self._selector = selector
+        self._transcript = transcript or NullTranscript()
+        self._memory = memory
+        self._round_query = ""
+        self._pinned: set[str] = set()
+        self._history: list[dict[str, Any]] = []
+        self._summary = ""
+        self._delivery_mode = "voice"
+        self._last_prompt_tokens = 0
+        self._last_eval_tokens = 0
+        self._context_tokens = settings.context_tokens or _DEFAULT_CONTEXT_TOKENS
+        # Per-turn buffers shared by the ChatModel primitives.
+        self._messages: list[dict[str, Any]] = []
+        self._sent_start = 0
+        self._user_msg: dict[str, Any] = {}
+        self._last_tool_calls: list[dict[str, Any]] = []  # assistant tool_calls to pair results
+        if client is not None:
+            self._client = client
+        else:
+            from openai import OpenAI
+
+            from autobot.secrets import get_secret
+
+            key = get_secret("openai_api_key") or "not-needed"  # local servers ignore the key
+            self._client = OpenAI(base_url=settings.openai_base_url or None, api_key=key)
+        _log.info(
+            "openai-compatible ready base_url=%s model=%s",
+            settings.openai_base_url or "(default)",
+            settings.llm_model,
+        )
+
+    # --- prompt assembly (mirrors Ollama) ---
+    def _assemble(self, user_msg: dict[str, Any]) -> list[dict[str, Any]]:
+        messages: list[dict[str, Any]] = [
+            {"role": "system", "content": system_prompt(self._delivery_mode)}
+        ]
+        if self._memory is not None:
+            profile = self._memory.context()
+            if profile:
+                messages.append({"role": "system", "content": profile})
+        folder = active_folder_line()
+        if folder:
+            messages.append({"role": "system", "content": folder})
+        meeting = meeting_state_line()
+        if meeting:
+            messages.append({"role": "system", "content": meeting})
+        if self._summary:
+            messages.append(
+                {"role": "system", "content": f"Summary of earlier conversation: {self._summary}"}
+            )
+        messages += self._history
+        messages.append(user_msg)
+        return messages
+
+    def _tools_for_round(self) -> list[dict[str, Any]]:
+        if self._selector is None:
+            return self._registry.schemas()
+        selected = self._selector.select(self._round_query, pinned=frozenset(self._pinned))
+        return [spec.to_schema() for spec in selected] + [FIND_TOOLS.to_schema()]
+
+    def _discover_tools(self, intent: str) -> str:
+        if self._selector is None:
+            return "Tool discovery is unavailable."
+        names = self._selector.search(intent)
+        self._pinned.update(names)
+        specs = [self._registry.get(n) for n in names]
+        found = [s for s in specs if s is not None]
+        if not found:
+            return f"No tools found for: {intent}. Tell the user you can't do that."
+        return "Found these tools (now available to call):\n" + "\n".join(
+            f"- {s.name}: {s.description}" for s in found
+        )
+
+    # --- one model call ---
+    def _create(self, messages: list[dict[str, Any]], *, with_tools: bool = True) -> Any:
+        kwargs: dict[str, Any] = {
+            "model": self._settings.llm_model,
+            "messages": messages,
+            "temperature": self._settings.llm_temperature,
+        }
+        if with_tools:
+            tools = self._tools_for_round()
+            if tools:
+                kwargs["tools"] = tools
+        resp = self._client.chat.completions.create(**kwargs)
+        usage = getattr(resp, "usage", None)
+        self._last_prompt_tokens = int(getattr(usage, "prompt_tokens", 0) or 0)
+        self._last_eval_tokens = int(getattr(usage, "completion_tokens", 0) or 0)
+        return resp
+
+    @staticmethod
+    def _parse(resp: Any) -> tuple[str, list[ToolCall], dict[str, Any]]:
+        """Return (text, tool_calls, assistant_message_dict) from a completion."""
+        choice = resp.choices[0]
+        msg = choice.message
+        text = (getattr(msg, "content", None) or "").strip()
+        raw_calls = getattr(msg, "tool_calls", None) or []
+        calls: list[ToolCall] = []
+        recorded_calls: list[dict[str, Any]] = []
+        for tc in raw_calls:
+            fn = getattr(tc, "function", None)
+            name = getattr(fn, "name", None)
+            if not name:
+                continue
+            args_str = getattr(fn, "arguments", None) or "{}"
+            try:
+                args = json.loads(args_str)
+            except (ValueError, TypeError):
+                args = {}
+            if not isinstance(args, dict):
+                args = {}
+            call_id = getattr(tc, "id", None) or name
+            calls.append(ToolCall(name=name, arguments=args))
+            recorded_calls.append(
+                {
+                    "id": call_id,
+                    "type": "function",
+                    "function": {"name": name, "arguments": args_str},
+                }
+            )
+        assistant: dict[str, Any] = {"role": "assistant", "content": text or None}
+        if recorded_calls:
+            assistant["tool_calls"] = recorded_calls
+        return text, calls, assistant
+
+    # --- ChatModel primitives ---
+    def begin_turn(self, user_text: str) -> None:
+        """Start a turn: reset per-turn state, compact pre-flight, assemble messages."""
+        self._user_msg = {"role": "user", "content": user_text}
+        self._round_query = user_text
+        self._pinned = set()
+        estimated = estimate_tokens(self._assemble(self._user_msg))
+        if needs_compaction(estimated, self._context_tokens, self._settings.compact_at):
+            self._compact()
+        self._messages = self._assemble(self._user_msg)
+        self._sent_start = len(self._messages)
+        self._last_tool_calls = []
+
+    def send(self) -> ChatResponse:
+        """Call the model once, record the assistant message, return text + tool calls."""
+        resp = self._create(self._messages)
+        text, calls, assistant = self._parse(resp)
+        self._messages.append(assistant)
+        self._last_tool_calls = assistant.get("tool_calls", [])
+        return ChatResponse(text=text, tool_calls=calls)
+
+    def handle_discovery(self, call: ToolCall) -> str | None:
+        """Service a ``find_tools`` call inline; ``None`` for any normal tool call."""
+        if call.name == FIND_TOOLS.name and self._selector is not None:
+            return self._discover_tools(call.arguments.get("intent", ""))
+        return None
+
+    def record_results(self, results: list[tuple[ToolCall, ToolResult]]) -> None:
+        """Append tool results, paired to the last assistant tool_calls' ids by order."""
+        ids = [tc.get("id") for tc in self._last_tool_calls]
+        for i, (call, result) in enumerate(results):
+            tool_call_id = ids[i] if i < len(ids) else call.name
+            self._messages.append(
+                {"role": "tool", "tool_call_id": tool_call_id, "content": result.content}
+            )
+
+    def final_answer_no_tools(self) -> str:
+        """One tools-disabled call to synthesize a reply when the round cap is hit."""
+        _log.info("tool-round cap reached; forcing a final answer without tools")
+        try:
+            resp = self._create(self._messages, with_tools=False)
+        except Exception:
+            _log.exception("forced final answer failed")
+            return "Sorry, that took too many steps."
+        text, _calls, assistant = self._parse(resp)
+        self._messages.append(assistant)
+        return text or "Sorry, that took too many steps."
+
+    def finalize_turn(self) -> None:
+        """Persist this turn append-only, then post-turn compact + report usage."""
+        self._history.extend([self._user_msg, *self._messages[self._sent_start :]])
+        self._history = trim_history(self._history, _HARD_MAX_MESSAGES)
+        if needs_compaction(
+            self._last_prompt_tokens, self._context_tokens, self._settings.compact_at
+        ):
+            self._compact()
+        pct = (
+            round(100 * self._last_prompt_tokens / self._context_tokens)
+            if self._context_tokens
+            else 0
+        )
+        _log.info(
+            "turn prompt_tokens=%d ctx=%d pct=%d",
+            self._last_prompt_tokens,
+            self._context_tokens,
+            pct,
+        )
+
+    def complete(self, prompt: str, *, temperature: float = 0.0) -> str:
+        """One-shot completion (no tools, no history)."""
+        resp = self._client.chat.completions.create(
+            model=self._settings.llm_model,
+            messages=[{"role": "user", "content": prompt}],
+            temperature=temperature,
+        )
+        return (getattr(resp.choices[0].message, "content", None) or "").strip()
+
+    def context_usage(self) -> dict[str, Any] | None:
+        """Context-meter payload, or None pre-turn (no prompt-cache billing here)."""
+        if not self._last_prompt_tokens or not self._context_tokens:
+            return None
+        return {
+            "used": self._last_prompt_tokens,
+            "window": self._context_tokens,
+            "cache_read": None,
+            "cache_write": None,
+            "turn_in": self._last_prompt_tokens,
+            "turn_out": self._last_eval_tokens,
+            "model": self._settings.llm_model,
+        }
+
+    def new_session(self) -> None:
+        """Discard conversation history and start fresh."""
+        self._history = []
+        self._summary = ""
+        self._last_prompt_tokens = 0
+        self._last_eval_tokens = 0
+        _log.info("session reset (new chat)")
+
+    def set_delivery_mode(self, mode: str) -> None:
+        """Set how the next reply is delivered ('chat' = text, else spoken)."""
+        self._delivery_mode = mode
+
+    # --- compaction (mirrors Ollama) ---
+    def _compact(self) -> None:
+        keep = self._settings.keep_recent_messages
+        kept = trim_history(self._history, keep) if keep > 0 else []
+        older = self._history[: len(self._history) - len(kept)]
+        if not older:
+            return
+        body = (
+            f"Previous summary: {self._summary}\n\n" if self._summary else ""
+        ) + render_messages(older)
+        try:
+            resp = self._client.chat.completions.create(
+                model=self._settings.llm_model,
+                messages=[
+                    {"role": "system", "content": _SUMMARIZE_INSTRUCTION},
+                    {"role": "user", "content": body},
+                ],
+                temperature=0.0,
+            )
+            self._summary = (
+                getattr(resp.choices[0].message, "content", None) or ""
+            ).strip() or self._summary
+        except Exception:
+            _log.warning("summarization failed; keeping previous summary")
+            return
+        self._history = kept
+        _log.info("compacted summarized=%d kept=%d", len(older), len(kept))

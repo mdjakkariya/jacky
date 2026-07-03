@@ -83,6 +83,11 @@ class Settings:
     llm_provider: str = "ollama"
     llm_model: str = _DEFAULT_LLM_MODEL
     ollama_host: str = _DEFAULT_OLLAMA_HOST
+    # OpenAI-compatible provider ("openai"): any endpoint speaking chat.completions
+    # (OpenAI, OpenRouter, Groq, Together, DeepSeek, Mistral, local vLLM/LM Studio,
+    # Gemini's OpenAI-compat endpoint). The model id is llm_model; the key is stored
+    # in the keyring under "openai_api_key". Blank base_url uses the SDK default (OpenAI).
+    openai_base_url: str = ""
     anthropic_model: str = _DEFAULT_ANTHROPIC_MODEL
     anthropic_max_tokens: int = 512
     # Cloud context window (prompt-token budget). 0 -> resolve from a per-model
