@@ -1,64 +1,79 @@
-"""macOS Keychain-backed secret storage for API keys.
+"""Cross-platform keyring-backed secret storage for API keys.
 
-Secrets (e.g. the Anthropic or web-search API key) never touch ``settings.json``
-or the logs — they live in the login Keychain, encrypted by macOS. We shell out
-to the ``security`` CLI under one service name (``autobot``), keyed by an account
-name like ``anthropic_api_key``.
+Secrets (e.g. an Anthropic / OpenAI / web-search API key) never touch
+``settings.json`` or the logs — they live in the OS secret store via the
+``keyring`` library: the login Keychain on macOS, Credential Locker on Windows,
+and the Secret Service (libsecret) on Linux. All are stored under one service
+name (``autobot``), keyed by an account name like ``anthropic_api_key``.
 
-On a non-macOS host (or if ``security`` is unavailable), :func:`get_secret`
-returns ``None`` and the setters no-op, so the rest of the app degrades cleanly.
-A ``Runner`` is injected so the logic is unit-tested without touching a real
-Keychain.
+If no keyring backend is available (a headless Linux box with no Secret Service,
+say), reads return ``None`` and writes fail gracefully, so the rest of the app
+degrades cleanly. A ``backend`` is injectable so the logic is unit-tested without
+touching a real keyring.
 """
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from typing import TYPE_CHECKING, Protocol
+
+from autobot.logging_setup import get_logger
+
+if TYPE_CHECKING:
+    pass
+
+_log = get_logger("app")
 
 _SERVICE = "autobot"
 
-RunResult = tuple[int, str]
-Runner = Callable[[list[str]], RunResult]
+
+class _Backend(Protocol):
+    """The subset of the ``keyring`` API we use (so tests can inject a fake)."""
+
+    def get_password(self, service: str, name: str) -> str | None: ...
+    def set_password(self, service: str, name: str, value: str) -> None: ...
+    def delete_password(self, service: str, name: str) -> None: ...
 
 
-def _subprocess_runner(args: list[str]) -> RunResult:
-    """Default runner: run ``args`` (no shell) and return (code, output)."""
-    import subprocess
+def _default_backend() -> _Backend:
+    """The real ``keyring`` module (imported lazily so tests need no backend)."""
+    import keyring
 
-    try:
-        proc = subprocess.run(args, capture_output=True, text=True, timeout=10, check=False)
-    except FileNotFoundError:
-        return 127, "security not found"
-    except subprocess.TimeoutExpired:
-        return 124, "timed out"
-    return proc.returncode, ((proc.stdout or "") + (proc.stderr or "")).strip()
+    return keyring
 
 
-def get_secret(name: str, runner: Runner | None = None) -> str | None:
+def get_secret(name: str, backend: _Backend | None = None) -> str | None:
     """Return the secret stored under ``name``, or ``None`` if not set/unavailable."""
-    run = runner or _subprocess_runner
-    rc, out = run(["security", "find-generic-password", "-s", _SERVICE, "-a", name, "-w"])
-    if rc != 0:
+    kr = backend or _default_backend()
+    try:
+        value = kr.get_password(_SERVICE, name)
+    except Exception as exc:  # no backend, locked store, etc. — degrade cleanly
+        _log.debug("keyring get failed for %s: %s", name, exc)
         return None
-    value = out.strip()
     return value or None
 
 
-def set_secret(name: str, value: str, runner: Runner | None = None) -> bool:
+def set_secret(name: str, value: str, backend: _Backend | None = None) -> bool:
     """Store ``value`` under ``name`` (replacing any existing). Returns success."""
-    run = runner or _subprocess_runner
-    # -U updates the item if it already exists.
-    rc, _ = run(["security", "add-generic-password", "-U", "-s", _SERVICE, "-a", name, "-w", value])
-    return rc == 0
+    kr = backend or _default_backend()
+    try:
+        kr.set_password(_SERVICE, name, value)
+    except Exception as exc:
+        _log.warning("keyring set failed for %s: %s", name, exc)
+        return False
+    return True
 
 
-def delete_secret(name: str, runner: Runner | None = None) -> bool:
-    """Remove the secret stored under ``name``. Returns success."""
-    run = runner or _subprocess_runner
-    rc, _ = run(["security", "delete-generic-password", "-s", _SERVICE, "-a", name])
-    return rc == 0
+def delete_secret(name: str, backend: _Backend | None = None) -> bool:
+    """Remove the secret stored under ``name``. Returns success (False if absent)."""
+    kr = backend or _default_backend()
+    try:
+        kr.delete_password(_SERVICE, name)
+    except Exception as exc:  # PasswordDeleteError when absent, or no backend
+        _log.debug("keyring delete failed for %s: %s", name, exc)
+        return False
+    return True
 
 
-def has_secret(name: str, runner: Runner | None = None) -> bool:
+def has_secret(name: str, backend: _Backend | None = None) -> bool:
     """Whether a secret is stored under ``name`` (without revealing it)."""
-    return get_secret(name, runner) is not None
+    return get_secret(name, backend) is not None

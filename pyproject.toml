@@ -15,6 +15,7 @@ dependencies = [
     "faster-whisper>=1.0.0", # English-only STT (CTranslate2 backend)
     "sounddevice>=0.4.6",    # mic capture; bundles PortAudio in its wheel
     "ollama>=0.4.0",         # local LLM client with tool calling
+    "keyring>=25",           # cross-platform OS secret store (Keychain/Credential Locker/Secret Service)
 ]
 
 [project.optional-dependencies]
