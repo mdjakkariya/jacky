@@ -190,6 +190,16 @@ def test_multi_edit_tolerates_malformed_edits(tmp_path: Path) -> None:
     assert "malformed" in out.lower()
 
 
+def test_multi_edit_rejects_non_list_edits(tmp_path: Path) -> None:
+    # A truthy non-list `edits` (e.g. the model sends a scalar) must not raise.
+    f = tmp_path / "m.py"
+    f.write_text("a = 1\n")
+    out = multi_edit(str(f), 5, _broker(tmp_path))  # type: ignore[arg-type]
+    assert isinstance(out, str)
+    assert f.read_text() == "a = 1\n"
+    assert "list" in out.lower()
+
+
 def _registry(tmp_path: Path) -> ToolRegistry:
     reg = ToolRegistry()
     register_code_tools(reg, _broker(tmp_path))

@@ -135,6 +135,8 @@ def multi_edit(path: str, edits: list[dict[str, str]] | None, broker: AccessBrok
         return "Which file should I edit? Tell me its path."
     if not edits:
         return "No edits to apply — pass a list of {find, replace} objects."
+    if not isinstance(edits, list):  # untrusted JSON: a scalar would raise on iteration
+        return "The `edits` value must be a list of {find, replace} objects."
     try:
         resolved = broker.ensure(path, write=True)
     except (AccessDeniedError, PermissionError) as exc:
