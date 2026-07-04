@@ -8,6 +8,7 @@ prints the reply. Dependency-free: talks HTTP with ``urllib`` and spawns the dae
 from __future__ import annotations
 
 import argparse
+import contextlib
 import json
 import subprocess
 import sys
@@ -44,22 +45,45 @@ def is_daemon_up(base_url: str, probe: Callable[[str, float], bool] = _probe) ->
         return False
 
 
-def send_chat(
+def _prompt_user(resp: dict[str, Any]) -> dict[str, str]:  # pragma: no cover - terminal I/O
+    """Ask the user to answer a plan or a pending command, in the real terminal."""
+    if resp.get("status") == "plan":
+        print("\nPLAN\n" + str(resp.get("reply", "")))
+        choice = input("\nApply this plan? [y]es / [n]o / [e]dit: ").strip().lower()
+        if choice in ("y", "yes"):
+            return {"value": "approve"}
+        if choice in ("e", "edit"):
+            return {"value": "refine", "text": input("What should change? ").strip()}
+        return {"value": "reject"}
+    print("\n" + str(resp.get("prompt", "Proceed?")))
+    return {"value": "yes" if input("[y/N] ").strip().lower() in ("y", "yes") else "no"}
+
+
+def run_coder_turn(
     base_url: str,
     text: str,
+    *,
     post: Callable[[str, dict[str, Any], float], dict[str, Any]] = _post,
+    prompt: Callable[[dict[str, Any]], dict[str, str]] = _prompt_user,
 ) -> str:
-    """POST the request to the daemon's /chat and return the reply (or a friendly error)."""
-    try:
-        result = post(f"{base_url}/chat", {"text": text}, 600.0)
-    except (OSError, urllib.error.URLError) as exc:
-        return f"I couldn't reach the coder daemon: {exc}"
-    except ValueError as exc:  # non-JSON body (e.g. a stranger answering on the port)
-        return f"The coder daemon sent a response I couldn't read: {exc}"
-    if not result.get("ok"):
-        fallback = "the coder daemon couldn't handle that."
-        return result.get("error") or result.get("reply") or fallback
-    reply = result.get("reply")
+    """Drive one coding turn: start, then answer each plan/pending event until done."""
+
+    def _send(path: str, payload: dict[str, Any]) -> dict[str, Any] | str:
+        try:
+            return post(f"{base_url}{path}", payload, 600.0)
+        except (OSError, urllib.error.URLError) as exc:
+            return f"I couldn't reach the coder daemon: {exc}"
+        except ValueError as exc:  # non-JSON body
+            return f"The coder daemon sent a response I couldn't read: {exc}"
+
+    resp = _send("/coder/turn", {"text": text})
+    if isinstance(resp, str):
+        return resp
+    while resp.get("status") in ("plan", "pending"):
+        resp = _send("/coder/reply", dict(prompt(resp)))
+        if isinstance(resp, str):
+            return resp
+    reply = resp.get("reply")
     return reply if isinstance(reply, str) else ""
 
 
@@ -119,11 +143,14 @@ def main(argv: list[str] | None = None) -> int:
     text = " ".join(args.text)
     try:
         ensure_daemon(base_url, args.port)
-        print(send_chat(base_url, text))
+        print(run_coder_turn(base_url, text))
     except (RuntimeError, TimeoutError) as exc:
         print(str(exc), file=sys.stderr)
         return 1
     except KeyboardInterrupt:
         print("\nCancelled.", file=sys.stderr)
+        # Best-effort: unblock a worker parked awaiting a reply; never fail on this.
+        with contextlib.suppress(Exception):
+            _post(f"{base_url}/coder/reply", {"value": "reject"}, 1.0)
         return 130
     return 0

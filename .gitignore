@@ -47,6 +47,10 @@ ui/orb-shell/src-tauri/binaries/
 ui/orb-shell/src-tauri/gen/
 ui/orb-shell/src-tauri/icons/
 
+# Superpowers SDD working docs (specs/plans/progress) — local-only, never committed
+docs/superpowers/
+.superpowers/
+
 # OS / editor
 .DS_Store
 .idea/

@@ -770,3 +770,28 @@ def test_mcp_list_includes_secret_present_true_when_ref_set() -> None:
     resp = client.get("/mcp/servers").json()
     echo = next(s for s in resp["servers"] if s["server"] == "echo")
     assert echo["secret_present"] is True
+
+
+def test_coder_turn_and_reply_dispatch_to_callbacks() -> None:
+    seen: list[tuple[str, tuple[object, ...]]] = []
+
+    def on_turn(text: str) -> dict[str, object]:
+        seen.append(("turn", (text,)))
+        return {"status": "plan", "reply": "1. x", "todo": ["x"]}
+
+    def on_reply(value: str, text: str) -> dict[str, object]:
+        seen.append(("reply", (value, text)))
+        return {"status": "done", "reply": "ok"}
+
+    client = TestClient(create_app(EventBus(), on_coder_turn=on_turn, on_coder_reply=on_reply))
+    r1 = client.post("/coder/turn", json={"text": "do it"})
+    assert r1.json()["status"] == "plan"
+    r2 = client.post("/coder/reply", json={"value": "approve", "text": ""})
+    assert r2.json()["status"] == "done"
+    assert seen == [("turn", ("do it",)), ("reply", ("approve", ""))]
+
+
+def test_coder_routes_graceful_when_disabled() -> None:
+    client = TestClient(create_app(EventBus()))  # no coder callbacks
+    assert client.post("/coder/turn", json={"text": "x"}).json()["status"] == "error"
+    assert client.post("/coder/reply", json={"value": "yes"}).json()["status"] == "error"

@@ -1,52 +1,11 @@
 from __future__ import annotations
 
+from collections.abc import Callable
 from typing import Any
 
 import pytest
 
 import autobot.cli as cli
-
-
-def test_send_chat_posts_and_returns_reply() -> None:
-    seen: dict[str, Any] = {}
-
-    def fake_post(url: str, payload: dict[str, Any], timeout: float) -> dict[str, Any]:
-        seen["url"] = url
-        seen["payload"] = payload
-        return {"ok": True, "reply": "done"}
-
-    reply = cli.send_chat("http://127.0.0.1:8766", "fix the bug", post=fake_post)
-    assert reply == "done"
-    assert seen["url"].endswith("/chat")
-    assert seen["payload"] == {"text": "fix the bug"}
-
-
-def test_send_chat_surfaces_error_reply() -> None:
-    def fake_post(url, payload, timeout):  # type: ignore[no-untyped-def]
-        return {"ok": False, "reply": "", "error": "chat unavailable"}
-
-    reply = cli.send_chat("http://x", "hi", post=fake_post)
-    assert "unavailable" in reply.lower() or "couldn" in reply.lower()
-
-
-def test_send_chat_handles_non_json_response() -> None:
-    # A stranger answering on the port returns non-JSON → json.loads raises ValueError.
-    # send_chat must return a friendly string, never crash with a traceback.
-    def fake_post(url, payload, timeout):  # type: ignore[no-untyped-def]
-        raise ValueError("Expecting value: line 1 column 1 (char 0)")
-
-    reply = cli.send_chat("http://x", "hi", post=fake_post)
-    assert isinstance(reply, str) and reply
-    assert "couldn't read" in reply.lower() or "response" in reply.lower()
-
-
-def test_send_chat_handles_connection_error() -> None:
-    def fake_post(url, payload, timeout):  # type: ignore[no-untyped-def]
-        raise OSError("Connection refused")
-
-    reply = cli.send_chat("http://x", "hi", post=fake_post)
-    assert isinstance(reply, str)
-    assert "couldn't reach" in reply.lower()
 
 
 def test_daemon_up_probe() -> None:
@@ -59,10 +18,73 @@ def test_daemon_up_probe() -> None:
     assert cli.is_daemon_up("http://x", probe=raising_probe) is False
 
 
+_Post = Callable[[str, dict[str, Any], float], dict[str, Any]]
+_Call = tuple[str, dict[str, Any]]
+
+
+def _scripted_post(script: list[dict[str, Any]]) -> tuple[_Post, list[_Call]]:
+    """Return a fake post() that yields the next scripted response each call."""
+    calls: list[tuple[str, dict[str, Any]]] = []
+
+    def post(url: str, payload: dict[str, Any], timeout: float) -> dict[str, Any]:
+        calls.append((url, payload))
+        return script[len(calls) - 1]
+
+    return post, calls
+
+
+def test_run_coder_turn_plan_approve_done() -> None:
+    post, calls = _scripted_post(
+        [
+            {"status": "plan", "reply": "1. edit foo", "todo": ["edit foo"]},
+            {"status": "done", "reply": "Edited foo."},
+        ]
+    )
+    reply = cli.run_coder_turn(
+        "http://x", "edit foo", post=post, prompt=lambda r: {"value": "approve"}
+    )
+    assert reply == "Edited foo."
+    assert calls[0][0].endswith("/coder/turn")
+    assert calls[1][0].endswith("/coder/reply")
+    assert calls[1][1] == {"value": "approve"}
+
+
+def test_run_coder_turn_pending_command_yes() -> None:
+    post, _ = _scripted_post(
+        [
+            {"status": "plan", "reply": "1. run tests", "todo": ["run tests"]},
+            {"status": "pending", "kind": "command", "prompt": "Run `pytest -q`?"},
+            {"status": "done", "reply": "Tests passed."},
+        ]
+    )
+    answers = iter([{"value": "approve"}, {"value": "yes"}])
+    reply = cli.run_coder_turn("http://x", "run tests", post=post, prompt=lambda r: next(answers))
+    assert reply == "Tests passed."
+
+
+def test_run_coder_turn_reject() -> None:
+    post, _ = _scripted_post(
+        [
+            {"status": "plan", "reply": "1. edit foo", "todo": ["edit foo"]},
+            {"status": "done", "reply": "Okay, I won't make any changes."},
+        ]
+    )
+    reply = cli.run_coder_turn("http://x", "edit", post=post, prompt=lambda r: {"value": "reject"})
+    assert "won't" in reply.lower()
+
+
+def test_run_coder_turn_handles_connection_error() -> None:
+    def post(url, payload, timeout):  # type: ignore[no-untyped-def]
+        raise OSError("Connection refused")
+
+    reply = cli.run_coder_turn("http://x", "hi", post=post, prompt=lambda r: {"value": "approve"})
+    assert "couldn't reach" in reply.lower()
+
+
 def test_main_one_shot(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     seen_port: list[int] = []
     monkeypatch.setattr(cli, "ensure_daemon", lambda base, port: seen_port.append(port))
-    monkeypatch.setattr(cli, "send_chat", lambda base, text, **k: "the reply")
+    monkeypatch.setattr(cli, "run_coder_turn", lambda base, text, **k: "the reply")
     rc = cli.main(["--port", "9001", "do a thing"])
     assert rc == 0
     assert "the reply" in capsys.readouterr().out
@@ -103,6 +125,44 @@ def test_main_handles_ctrl_c_cleanly(
         raise KeyboardInterrupt
 
     monkeypatch.setattr(cli, "ensure_daemon", interrupted)
+    rc = cli.main(["do a thing"])
+    assert rc == 130
+    assert "cancel" in capsys.readouterr().err.lower()
+
+
+def test_main_ctrl_c_sends_best_effort_reject(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # Ctrl-C best-effort unblocks a worker parked awaiting a reply by POSTing a reject.
+    def interrupted(base: str, port: int) -> None:
+        raise KeyboardInterrupt
+
+    calls: list[tuple[str, dict[str, object]]] = []
+
+    def fake_post(url: str, payload: dict[str, object], timeout: float) -> dict[str, object]:
+        calls.append((url, payload))
+        return {"status": "done"}
+
+    monkeypatch.setattr(cli, "ensure_daemon", interrupted)
+    monkeypatch.setattr(cli, "_post", fake_post)
+    rc = cli.main(["--port", "9001", "do a thing"])
+    assert rc == 130
+    assert "cancel" in capsys.readouterr().err.lower()
+    assert calls == [("http://127.0.0.1:9001/coder/reply", {"value": "reject"})]
+
+
+def test_main_ctrl_c_swallows_post_failure(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # The best-effort reject must never change the exit path if it fails.
+    def interrupted(base: str, port: int) -> None:
+        raise KeyboardInterrupt
+
+    def boom_post(url: str, payload: dict[str, object], timeout: float) -> dict[str, object]:
+        raise OSError("connection refused")
+
+    monkeypatch.setattr(cli, "ensure_daemon", interrupted)
+    monkeypatch.setattr(cli, "_post", boom_post)
     rc = cli.main(["do a thing"])
     assert rc == 130
     assert "cancel" in capsys.readouterr().err.lower()

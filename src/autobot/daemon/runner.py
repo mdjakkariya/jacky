@@ -173,6 +173,15 @@ def serve(settings: Settings | None = None) -> None:
     thread = threading.Thread(target=orchestrator.run, name="engine", daemon=True)
     thread.start()
     print(f"[daemon] serving on ws://{settings.daemon_host}:{settings.daemon_port}/ws")
+    # Coder profile: the driver owns turn concurrency with its OWN lock over the shared
+    # gate/confirmer/session, which is not safe to interleave with the assistant/drawer
+    # turn+session-mutating endpoints (they take the orchestrator's own _turn_lock and
+    # could route a /chat confirmation into a parked coder turn's channel). So the coder
+    # profile disables those callbacks entirely — /coder/turn and /coder/reply are the
+    # only turn entry point. `on_list_sessions` stays wired (read-only; it's the `jack`
+    # readiness probe hitting GET /sessions) as does `on_change`/`on_confirm_answer`/
+    # `mcp_provider`/`on_meeting`.
+    coder = settings.profile == "coder"
     # Live-apply settings/key changes from the Settings view (next turn, no restart).
     run_daemon(
         bus,
@@ -180,13 +189,15 @@ def serve(settings: Settings | None = None) -> None:
         settings.daemon_port,
         on_change=orchestrator.mark_settings_changed,
         on_confirm_answer=inbox.submit,
-        on_chat=orchestrator.run_text_turn,
-        on_new_session=orchestrator.new_chat_session,
-        on_action=orchestrator.run_tool,
+        on_chat=None if coder else orchestrator.run_text_turn,
+        on_new_session=None if coder else orchestrator.new_chat_session,
+        on_action=None if coder else orchestrator.run_tool,
         mcp_provider=orchestrator.mcp_provider,
         on_meeting=on_meeting,
         on_list_sessions=orchestrator.list_sessions,
-        on_resume_session=orchestrator.resume_session,
+        on_resume_session=None if coder else orchestrator.resume_session,
+        on_coder_turn=orchestrator.start_coder_turn,
+        on_coder_reply=orchestrator.reply_coder_turn,
     )
 
 

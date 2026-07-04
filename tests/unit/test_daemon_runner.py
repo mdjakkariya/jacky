@@ -1,14 +1,18 @@
-"""Tests for the daemon runner's state/amplitude adapters.
+"""Tests for the daemon runner's state/amplitude adapters and turn-entry-point wiring.
 
 Skipped when the optional ``daemon`` extra is absent (runner imports the server).
 """
 
 from __future__ import annotations
 
+from typing import Any
+from unittest.mock import MagicMock
+
 import pytest
 
 pytest.importorskip("fastapi")
 
+from autobot.config import Settings
 from autobot.core.events import EventBus, OrbState
 from autobot.core.types import State
 from autobot.daemon.runner import make_amplitude_sink, make_state_listener, make_voice_sink
@@ -80,3 +84,68 @@ def test_voice_sink_publishes_listening_on_speech_and_idle_otherwise() -> None:
 
     sink(False)  # they stopped
     assert seen[-1] == {"type": "state", "value": "idle"}
+
+
+def _serve_with_patched_deps(monkeypatch: pytest.MonkeyPatch, settings: Settings) -> dict[str, Any]:
+    """Run ``serve(settings)`` with all heavy/blocking deps stubbed; capture run_daemon kwargs.
+
+    Patches the orchestrator build, the parent watchdog, the engine thread start, and
+    ``run_daemon`` itself — so ``serve`` runs synchronously with no socket bound and no
+    real engine constructed, and we can inspect exactly which callbacks it wired.
+    """
+    import threading as threading_mod
+
+    import autobot.daemon.runner as runner_mod
+
+    orchestrator = MagicMock()
+    orchestrator.mcp_provider = None
+    orchestrator.meeting_recorder = None
+
+    monkeypatch.setattr("autobot.app.build", lambda *a, **k: orchestrator)
+    monkeypatch.setattr("autobot.daemon.watchdog.start_parent_watchdog", lambda: None)
+    monkeypatch.setattr("autobot.tools.confirm.ConfirmInbox", MagicMock)
+    monkeypatch.setattr(threading_mod, "Thread", lambda **k: MagicMock())
+
+    captured: dict[str, Any] = {}
+
+    def fake_run_daemon(bus: Any, host: Any, port: Any, **kwargs: Any) -> None:
+        captured.update(kwargs)
+
+    monkeypatch.setattr(runner_mod, "run_daemon", fake_run_daemon)
+
+    runner_mod.serve(settings)
+    return captured
+
+
+def test_serve_disables_turn_and_session_callbacks_for_coder_profile(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # The coder daemon must have exactly one turn entry point (/coder/turn + /coder/reply).
+    # /chat, session-switching, and tool-run all mutate the same shared session/gate that
+    # the coder driver guards with its own lock, so they must be disabled — a concurrent
+    # /chat could otherwise route a confirmation into a parked coder turn's channel.
+    settings = Settings(profile="coder")
+    kwargs = _serve_with_patched_deps(monkeypatch, settings)
+
+    assert kwargs["on_chat"] is None
+    assert kwargs["on_action"] is None
+    assert kwargs["on_new_session"] is None
+    assert kwargs["on_resume_session"] is None
+    assert kwargs["on_coder_turn"] is not None
+    assert kwargs["on_coder_reply"] is not None
+    assert kwargs["on_list_sessions"] is not None  # read-only; the jack readiness probe
+    assert kwargs["on_change"] is not None
+    assert kwargs["on_confirm_answer"] is not None
+
+
+def test_serve_keeps_chat_and_session_callbacks_for_assistant_profile(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings = Settings(profile="assistant")
+    kwargs = _serve_with_patched_deps(monkeypatch, settings)
+
+    assert kwargs["on_chat"] is not None
+    assert kwargs["on_action"] is not None
+    assert kwargs["on_new_session"] is not None
+    assert kwargs["on_resume_session"] is not None
+    assert kwargs["on_list_sessions"] is not None

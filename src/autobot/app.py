@@ -39,6 +39,7 @@ from autobot.tools.permission import Confirmer, PermissionGate
 from autobot.tools.registry import ToolRegistry
 
 if TYPE_CHECKING:
+    from autobot.agent.coder_turn import CoderTurnDriver, SuspendingConfirmer
     from autobot.io.listening import FrameSource
     from autobot.mcp.manager import McpManager
     from autobot.memory.store import MemoryStore
@@ -286,6 +287,17 @@ def _summary_window_chars(settings: Settings) -> int:
     return 8000
 
 
+def _apply_profile_overrides(settings: Settings) -> Settings:
+    """Return settings with profile-specific overrides applied.
+
+    The coder profile raises the LLM output budget so plans/replies don't truncate at
+    the assistant's small default. All other profiles are returned unchanged.
+    """
+    if settings.profile == "coder":
+        return replace(settings, llm_max_tokens=settings.coder_llm_max_tokens)
+    return settings
+
+
 def _build_llm(
     settings: Settings,
     registry: ToolRegistry,
@@ -299,6 +311,7 @@ def _build_llm(
     is wrapped in an :class:`AgentHarness`, which owns the conversation `Session` (history,
     summary, delivery mode, usage) — the adapters themselves are stateless across turns.
     """
+    settings = _apply_profile_overrides(settings)
     log = get_logger("app")
     store = SessionStore(settings.agent_session_dir)
 
@@ -632,9 +645,16 @@ def build(
     # Permission gate: audit everything, confirm destructive actions only. The
     # confirmer asks by voice (with a card on the orb) when hands-free.
     audit = AuditLog(settings.audit_db)
-    confirmer = _build_confirmer(
-        settings, tts, audio, stt, on_confirm, on_confirm_clear, poll_click
-    )
+    suspending: SuspendingConfirmer | None = None
+    if coder:
+        from autobot.agent.coder_turn import SuspendingConfirmer
+
+        suspending = SuspendingConfirmer()
+        confirmer: Confirmer = suspending
+    else:
+        confirmer = _build_confirmer(
+            settings, tts, audio, stt, on_confirm, on_confirm_clear, poll_click
+        )
 
     # MCP integration (opt-in, the third disclosed exception). Built behind a provider
     # so "Enable MCP connections" (allow_mcp) can turn the whole subsystem on or off at
@@ -719,6 +739,13 @@ def build(
             replace(Settings.load(), profile=settings.profile), registry, transcript, memory
         )
     )
+
+    coder_driver: CoderTurnDriver | None = None
+    if coder and suspending is not None:
+        from autobot.agent.coder_turn import CoderTurnDriver
+
+        coder_driver = CoderTurnDriver(llm, gate, suspending, settings_provider=Settings.load)
+        log.info("coder plan→approve→act driver ready")
 
     # Barge-in engages in voice mode when the user wants it AND the mic is
     # echo-cancelled. The voice I/O is built lazily (chat-first), so we can't probe
@@ -830,6 +857,7 @@ def build(
     # Expose the meeting recorder (if built) so the daemon dispatcher can route
     # /meeting/* HTTP actions to it — same pattern as mcp_provider above.
     orch.meeting_recorder = _meeting_recorder
+    orch.coder_driver = coder_driver
     return orch
 
 

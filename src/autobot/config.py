@@ -125,10 +125,15 @@ class Settings:
     # action (silence/timeout cancels — nothing destructive runs without a clear yes).
     confirm_timeout_s: float = 30.0
     # --- coding agent (Phase 2) ---
-    # Autonomy for coding turns: "plan" (propose a plan; act only after the user approves —
-    # default, supervised), "confirm" (act, but confirm each destructive step), or "auto"
-    # (apply in-workspace edits without prompting; shell/out-of-scope/destructive still
-    # confirm at the gate). A progressive-trust dial the user raises as confidence grows.
+    # Autonomy for coding turns — a progressive-trust dial:
+    #   "plan" (default) — propose a plan; act only after the user approves it, then carry
+    #     out the whole plan without re-prompting per step (approving the plan IS the
+    #     approval for its commands);
+    #   "confirm" — no plan phase; act directly but ask before each command not on the
+    #     allowlist;
+    #   "auto" — no plan phase; act directly and run everything without prompting.
+    # All three still refuse blocklisted commands and stay within the cwd jail + a
+    # start-of-turn git checkpoint (undoable), so nothing is unrecoverable.
     coding_autonomy: str = "plan"
     # Snapshot the workspace (via a git shadow ref) at the start of each coding turn so a
     # change can be rewound (`jack undo`). Off disables checkpointing entirely.
@@ -143,6 +148,10 @@ class Settings:
     # (a code-editing agent — swaps in the code tools + a coding system prompt). Set by the
     # daemon's --profile flag or settings.json; the jack CLI runs a coder-profile daemon.
     profile: str = "assistant"
+    # Output-token budget for coder turns. The assistant/voice default (llm_max_tokens=120)
+    # is far too small for code — a coder plan or reply would truncate — so the coder build
+    # raises it via _apply_profile_overrides. The assistant's budget is left untouched.
+    coder_llm_max_tokens: int = 4096
     # --- listening (Phase 2) ---
     input_mode: str = _DEFAULT_INPUT_MODE
     wake_detector: str = _DEFAULT_WAKE_DETECTOR

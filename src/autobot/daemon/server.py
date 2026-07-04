@@ -89,6 +89,8 @@ def create_app(
     on_meeting: Any | None = None,
     on_list_sessions: Any | None = None,
     on_resume_session: Any | None = None,
+    on_coder_turn: Any | None = None,
+    on_coder_reply: Any | None = None,
 ) -> Any:
     """Build the FastAPI app: the event stream plus the Settings-view API.
 
@@ -120,6 +122,13 @@ def create_app(
         on_resume_session: Optional callback (session_id: str -> bool) that resumes a
             stored agent session; wired to the orchestrator's ``resume_session``. When
             ``None``, ``POST /sessions/resume`` returns ``{"ok": False}``.
+        on_coder_turn: Optional callback (text: str -> dict) that starts a coder
+            plan→approve→act turn; wired to the orchestrator's ``start_coder_turn``.
+            When ``None``, ``POST /coder/turn`` returns an error status dict.
+        on_coder_reply: Optional callback (value: str, text: str -> dict) that
+            delivers the CLI's answer to a parked coder turn; wired to the
+            orchestrator's ``reply_coder_turn``. When ``None``, ``POST /coder/reply``
+            returns an error status dict.
 
     Returns:
         A FastAPI app: ``/healthz``, WebSocket ``/ws``, the settings API, and
@@ -309,6 +318,25 @@ def create_app(
         # WebSocket and other clients stay responsive while Jack thinks.
         reply = await asyncio.to_thread(on_chat, str(text))
         return {"ok": True, "reply": reply}
+
+    async def post_coder_turn(request: Request) -> dict[str, Any]:
+        """Start a coder plan→approve→act turn; return the first status event."""
+        payload = await request.json()
+        text = payload.get("text") if isinstance(payload, dict) else None
+        if not text or on_coder_turn is None:
+            return {"status": "error", "reply": "no text / coder unavailable"}
+        result = await asyncio.to_thread(on_coder_turn, str(text))
+        return result if isinstance(result, dict) else {"status": "error", "reply": "bad result"}
+
+    async def post_coder_reply(request: Request) -> dict[str, Any]:
+        """Deliver the CLI's answer to a parked coder turn; return the next status event."""
+        payload = await request.json()
+        value = payload.get("value") if isinstance(payload, dict) else None
+        text = payload.get("text", "") if isinstance(payload, dict) else ""
+        if value is None or on_coder_reply is None:
+            return {"status": "error", "reply": "no value / coder unavailable"}
+        result = await asyncio.to_thread(on_coder_reply, str(value), str(text))
+        return result if isinstance(result, dict) else {"status": "error", "reply": "bad result"}
 
     async def post_new_session() -> dict[str, Any]:
         """Start a fresh chat session — discard the engine's conversation history.
@@ -638,6 +666,8 @@ def create_app(
     app.add_api_route("/access/grant", post_access_grant, methods=["POST"])
     app.add_api_route("/access/revoke", post_access_revoke, methods=["POST"])
     app.add_api_route("/chat", post_chat, methods=["POST"])
+    app.add_api_route("/coder/turn", post_coder_turn, methods=["POST"])
+    app.add_api_route("/coder/reply", post_coder_reply, methods=["POST"])
     app.add_api_route("/session/new", post_new_session, methods=["POST"])
     app.add_api_route("/sessions", get_sessions, methods=["GET"])
     app.add_api_route("/sessions/resume", post_sessions_resume, methods=["POST"])
@@ -697,6 +727,8 @@ def run_daemon(
     on_meeting: Any | None = None,
     on_list_sessions: Any | None = None,
     on_resume_session: Any | None = None,
+    on_coder_turn: Any | None = None,
+    on_coder_reply: Any | None = None,
 ) -> None:
     """Run the daemon server (blocking) on ``host:port``.
 
@@ -706,6 +738,8 @@ def run_daemon(
     it up live; ``on_confirm_answer`` delivers a clicked Yes/No to the engine.
     ``on_meeting`` dispatches /meeting/* HTTP actions to the MeetingRecorder.
     ``on_list_sessions``/``on_resume_session`` back the ``/sessions`` endpoints.
+    ``on_coder_turn``/``on_coder_reply`` back the ``/coder/turn``/``/coder/reply``
+    endpoints.
     """
     if host not in {"127.0.0.1", "localhost", "::1"}:
         raise ValueError(f"daemon must bind loopback only, got host={host!r}")
@@ -726,6 +760,8 @@ def run_daemon(
         on_meeting=on_meeting,
         on_list_sessions=on_list_sessions,
         on_resume_session=on_resume_session,
+        on_coder_turn=on_coder_turn,
+        on_coder_reply=on_coder_reply,
     )
     try:
         with contextlib.suppress(KeyboardInterrupt):
