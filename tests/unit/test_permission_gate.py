@@ -441,3 +441,18 @@ def test_bogus_confirm_action_value_fails_closed() -> None:
     gate, tool = _delete_gate(_Bogus())
     result = gate.execute(ToolCall(name="delete_file", arguments={"path": "/d/a"}))
     assert tool.ran is False and result.ok is False  # unknown value fails closed
+
+
+def test_pre_authorized_runs_destructive_without_confirming() -> None:
+    tool = _SpyTool(Risk.DESTRUCTIVE)
+    gate, audit = _gate_with(tool, "run_command", AlwaysDeny())  # would block if asked
+    result = gate.execute(ToolCall(name="run_command", arguments={}), pre_authorized=True)
+    assert tool.ran and result.ok  # ran despite AlwaysDeny — confirmer not consulted
+    assert any(e.decision is Decision.ALLOWED for e in audit.recent(10))
+
+
+def test_not_pre_authorized_still_confirms_destructive() -> None:
+    tool = _SpyTool(Risk.DESTRUCTIVE)
+    gate, _ = _gate_with(tool, "run_command", AlwaysDeny())
+    result = gate.execute(ToolCall(name="run_command", arguments={}))
+    assert not tool.ran and not result.ok  # default path unchanged: declined
