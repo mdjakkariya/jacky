@@ -139,6 +139,10 @@ class Settings:
     # "pytest*") are trusted to run with less friction. Empty = baseline + gate only.
     command_allowlist: list[str] = field(default_factory=list)
     command_blocklist: list[str] = field(default_factory=list)
+    # Which agent this process is: "assistant" (voice/chat helper, default) or "coder"
+    # (a code-editing agent — swaps in the code tools + a coding system prompt). Set by the
+    # daemon's --profile flag or settings.json; the jack CLI runs a coder-profile daemon.
+    profile: str = "assistant"
     # --- listening (Phase 2) ---
     input_mode: str = _DEFAULT_INPUT_MODE
     wake_detector: str = _DEFAULT_WAKE_DETECTOR

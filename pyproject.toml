@@ -97,6 +97,7 @@ dev = [
 [project.scripts]
 autobot = "autobot.app:main"
 autobot-daemon = "autobot.daemon.__main__:main"
+jack = "autobot.cli:main"
 
 [build-system]
 requires = ["hatchling"]

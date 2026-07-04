@@ -97,8 +97,9 @@ class OpenAICompatibleModel:
 
     # --- prompt assembly (mirrors Ollama) ---
     def _assemble(self, session: Session, user_msg: dict[str, Any]) -> list[dict[str, Any]]:
+        coder = self._settings.profile == "coder"
         messages: list[dict[str, Any]] = [
-            {"role": "system", "content": system_prompt(session.delivery_mode)}
+            {"role": "system", "content": system_prompt(session.delivery_mode, coder=coder)}
         ]
         if self._memory is not None:
             profile = self._memory.context()
