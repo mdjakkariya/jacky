@@ -79,3 +79,30 @@ def test_main_returns_1_when_daemon_cannot_start(
     rc = cli.main(["do a thing"])
     assert rc == 1
     assert "did not start" in capsys.readouterr().err
+
+
+def test_main_surfaces_daemon_startup_error(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # When the spawned daemon dies (e.g. missing extra), ensure_daemon raises RuntimeError
+    # with the reason — main() must print it and exit 1, not hang or dump a traceback.
+    def boom(base: str, port: int) -> None:
+        raise RuntimeError("the coder daemon couldn't start (exit 1). ... needs the daemon extra")
+
+    monkeypatch.setattr(cli, "ensure_daemon", boom)
+    rc = cli.main(["do a thing"])
+    assert rc == 1
+    assert "daemon extra" in capsys.readouterr().err
+
+
+def test_main_handles_ctrl_c_cleanly(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # Ctrl-C during startup/turn must exit cleanly (130), not raise KeyboardInterrupt.
+    def interrupted(base: str, port: int) -> None:
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(cli, "ensure_daemon", interrupted)
+    rc = cli.main(["do a thing"])
+    assert rc == 130
+    assert "cancel" in capsys.readouterr().err.lower()
