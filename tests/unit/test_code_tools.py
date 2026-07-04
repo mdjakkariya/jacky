@@ -4,8 +4,16 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from autobot.core.types import Risk
 from autobot.tools.access import AccessBroker, AccessPolicy
-from autobot.tools.code.tools import edit_file, multi_edit, read_file, write_file
+from autobot.tools.code.tools import (
+    edit_file,
+    multi_edit,
+    read_file,
+    register_code_tools,
+    write_file,
+)
+from autobot.tools.registry import ToolRegistry
 
 
 class _FakeConfirmer:
@@ -180,3 +188,59 @@ def test_multi_edit_tolerates_malformed_edits(tmp_path: Path) -> None:
     assert isinstance(out, str)
     assert f.read_text() == "a = 1\n"
     assert "malformed" in out.lower()
+
+
+def _registry(tmp_path: Path) -> ToolRegistry:
+    reg = ToolRegistry()
+    register_code_tools(reg, _broker(tmp_path))
+    return reg
+
+
+def test_register_adds_all_four_tools(tmp_path: Path) -> None:
+    reg = _registry(tmp_path)
+    for name in ("read_file", "write_file", "edit_file", "multi_edit"):
+        assert reg.get(name) is not None, name
+
+
+def test_registered_risk_levels(tmp_path: Path) -> None:
+    reg = _registry(tmp_path)
+    assert reg.get("read_file").risk == Risk.READ_ONLY  # type: ignore[union-attr]
+    assert reg.get("write_file").risk == Risk.WRITE  # type: ignore[union-attr]
+    assert reg.get("edit_file").risk == Risk.WRITE  # type: ignore[union-attr]
+    assert reg.get("multi_edit").risk == Risk.WRITE  # type: ignore[union-attr]
+
+
+def test_registered_tools_are_gated_not_core(tmp_path: Path) -> None:
+    reg = _registry(tmp_path)
+    assert reg.get("read_file").core is False  # type: ignore[union-attr]
+    assert reg.get("edit_file").core is False  # type: ignore[union-attr]
+
+
+def test_handlers_are_no_arg_safe(tmp_path: Path) -> None:
+    # Every handler called with no args must return a string, never raise TypeError.
+    reg = _registry(tmp_path)
+    for name in ("read_file", "write_file", "edit_file", "multi_edit"):
+        spec = reg.get(name)
+        assert spec is not None
+        out = spec.handler()
+        assert isinstance(out, str) and out
+
+
+def test_dispatch_read_file_through_registry(tmp_path: Path) -> None:
+    f = tmp_path / "z.py"
+    f.write_text("only\n")
+    reg = _registry(tmp_path)
+    res = reg.dispatch("read_file", {"path": str(f)})
+    assert res.ok
+    assert "1\tonly" in res.content
+
+
+def test_dispatch_edit_file_replace_all_through_registry(tmp_path: Path) -> None:
+    f = tmp_path / "z.py"
+    f.write_text("v = 1\nv = 1\n")
+    reg = _registry(tmp_path)
+    res = reg.dispatch(
+        "edit_file", {"path": str(f), "find": "v = 1", "replace": "v = 2", "replace_all": True}
+    )
+    assert res.ok
+    assert f.read_text() == "v = 2\nv = 2\n"

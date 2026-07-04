@@ -13,9 +13,11 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from autobot.core.types import Risk
 from autobot.logging_setup import get_logger
 from autobot.tools.access import AccessBroker, AccessDeniedError
 from autobot.tools.code.edits import apply_replace
+from autobot.tools.registry import ToolRegistry, ToolSpec
 
 _log = get_logger("coder")
 
@@ -166,3 +168,122 @@ def multi_edit(path: str, edits: list[dict[str, str]] | None, broker: AccessBrok
     n = len(edits)
     _log.info("multi_edit name=%r edits=%d", resolved.name, n)
     return f"Applied {n} edit{'s' if n != 1 else ''} to {resolved.name}."
+
+
+def register_code_tools(registry: ToolRegistry, broker: AccessBroker) -> None:
+    """Register the coder-profile code tools (read/write/edit/multi_edit).
+
+    All are gated (``core=False``) — advertised only when the tool selector judges them
+    relevant — and route every path through ``broker`` for the workspace jail. The coder
+    profile wires this in a later change (#53).
+    """
+    registry.register(
+        ToolSpec(
+            name="read_file",
+            description=(
+                "Read a source file's contents, line-numbered, so you can cite lines when "
+                "editing. Cues: 'read/open/show X', 'what's in X'. Pass the file path; use "
+                "`offset` (1-based first line) and `limit` (line count) to page through a large "
+                "file. Read a file before editing it — edit_file matches against its current "
+                "contents."
+            ),
+            parameters={
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string", "description": "Path to the file to read."},
+                    "offset": {"type": "integer", "description": "1-based first line (optional)."},
+                    "limit": {"type": "integer", "description": "Max lines to return (optional)."},
+                },
+                "required": ["path"],
+            },
+            handler=lambda path="", offset=1, limit=0: read_file(path, broker, offset, limit),
+            risk=Risk.READ_ONLY,
+            ack="Reading that file.",
+        )
+    )
+    registry.register(
+        ToolSpec(
+            name="write_file",
+            description=(
+                "Create a NEW source file with the given content (it makes missing parent "
+                "folders). This is create-only: it will NOT overwrite an existing file — to "
+                "change an existing file use edit_file or multi_edit. Cues: 'create X', 'add a "
+                "new file X'."
+            ),
+            parameters={
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string", "description": "Path to the new file."},
+                    "content": {"type": "string", "description": "The full text to write."},
+                },
+                "required": ["path", "content"],
+            },
+            handler=lambda path="", content="": write_file(path, content, broker),
+            risk=Risk.WRITE,
+            ack="Writing that file.",
+        )
+    )
+    registry.register(
+        ToolSpec(
+            name="edit_file",
+            description=(
+                "Change an EXISTING file by replacing `find` with `replace`. `find` must "
+                "uniquely identify one place — include enough surrounding lines to be "
+                "unambiguous — unless you set `replace_all` to change every occurrence (e.g. "
+                "renaming a symbol). Matching tolerates trailing-whitespace drift. Cues: "
+                "'change/replace/fix A to B in X'. For several edits to one file, use multi_edit."
+            ),
+            parameters={
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string", "description": "Path to the file to edit."},
+                    "find": {"type": "string", "description": "The text to find (non-empty)."},
+                    "replace": {"type": "string", "description": "The replacement text."},
+                    "replace_all": {
+                        "type": "boolean",
+                        "description": "Replace every occurrence (default false).",
+                    },
+                },
+                "required": ["path", "find", "replace"],
+            },
+            handler=lambda path="", find="", replace="", replace_all=False: edit_file(
+                path, find, replace, broker, replace_all
+            ),
+            risk=Risk.WRITE,
+            ack="Editing that file.",
+        )
+    )
+    registry.register(
+        ToolSpec(
+            name="multi_edit",
+            description=(
+                "Apply several find/replace edits to ONE file in a single atomic step — if any "
+                "edit doesn't match, none are applied. Pass `edits` as a list of {find, replace} "
+                "objects; they apply in order, each seeing the previous edit's result. Use this "
+                "instead of repeated edit_file calls on the same file."
+            ),
+            parameters={
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string", "description": "Path to the file to edit."},
+                    "edits": {
+                        "type": "array",
+                        "description": "Edits applied in order.",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "find": {"type": "string"},
+                                "replace": {"type": "string"},
+                            },
+                            "required": ["find", "replace"],
+                        },
+                    },
+                },
+                "required": ["path", "edits"],
+            },
+            handler=lambda path="", edits=None: multi_edit(path, edits, broker),
+            risk=Risk.WRITE,
+            ack="Editing that file.",
+        )
+    )
+    _log.info("code tools registered (read_file/write_file/edit_file/multi_edit)")
