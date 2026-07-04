@@ -471,7 +471,13 @@ def build(
     # relative paths from the filesystem tools land in the right place.
     from pathlib import Path as _Path
 
-    workspace_root = _Path(settings.sandbox_dir).expanduser().resolve()
+    if coder:
+        # A coder operates in — and is jailed to — the directory it was launched from
+        # (the daemon inherits the jack CLI's cwd), so `jack "…"` edits the current
+        # project, not the assistant's private scratch sandbox.
+        workspace_root = _Path.cwd().resolve()
+    else:
+        workspace_root = _Path(settings.sandbox_dir).expanduser().resolve()
 
     def _cwd_changed(p: _Path) -> None:
         if on_workspace is not None:
