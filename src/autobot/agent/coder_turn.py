@@ -36,9 +36,17 @@ class TurnChannel:
         """Create empty out/in queues."""
         self._out: queue.Queue[dict[str, Any]] = queue.Queue()
         self._in: queue.Queue[dict[str, str]] = queue.Queue()
+        self.closed = False
 
     def ask(self, event: dict[str, Any]) -> dict[str, str]:
-        """Worker: surface ``event`` to the HTTP layer, block for the CLI's answer."""
+        r"""Worker: surface ``event`` to the HTTP layer, block for the CLI's answer.
+
+        If the channel has been :meth:`close`\ d (this turn was reclaimed by a fresh
+        ``start()``), return a reject immediately without enqueuing to the out queue —
+        a stale worker must self-decline and never surface events on a dead channel.
+        """
+        if self.closed:
+            return {"value": "reject", "text": ""}
         self._out.put(event)
         return self._in.get()
 
@@ -54,28 +62,49 @@ class TurnChannel:
         """HTTP: deliver the CLI's answer to the parked worker."""
         self._in.put({"value": value, "text": text})
 
+    def close(self) -> None:
+        """Mark the channel closed and unblock a parked ``ask`` with a reject.
+
+        Used to reclaim a turn parked awaiting an answer (the CLI died or a fresh
+        ``start()`` superseded it): the parked worker thread wakes up, sees a reject,
+        and its own ``_run`` unwinds normally via its ``channel.done(...)`` — it never
+        touches the new turn's channel.
+        """
+        self.closed = True
+        self._in.put({"value": "reject", "text": ""})
+
 
 class SuspendingConfirmer:
     """Coder gate confirmer: suspends the turn to ask the CLI (no TTY of its own).
 
-    The active turn's channel is set by :class:`CoderTurnDriver` via :meth:`set_channel`
-    before each act phase. Answers ``"yes"``/``"y"``/``"once"`` proceed; anything else
-    (or no active channel) cancels — the gate then reports the action wasn't performed.
+    The active turn's channel is set by :class:`CoderTurnDriver` via :meth:`set_channel`,
+    called from the WORKER thread at the top of its run — so each worker thread has its
+    own channel in thread-local storage. This makes confirm routing impossible to
+    cross-wire between turns: even if two turns' lifetimes briefly overlap (a reclaim
+    racing a stale worker), each thread's ``confirm`` can only ever see the channel that
+    thread itself set. Answers ``"yes"``/``"y"``/``"once"`` proceed; anything else (or no
+    active channel) cancels — the gate then reports the action wasn't performed.
     """
 
     def __init__(self) -> None:
-        """Start with no active channel (set per turn by the driver)."""
-        self._channel: TurnChannel | None = None
+        """Start with no active channel on any thread (set per turn by the driver)."""
+        self._local = threading.local()
 
     def set_channel(self, channel: TurnChannel | None) -> None:
-        """Point this confirmer at the active turn's channel (or ``None`` between turns)."""
-        self._channel = channel
+        """Point the CALLING thread's confirmer at ``channel`` (or ``None`` between turns)."""
+        self._local.channel = channel
+
+    def _channel_for_thread(self) -> TurnChannel | None:
+        """The calling thread's active channel, if any."""
+        channel: TurnChannel | None = getattr(self._local, "channel", None)
+        return channel
 
     def confirm(self, prompt: str, kind: str = "danger") -> bool:
-        """Ask the CLI via the active channel; ``True`` only on an affirmative answer."""
-        if self._channel is None:
+        """Ask the CLI via this thread's channel; ``True`` only on an affirmative answer."""
+        channel = self._channel_for_thread()
+        if channel is None:
             return False  # no active turn to ask — refuse rather than block forever
-        answer = self._channel.ask({"status": "pending", "kind": kind, "prompt": prompt})
+        answer = channel.ask({"status": "pending", "kind": kind, "prompt": prompt})
         return answer.get("value", "").strip().lower() in {"yes", "y", "once"}
 
     def confirm_action(self, prompt: str, kind: str = "danger") -> str:
@@ -197,11 +226,14 @@ class CoderTurnDriver:
             if self._channel is not None and not self._awaiting:
                 return {"status": "error", "reply": "A coding turn is already running."}
             if self._channel is not None and self._awaiting:
-                self._channel.answer("reject")  # reclaim a stale parked turn (CLI died)
+                # Reclaim a stale parked turn (CLI died or a fresh start superseded it):
+                # close() unblocks the parked ask() with a self-decline so that worker's
+                # _run unwinds via its own channel.done(...) and never touches this new
+                # turn's channel.
+                self._channel.close()
             channel = TurnChannel()
             self._channel = channel
             self._awaiting = False
-            self._confirmer.set_channel(channel)
             worker = threading.Thread(
                 target=self._run, args=(channel, text), name="coder-turn", daemon=True
             )
@@ -225,13 +257,19 @@ class CoderTurnDriver:
             if event.get("status") == "done":
                 self._channel = None
                 self._awaiting = False
-                self._confirmer.set_channel(None)
             else:
                 self._awaiting = True
         return event
 
     def _run(self, channel: TurnChannel, text: str) -> None:
-        """Worker body: drive plan→approve→act per the autonomy dial. Never raises."""
+        """Worker body: drive plan→approve→act per the autonomy dial. Never raises.
+
+        Sets the confirmer's channel first thing, on THIS (worker) thread — the
+        confirmer keys its active channel by thread-local, so this must run on the
+        same thread that will later call ``gate.execute`` (and thus ``confirm``)
+        during the act phase.
+        """
+        self._confirmer.set_channel(channel)
         try:
             autonomy = self._settings().coding_autonomy
             if autonomy == "plan":
