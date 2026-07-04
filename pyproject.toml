@@ -79,6 +79,13 @@ aec = [
 freeze = [
     "pyinstaller>=6.0",
 ]
+# Repo-map symbol extraction (coding agent). tree-sitter grammars via the language
+# pack; lazy-imported by tools/code/repomap.py and only needed to parse real source
+# files — the value objects and renderer are pure and tested without it.
+# `uv sync --extra code`.
+code = [
+    "tree-sitter-language-pack>=0.1",
+]
 dev = [
     "ruff>=0.6",
     "mypy>=1.11",
@@ -178,6 +185,7 @@ module = [
     "openai.*",
     "mcp.*",
     "pywhispercpp.*",
+    "tree_sitter_language_pack.*",
     "objc.*",
     "AVFoundation.*",
     "ApplicationServices.*",
