@@ -15,6 +15,7 @@ import time
 import urllib.error
 import urllib.request
 from collections.abc import Callable
+from pathlib import Path
 from typing import Any
 
 _CODER_PORT = 8766  # coder daemon port (kept off the assistant daemon's 8765)
@@ -62,21 +63,46 @@ def send_chat(
     return reply if isinstance(reply, str) else ""
 
 
+def _log_tail(path: Path, limit: int = 2000) -> str:  # pragma: no cover - trivial file read
+    """The last ``limit`` chars of a log file, for surfacing a daemon startup failure."""
+    try:
+        return path.read_text(encoding="utf-8", errors="replace")[-limit:].strip()
+    except OSError:
+        return "(no output captured)"
+
+
 def ensure_daemon(base_url: str, port: int = _CODER_PORT) -> None:  # pragma: no cover
-    """Start a coder-profile daemon on ``port`` if one isn't already answering (spawns it)."""
+    """Start a coder-profile daemon on ``port`` if one isn't already answering (spawns it).
+
+    The daemon's output is logged to a file so a startup failure (e.g. the ``daemon`` extra
+    isn't installed) is surfaced rather than causing a silent 30-second hang. Raises
+    ``RuntimeError`` (with the log tail) if the daemon exits before it answers, or
+    ``TimeoutError`` if it never answers.
+    """
     if is_daemon_up(base_url):
         return
-    subprocess.Popen(  # fixed argv, our own module
-        [sys.executable, "-m", "autobot.daemon", "--profile", "coder", "--port", str(port)],
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-    )
+    log_path = Path.home() / ".autobot" / "logs" / "jack-coder-daemon.log"
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    with log_path.open("a", encoding="utf-8") as log:
+        proc = subprocess.Popen(  # fixed argv, our own module
+            [sys.executable, "-m", "autobot.daemon", "--profile", "coder", "--port", str(port)],
+            stdout=log,
+            stderr=subprocess.STDOUT,
+        )
     deadline = time.monotonic() + _SPAWN_TIMEOUT_S
     while time.monotonic() < deadline:
         if is_daemon_up(base_url):
             return
+        if proc.poll() is not None:  # the daemon process exited before answering
+            raise RuntimeError(
+                f"the coder daemon couldn't start (exit {proc.returncode}). "
+                f"Recent output ({log_path}):\n{_log_tail(log_path)}"
+            )
         time.sleep(0.3)
-    raise TimeoutError(f"coder daemon did not start on {base_url} within {_SPAWN_TIMEOUT_S:.0f}s")
+    raise TimeoutError(
+        f"the coder daemon didn't answer on {base_url} within {_SPAWN_TIMEOUT_S:.0f}s "
+        f"(see {log_path})"
+    )
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -93,8 +119,11 @@ def main(argv: list[str] | None = None) -> int:
     text = " ".join(args.text)
     try:
         ensure_daemon(base_url, args.port)
-    except TimeoutError as exc:
+        print(send_chat(base_url, text))
+    except (RuntimeError, TimeoutError) as exc:
         print(str(exc), file=sys.stderr)
         return 1
-    print(send_chat(base_url, text))
+    except KeyboardInterrupt:
+        print("\nCancelled.", file=sys.stderr)
+        return 130
     return 0
