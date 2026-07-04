@@ -187,6 +187,8 @@ def serve(settings: Settings | None = None) -> None:
         on_meeting=on_meeting,
         on_list_sessions=orchestrator.list_sessions,
         on_resume_session=orchestrator.resume_session,
+        on_coder_turn=orchestrator.start_coder_turn,
+        on_coder_reply=orchestrator.reply_coder_turn,
     )
 
 
