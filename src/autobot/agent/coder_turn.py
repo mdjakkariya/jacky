@@ -157,18 +157,19 @@ def act_executor(
     def execute(call: ToolCall) -> ToolResult:
         if call.name == "run_command":
             command = str(call.arguments.get("command", ""))
+            logged_command = command[:200]  # cap: a long/newline-laden command is noise
             decision, reason = classify_command(command, allowlist, blocklist)
             if decision == "block":
-                _log.info("command blocked cmd=%s", command)
+                _log.info("command blocked cmd=%s", logged_command)
                 return ToolResult(
                     name=call.name,
                     content=f"That command is blocked for safety ({reason}).",
                     ok=False,
                 )
             if decision == "allow" or (decision == "confirm" and not ask_on_confirm):
-                _log.info("command auto-run cmd=%s", command)
+                _log.info("command auto-run cmd=%s", logged_command)
                 return gate.execute(call, pre_authorized=True)
-            _log.info("command ask cmd=%s", command)  # confirm + ask → gate asks the CLI
+            _log.info("command ask cmd=%s", logged_command)  # confirm + ask → gate asks CLI
         return gate.execute(call)
 
     return execute

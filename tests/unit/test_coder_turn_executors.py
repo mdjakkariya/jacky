@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+import logging
+
+import pytest
+
 from autobot.agent.coder_turn import act_executor, read_only_executor
 from autobot.core.types import Risk, ToolCall, ToolResult
 
@@ -67,3 +71,21 @@ def test_act_passes_edits_straight_through() -> None:
     ex = act_executor(gate, allowlist=[], blocklist=[])  # type: ignore[arg-type]
     ex(ToolCall(name="edit_file", arguments={"path": "x"}))
     assert gate.calls == [("edit_file", False)]  # WRITE < threshold → gate won't confirm
+
+
+def test_act_caps_logged_command_length(caplog: pytest.LogCaptureFixture) -> None:
+    # A long/newline-laden command must not bloat the debug log (logs are "signal, not
+    # noise") — the logged cmd= value is capped even though classify_command still sees
+    # the full command (the allowlist match, not the log line, decides the outcome).
+    gate = _FakeGate({"run_command": Risk.DESTRUCTIVE})
+    ex = act_executor(gate, allowlist=["pytest*"], blocklist=[])  # type: ignore[arg-type]
+    long_command = "pytest " + ("x" * 500)
+
+    with caplog.at_level(logging.INFO, logger="autobot.coder"):
+        ex(ToolCall(name="run_command", arguments={"command": long_command}))
+
+    assert gate.calls == [("run_command", True)]  # still matched the allowlist in full
+    messages = [r.getMessage() for r in caplog.records]
+    assert any("command auto-run" in m for m in messages)
+    for message in messages:
+        assert len(message) < 300  # the raw 500+ char command never reaches the log
