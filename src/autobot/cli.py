@@ -21,7 +21,7 @@ _CODER_PORT = 8766  # coder daemon port (kept off the assistant daemon's 8765)
 _SPAWN_TIMEOUT_S = 30.0
 
 
-def _post(url: str, payload: dict[str, Any], timeout: float) -> dict[str, Any]:
+def _post(url: str, payload: dict[str, Any], timeout: float) -> dict[str, Any]:  # pragma: no cover
     data = json.dumps(payload).encode("utf-8")
     req = urllib.request.Request(url, data=data, headers={"Content-Type": "application/json"})
     with urllib.request.urlopen(req, timeout=timeout) as resp:
@@ -30,7 +30,7 @@ def _post(url: str, payload: dict[str, Any], timeout: float) -> dict[str, Any]:
     return parsed
 
 
-def _probe(url: str, timeout: float) -> bool:
+def _probe(url: str, timeout: float) -> bool:  # pragma: no cover - real network probe
     with urllib.request.urlopen(url, timeout=timeout):
         return True
 
@@ -62,8 +62,8 @@ def send_chat(
     return reply if isinstance(reply, str) else ""
 
 
-def ensure_daemon(base_url: str, port: int = _CODER_PORT) -> None:
-    """Start a coder-profile daemon on ``port`` if one isn't already answering."""
+def ensure_daemon(base_url: str, port: int = _CODER_PORT) -> None:  # pragma: no cover
+    """Start a coder-profile daemon on ``port`` if one isn't already answering (spawns it)."""
     if is_daemon_up(base_url):
         return
     subprocess.Popen(  # fixed argv, our own module
