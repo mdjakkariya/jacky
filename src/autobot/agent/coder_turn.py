@@ -11,7 +11,10 @@ from __future__ import annotations
 import queue
 from typing import Any
 
+from autobot.core.types import Risk, ToolCall, ToolExecutor, ToolResult
 from autobot.logging_setup import get_logger
+from autobot.tools.code.command_policy import classify_command
+from autobot.tools.permission import PermissionGate
 
 _log = get_logger("coder")
 
@@ -80,3 +83,59 @@ class SuspendingConfirmer:
     ) -> str:
         """Coder tools don't use choices — grant the least-privilege default."""
         return default
+
+
+_PLAN_ONLY_MSG = (
+    "Planning phase — not executed. Add this step to your todo list; you'll carry it "
+    "out after the plan is approved."
+)
+
+
+def read_only_executor(gate: PermissionGate) -> ToolExecutor:
+    """An executor for the plan phase: run read-only tools, refuse anything that writes."""
+
+    def execute(call: ToolCall) -> ToolResult:
+        risk = gate.risk_of(call.name)
+        if risk is not None and risk >= Risk.WRITE:
+            _log.info("plan-phase refused tool=%s", call.name)
+            return ToolResult(name=call.name, content=_PLAN_ONLY_MSG, ok=False)
+        return gate.execute(call)  # READ_ONLY runs; an unknown tool → gate reports it
+
+    return execute
+
+
+def act_executor(
+    gate: PermissionGate,
+    allowlist: list[str],
+    blocklist: list[str],
+    *,
+    ask_on_confirm: bool = True,
+) -> ToolExecutor:
+    """An executor for the act phase: auto-apply edits; classify run_command by policy.
+
+    ``run_command`` is classified by :func:`classify_command`: ``"block"`` is refused
+    outright; ``"allow"`` (user allowlist) runs pre-authorized (no prompt); ``"confirm"``
+    falls through to the gate, which asks the CLI via the :class:`SuspendingConfirmer` —
+    unless ``ask_on_confirm`` is ``False`` (``auto`` mode), where it runs pre-authorized
+    too. Everything else (reads, in-cwd edits) goes straight to the gate; being below the
+    gate's destructive threshold, edits never prompt.
+    """
+
+    def execute(call: ToolCall) -> ToolResult:
+        if call.name == "run_command":
+            command = str(call.arguments.get("command", ""))
+            decision, reason = classify_command(command, allowlist, blocklist)
+            if decision == "block":
+                _log.info("command blocked cmd=%s", command)
+                return ToolResult(
+                    name=call.name,
+                    content=f"That command is blocked for safety ({reason}).",
+                    ok=False,
+                )
+            if decision == "allow" or (decision == "confirm" and not ask_on_confirm):
+                _log.info("command auto-run cmd=%s", command)
+                return gate.execute(call, pre_authorized=True)
+            _log.info("command ask cmd=%s", command)  # confirm + ask → gate asks the CLI
+        return gate.execute(call)
+
+    return execute
