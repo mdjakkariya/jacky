@@ -18,6 +18,7 @@ from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
+    from autobot.agent.coder_turn import CoderTurnDriver
     from autobot.mcp.provider import McpProvider
 
 import numpy as np
@@ -394,6 +395,9 @@ class Orchestrator:
         # Set by the composition root when allow_meetings is True. The daemon
         # delegates /meeting/* HTTP actions to the recorder via this attribute.
         self.meeting_recorder: Any = None
+        # Set by app.build() in the coder profile; None for the assistant. Backs the
+        # daemon's /coder/turn + /coder/reply endpoints (plan → approve → act).
+        self.coder_driver: CoderTurnDriver | None = None
 
     def _greeting(self) -> str:
         """The reply to a bare wake word — name-aware, and a first hello if new."""
@@ -955,6 +959,18 @@ class Orchestrator:
             return reply
         finally:
             self._text_mode = False
+
+    def start_coder_turn(self, text: str) -> dict[str, Any]:
+        """Begin a coder plan→approve→act turn (coder profile only)."""
+        if self.coder_driver is None:
+            return {"status": "error", "reply": "coding turns aren't available here."}
+        return self.coder_driver.start(text)
+
+    def reply_coder_turn(self, value: str, text: str = "") -> dict[str, Any]:
+        """Deliver the CLI's answer to a parked coder turn (coder profile only)."""
+        if self.coder_driver is None:
+            return {"status": "error", "reply": "coding turns aren't available here."}
+        return self.coder_driver.reply(value, text)
 
     def run(self) -> None:
         """Run the interaction loop until interrupted with Ctrl-C."""
