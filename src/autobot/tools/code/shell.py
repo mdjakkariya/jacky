@@ -29,7 +29,9 @@ _OUTPUT_CAP = 30_000  # max chars of combined output returned
 CommandRunner = Callable[[str, str, float], tuple[int, str, bool]]
 
 
-def _default_runner(command: str, cwd: str, timeout: float) -> tuple[int, str, bool]:
+def _default_runner(  # pragma: no cover - the real OS boundary; tests inject a fake runner
+    command: str, cwd: str, timeout: float
+) -> tuple[int, str, bool]:
     """Run ``command`` in the platform shell, capturing combined output (never raises)."""
     import subprocess
 
