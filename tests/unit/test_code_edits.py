@@ -1,4 +1,4 @@
-"""Tests for the pure search/replace engine (claude-code-aligned: exact + one WS pass)."""
+"""Tests for the pure search/replace engine (exact match + one whitespace-tolerant pass)."""
 
 from __future__ import annotations
 

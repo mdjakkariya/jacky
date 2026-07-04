@@ -1,7 +1,6 @@
 r"""Code-editing tools for the coder profile (path-jailed, OS-neutral).
 
-Code-oriented siblings of the assistant's ``fileio`` tools, aligned with claude-code's
-``FileReadTool``/``FileWriteTool``/``FileEditTool``: ``read_file`` returns
+Code-oriented siblings of the assistant's ``fileio`` tools: ``read_file`` returns
 ``{n}\t{line}`` line-numbered text (so edits can cite lines), ``write_file`` is
 **create-only** (never clobbers an existing file — that is what ``edit_file`` and, later,
 checkpoints are for), and ``edit_file``/``multi_edit`` apply search/replace blocks via
@@ -21,7 +20,7 @@ from autobot.tools.code.edits import apply_replace
 _log = get_logger("coder")
 
 _READ_CHAR_CAP = 100_000  # max chars returned into the conversation
-_READ_LINE_CAP = 2000  # max lines returned in one read_file call (claude-code default)
+_READ_LINE_CAP = 2000  # max lines returned in one read_file call
 
 
 def _read_text(resolved: Path) -> tuple[str | None, str]:

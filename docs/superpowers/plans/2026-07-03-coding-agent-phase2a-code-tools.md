@@ -4,7 +4,7 @@
 
 **Goal:** Add a new `src/autobot/tools/code/` package with code-oriented edit tools — `read_file` (line-numbered), `write_file` (create-only), `edit_file` (search/replace with `replace_all`), `multi_edit` (sequential atomic edits) — path-jailed through the existing `AccessBroker`/`AccessPolicy`, risk-classified, and exposed via `register_code_tools(registry, broker)` for the future `coder` profile (wired in #53).
 
-**Architecture:** A pure, I/O-free search/replace **engine** (`edits.py`) and a thin **tools layer** (`tools.py`) that resolves every path through `AccessBroker.ensure(...)` (reusing the workspace jail, folder grants, and audit log unchanged) and calls the engine. The matcher deliberately follows the **claude-code `FileEditTool` strategy** — proven at scale — rather than Aider-style indentation reflow: match **exactly** first, then a single **trailing-whitespace-tolerant** pass (the one drift that read-before-edit can't see, since trailing spaces are invisible in line-numbered output). It requires the match be **unique** unless `replace_all` is set, and returns claude-code's clear "not found / N matches / identical" messages so the model self-corrects. It does **not** re-indent or guess — an ambiguous or absent match changes nothing. No new dependencies (no tree-sitter, no ripgrep — those are #49/#50). This package imports nothing from the Phase 1 `agent/` code, so it lands independently of PR #60.
+**Architecture:** A pure, I/O-free search/replace **engine** (`edits.py`) and a thin **tools layer** (`tools.py`) that resolves every path through `AccessBroker.ensure(...)` (reusing the workspace jail, folder grants, and audit log unchanged) and calls the engine. The matcher is deliberately **exact-first** — match verbatim, then a single **trailing-whitespace-tolerant** pass (the one drift that read-before-edit can't see, since trailing spaces are invisible in line-numbered output) — rather than fuzzy indentation reflow. It requires the match be **unique** unless `replace_all` is set, and returns clear "not found / N matches / identical" messages so the model self-corrects. It does **not** re-indent or guess — an ambiguous or absent match changes nothing. No new dependencies (no tree-sitter, no ripgrep — those are #49/#50). This package imports nothing from the Phase 1 `agent/` code, so it lands independently of PR #60.
 
 **Tech Stack:** Python ≥ 3.11, stdlib only. Existing `ToolRegistry`/`ToolSpec`/`Risk` (`autobot.core.types`, `autobot.tools.registry`) and `AccessBroker`/`AccessPolicy`/`AccessDeniedError` (`autobot.tools.access`). Tests: `pytest` with explicit fakes (no mocking framework).
 
@@ -34,14 +34,14 @@ Every task's requirements implicitly include this section. Values are copied ver
 
 Ownership boundary: `edits.py` decides *whether/where* text matches and returns edited content; `tools.py` decides *whether the path is allowed* and does the read/write. Keeping them apart is what lets the matcher be tested exhaustively with plain strings.
 
-### Reference alignment (why this shape)
+### Matching strategy (why this shape)
 
-This mirrors claude-code's `FileEditTool`/`FileReadTool`/`FileWriteTool` (`/Users/mohamedjakkariyar/work/claude-code/src/tools/`) so behaviour matches a battle-tested coding agent and transfers across providers:
+The tool surface and matching behaviour follow a proven, provider-neutral design so edits stay reliable across any LLM:
 
-- **Exact-match + one whitespace pass, never reindent.** claude-code matches exactly (plus a curly-quote normalization we defer — see Notes) and relies on read-before-edit + good errors, not fuzzy indentation. We add exactly one safe extra pass: trailing-whitespace tolerance.
-- **`replace_all` flag**, default false → require a unique match; on multiple matches, the error tells the model to add context or set `replace_all` (claude-code's exact behaviour).
-- **Guards:** `old_string == new_string` → "no changes"; empty `find` is rejected (creating files is `write_file`'s job); in `multi_edit`, a later edit's `find` may not be a substring of an earlier edit's `replace` (claude-code's cascade guard).
-- **Line format** `{n}\t{line}` — claude-code's compact line prefix; universal across providers (its default `{n}→{line}` arrow form is Claude-specific, so we use the tab form). `MAX_LINES = 2000`, `offset` 1-based — claude-code's defaults.
+- **Exact-match + one whitespace pass, never reindent.** Match exactly, relying on read-before-edit + good error messages rather than fuzzy indentation; the only tolerance we add is trailing-whitespace. (Curly-quote normalization is deferred — see Notes.)
+- **`replace_all` flag**, default false → require a unique match; on multiple matches, the error tells the model to add context or set `replace_all`.
+- **Guards:** identical `find`/`replace` → "no changes"; empty `find` is rejected (creating files is `write_file`'s job); in `multi_edit`, a later edit's `find` may not be a substring of an earlier edit's `replace` (a cascade guard).
+- **Line format** `{n}\t{line}` — a compact, tab-separated prefix that's universal across providers (an arrow form like `{n}→{line}` reads as model-specific, so we use the tab form). `MAX_LINES = 2000`, `offset` 1-based.
 
 ---
 
@@ -74,7 +74,7 @@ from __future__ import annotations
 Create `tests/unit/test_code_edits.py`:
 
 ```python
-"""Tests for the pure search/replace engine (claude-code-aligned: exact + one WS pass)."""
+"""Tests for the pure search/replace engine (exact match + one whitespace-tolerant pass)."""
 
 from __future__ import annotations
 
@@ -156,8 +156,8 @@ Create `src/autobot/tools/code/edits.py`:
 """Search/replace engine for code edits (pure, no I/O).
 
 The engine ``edit_file`` and ``multi_edit`` use to apply one search/replace block.
-It follows claude-code's ``FileEditTool`` strategy — exact matching plus a single
-tolerant pass — rather than fuzzy indentation reflow, because the model reads a file
+It matches exactly first, then falls back to a single trailing-whitespace-tolerant
+pass — deliberately no fuzzy indentation reflow, because the model reads a file
 (line-numbered) right before editing, so it already has the exact text:
 
 1. **exact** — the search text appears verbatim; it must be unique unless
@@ -406,8 +406,7 @@ Create `src/autobot/tools/code/tools.py`:
 ```python
 """Code-editing tools for the coder profile (path-jailed, OS-neutral).
 
-Code-oriented siblings of the assistant's ``fileio`` tools, aligned with claude-code's
-``FileReadTool``/``FileWriteTool``/``FileEditTool``: ``read_file`` returns
+Code-oriented siblings of the assistant's ``fileio`` tools: ``read_file`` returns
 ``{n}\\t{line}`` line-numbered text (so edits can cite lines), ``write_file`` is
 **create-only** (never clobbers an existing file — that is what ``edit_file`` and, later,
 checkpoints are for), and ``edit_file``/``multi_edit`` apply search/replace blocks via
@@ -427,7 +426,7 @@ from autobot.tools.code.edits import apply_replace
 _log = get_logger("coder")
 
 _READ_CHAR_CAP = 100_000  # max chars returned into the conversation
-_READ_LINE_CAP = 2000  # max lines returned in one read_file call (claude-code default)
+_READ_LINE_CAP = 2000  # max lines returned in one read_file call
 
 
 def _read_text(resolved: Path) -> tuple[str | None, str]:
@@ -517,7 +516,7 @@ git commit -m "feat(code): line-numbered read_file + create-only write_file (#48
 
 ### Task 3: `edit_file` (with `replace_all`) + `multi_edit` (atomic, cascade-guarded)
 
-Wire the engine to gated files. `edit_file` applies one search/replace (optionally `replace_all`); `multi_edit` applies a list of them to one file **atomically** — every edit applies to a working copy in order, the file is written only if all succeed, and a later edit's `find` may not be a substring of an earlier edit's `replace` (claude-code's cascade guard, which catches an edit that would match text a previous edit just inserted).
+Wire the engine to gated files. `edit_file` applies one search/replace (optionally `replace_all`); `multi_edit` applies a list of them to one file **atomically** — every edit applies to a working copy in order, the file is written only if all succeed, and a later edit's `find` may not be a substring of an earlier edit's `replace` (a cascade guard, which catches an edit that would match text a previous edit just inserted).
 
 **Files:**
 - Modify: `src/autobot/tools/code/tools.py`
@@ -967,8 +966,8 @@ git commit -m "feat(code): register coder-profile code tools with risk + schemas
 ## Notes for the executor
 
 - **Scope discipline (YAGNI):** #48 is *only* these four tools + the engine. Do **not** add `apply_patch`/unified-diff (optional in the spec — deferred), do **not** wire anything into `app.py` or a profile (that's #53), and do **not** add `grep`/`glob`/`run_command` (that's #49).
-- **Reference-alignment, deliberately deferred (do NOT add in #48):** claude-code's `FileEditTool` also does **curly-quote normalization** (match straight↔curly quotes and preserve the file's style on write — `normalizeQuotes`/`findActualString`/`preserveQuoteStyle` in `/Users/mohamedjakkariyar/work/claude-code/src/tools/FileEditTool/utils.ts`). It's valuable for prose but lower-ROI for code and adds ~55 lines of open/close heuristics; we ship exact + trailing-whitespace now and will file a follow-up to port quote normalization if drift shows up. Also deferred: `replace_all` per-edit in `multi_edit`, and unified-diff `apply_patch`.
-- **Why not Aider-style indentation reflow:** an earlier draft re-indented the replacement to a `strip()`-matched block. Dropped — claude-code doesn't reindent, it's a common source of edits landing in a subtly-wrong place, and read-before-edit gives the model the exact indentation. Exactness + clear errors is the proven, safer path.
+- **Deliberately deferred (do NOT add in #48):** **curly-quote normalization** (match straight↔curly quotes and preserve the file's quote style on write). It's valuable for prose but lower-ROI for code and adds ~55 lines of open/close heuristics; we ship exact + trailing-whitespace now and will file a follow-up to add quote normalization if drift shows up. Also deferred: `replace_all` per-edit in `multi_edit`, and unified-diff `apply_patch`.
+- **Why not indentation reflow:** an earlier draft re-indented the replacement to a `strip()`-matched block. Dropped — reindentation is a common source of edits landing in a subtly-wrong place, and read-before-edit gives the model the exact indentation. Exactness + clear errors is the safer path.
 - **Risk rationale (do not change without asking):** editing an existing file is `WRITE`, not `DESTRUCTIVE`, because the autonomy design auto-applies in-workspace edits and makes them recoverable via checkpoints (#51); the destructive-overwrite path is removed by making `write_file` create-only. Read is `READ_ONLY`.
 - **Behaviour-preserving:** this package is purely additive and imported nowhere yet, so no existing test should change. If an existing test breaks, something was wired that shouldn't be — stop and report.
 - The existing assistant `fileio.py` tools are intentionally left untouched; the code tools are separate so the two profiles can diverge.

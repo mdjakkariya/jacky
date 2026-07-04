@@ -1,8 +1,8 @@
 """Search/replace engine for code edits (pure, no I/O).
 
 The engine ``edit_file`` and ``multi_edit`` use to apply one search/replace block.
-It follows claude-code's ``FileEditTool`` strategy — exact matching plus a single
-tolerant pass — rather than fuzzy indentation reflow, because the model reads a file
+It matches exactly first, then falls back to a single trailing-whitespace-tolerant
+pass — deliberately no fuzzy indentation reflow, because the model reads a file
 (line-numbered) right before editing, so it already has the exact text:
 
 1. **exact** — the search text appears verbatim; it must be unique unless
