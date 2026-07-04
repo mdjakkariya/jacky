@@ -143,6 +143,10 @@ class Settings:
     # (a code-editing agent — swaps in the code tools + a coding system prompt). Set by the
     # daemon's --profile flag or settings.json; the jack CLI runs a coder-profile daemon.
     profile: str = "assistant"
+    # Output-token budget for coder turns. The assistant/voice default (llm_max_tokens=120)
+    # is far too small for code — a coder plan or reply would truncate — so the coder build
+    # raises it via _apply_profile_overrides. The assistant's budget is left untouched.
+    coder_llm_max_tokens: int = 4096
     # --- listening (Phase 2) ---
     input_mode: str = _DEFAULT_INPUT_MODE
     wake_detector: str = _DEFAULT_WAKE_DETECTOR

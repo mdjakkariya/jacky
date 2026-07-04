@@ -286,6 +286,17 @@ def _summary_window_chars(settings: Settings) -> int:
     return 8000
 
 
+def _apply_profile_overrides(settings: Settings) -> Settings:
+    """Return settings with profile-specific overrides applied.
+
+    The coder profile raises the LLM output budget so plans/replies don't truncate at
+    the assistant's small default. All other profiles are returned unchanged.
+    """
+    if settings.profile == "coder":
+        return replace(settings, llm_max_tokens=settings.coder_llm_max_tokens)
+    return settings
+
+
 def _build_llm(
     settings: Settings,
     registry: ToolRegistry,
@@ -299,6 +310,7 @@ def _build_llm(
     is wrapped in an :class:`AgentHarness`, which owns the conversation `Session` (history,
     summary, delivery mode, usage) — the adapters themselves are stateless across turns.
     """
+    settings = _apply_profile_overrides(settings)
     log = get_logger("app")
     store = SessionStore(settings.agent_session_dir)
 
