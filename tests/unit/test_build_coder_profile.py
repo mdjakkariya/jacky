@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from autobot.config import Settings
 from autobot.tools.access import AccessBroker, AccessPolicy
 from autobot.tools.code.tools import register_code_tools
@@ -84,3 +86,28 @@ def test_build_with_assistant_profile_registers_assistant_tools(tmp_path: Path) 
     names = {s.name for s in orch._gate._registry.specs()}
     assert "read_file_text" in names  # assistant fileio tool present
     assert "run_command" not in names and "repo_map" not in names  # code tools absent
+
+
+def test_coder_build_jails_to_cwd(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    # The coder is jailed to the directory it was launched from (its cwd), NOT sandbox_dir —
+    # so `jack "…"` edits the current project.
+    import autobot.app as app
+    from autobot.tools.access import active_policy
+
+    project = tmp_path / "project"
+    project.mkdir()
+    monkeypatch.chdir(project)  # simulate running jack from a project directory
+    settings = Settings(
+        profile="coder",
+        sandbox_dir=str(tmp_path / "ignored_sandbox"),
+        access_store=str(tmp_path / "a.json"),
+        audit_db=str(tmp_path / "a.db"),
+        agent_session_dir=str(tmp_path / "sess"),
+        memory_db=str(tmp_path / "m.db"),
+        input_mode="ptt",
+        session_log=False,
+    )
+    app.build(settings)
+    pol = active_policy()
+    assert pol is not None
+    assert pol.cwd == project.resolve()  # jailed to cwd, not the sandbox
