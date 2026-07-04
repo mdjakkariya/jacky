@@ -40,8 +40,10 @@ def test_daemon_up_probe() -> None:
 
 
 def test_main_one_shot(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
-    monkeypatch.setattr(cli, "ensure_daemon", lambda base: None)
+    seen_port: list[int] = []
+    monkeypatch.setattr(cli, "ensure_daemon", lambda base, port: seen_port.append(port))
     monkeypatch.setattr(cli, "send_chat", lambda base, text, **k: "the reply")
-    rc = cli.main(["do a thing"])
+    rc = cli.main(["--port", "9001", "do a thing"])
     assert rc == 0
     assert "the reply" in capsys.readouterr().out
+    assert seen_port == [9001]  # main() forwards --port to the daemon spawn

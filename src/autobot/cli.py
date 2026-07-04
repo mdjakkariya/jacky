@@ -90,7 +90,7 @@ def main(argv: list[str] | None = None) -> int:
     base_url = f"http://127.0.0.1:{args.port}"
     text = " ".join(args.text)
     try:
-        ensure_daemon(base_url)
+        ensure_daemon(base_url, args.port)
     except TimeoutError as exc:
         print(str(exc), file=sys.stderr)
         return 1
