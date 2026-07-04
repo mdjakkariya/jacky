@@ -9,8 +9,12 @@ confirmations to the active turn's channel instead of a TTY it doesn't have).
 from __future__ import annotations
 
 import queue
+import re
+import threading
+from collections.abc import Callable
 from typing import Any
 
+from autobot.config import Settings
 from autobot.core.types import Risk, ToolCall, ToolExecutor, ToolResult
 from autobot.logging_setup import get_logger
 from autobot.tools.code.command_policy import classify_command
@@ -139,3 +143,139 @@ def act_executor(
         return gate.execute(call)
 
     return execute
+
+
+_PLAN_PROMPT_PREFIX = (
+    "You are in PLANNING mode. Use ONLY read-only tools (read_file, grep, glob, "
+    "repo_map) to explore the codebase, then reply with a concise numbered todo list "
+    "of the edits and commands you will make to accomplish the request. Do not edit "
+    "files or run commands yet.\n\nRequest: "
+)
+_ACT_PROMPT = (
+    "Your plan is approved. Carry it out now, step by step: make the edits and run the "
+    "commands from your plan, then briefly report what you did."
+)
+_CANCELLED_REPLY = "Okay, I won't make any changes."
+_ERROR_REPLY = "Something went wrong on my end, so I stopped. Nothing was changed."
+
+_TODO_LINE = re.compile(r"^\s*(?:\d+[.)]|[-*])\s+(.*\S)\s*$")
+
+
+def _extract_todo(reply: str) -> list[str]:
+    """Best-effort: pull numbered/bulleted step text from a plan reply (for future UIs)."""
+    return [m.group(1) for line in reply.splitlines() if (m := _TODO_LINE.match(line))]
+
+
+class CoderTurnDriver:
+    """Runs one coder turn (plan → approve → act) on a worker thread over a TurnChannel.
+
+    ``start`` spawns the worker and returns its first event; ``reply`` delivers the CLI's
+    answer and returns the next event. Only one turn runs at a time (guarded by a lock):
+    a second ``start`` while a turn is actively running is rejected, while a turn is
+    *parked* awaiting an answer (a CLI that died) is reclaimed.
+    """
+
+    def __init__(
+        self,
+        llm: Any,
+        gate: PermissionGate,
+        confirmer: SuspendingConfirmer,
+        settings_provider: Callable[[], Settings],
+    ) -> None:
+        """Wire the driver. ``llm`` must expose ``run_turn(text, execute)``."""
+        self._llm = llm
+        self._gate = gate
+        self._confirmer = confirmer
+        self._settings = settings_provider
+        self._lock = threading.Lock()
+        self._channel: TurnChannel | None = None
+        self._awaiting = False  # True when the worker is parked awaiting an answer
+
+    def start(self, text: str) -> dict[str, Any]:
+        """Begin a coder turn; return its first event (plan, pending, done, or error)."""
+        with self._lock:
+            if self._channel is not None and not self._awaiting:
+                return {"status": "error", "reply": "A coding turn is already running."}
+            if self._channel is not None and self._awaiting:
+                self._channel.answer("reject")  # reclaim a stale parked turn (CLI died)
+            channel = TurnChannel()
+            self._channel = channel
+            self._awaiting = False
+            self._confirmer.set_channel(channel)
+            worker = threading.Thread(
+                target=self._run, args=(channel, text), name="coder-turn", daemon=True
+            )
+            worker.start()
+        return self._collect(channel)
+
+    def reply(self, value: str, text: str = "") -> dict[str, Any]:
+        """Deliver the CLI's answer to the parked turn; return the next event."""
+        with self._lock:
+            channel = self._channel
+            if channel is None or not self._awaiting:
+                return {"status": "error", "reply": "No coding turn is awaiting a reply."}
+            self._awaiting = False
+        channel.answer(value, text)
+        return self._collect(channel)
+
+    def _collect(self, channel: TurnChannel) -> dict[str, Any]:
+        """Poll the channel for the next event, updating turn state."""
+        event = channel.poll()
+        with self._lock:
+            if event.get("status") == "done":
+                self._channel = None
+                self._awaiting = False
+                self._confirmer.set_channel(None)
+            else:
+                self._awaiting = True
+        return event
+
+    def _run(self, channel: TurnChannel, text: str) -> None:
+        """Worker body: drive plan→approve→act per the autonomy dial. Never raises."""
+        try:
+            autonomy = self._settings().coding_autonomy
+            if autonomy == "plan":
+                if not self._plan_loop(channel, text):
+                    channel.done(_CANCELLED_REPLY)
+                    return
+                reply = self._act()  # session already holds the approved plan
+            else:
+                reply = self._act(first_text=text)  # confirm/auto: act on the request
+            channel.done(reply)
+        except Exception:  # a turn must always terminate with a reply for the CLI
+            _log.exception("coder turn failed")
+            channel.done(_ERROR_REPLY)
+
+    def _plan_loop(self, channel: TurnChannel, text: str) -> bool:
+        """Plan (read-only) → ask the CLI → approve/reject/refine. Return True if approved."""
+        request = text
+        while True:
+            executor = read_only_executor(self._gate)
+            reply = self._llm.run_turn(_PLAN_PROMPT_PREFIX + request, executor)
+            todo = _extract_todo(reply)
+            _log.info("plan proposed steps=%d", len(todo))
+            answer = channel.ask({"status": "plan", "reply": reply, "todo": todo})
+            value = answer.get("value", "").strip().lower()
+            if value in {"approve", "yes", "y"}:
+                _log.info("plan approved")
+                return True
+            if value in {"reject", "no", "n"}:
+                _log.info("plan rejected")
+                return False
+            request = answer.get("text") or text  # refine: re-plan with the feedback
+            _log.info("plan refined")
+
+    def _act(self, *, first_text: str | None = None) -> str:
+        """Run the act phase with the escalate-to-ask executor tuned by the dial."""
+        settings = self._settings()
+        ask_on_confirm = settings.coding_autonomy != "auto"
+        executor = act_executor(
+            self._gate,
+            settings.command_allowlist,
+            settings.command_blocklist,
+            ask_on_confirm=ask_on_confirm,
+        )
+        prompt = first_text if first_text is not None else _ACT_PROMPT
+        reply: str = self._llm.run_turn(prompt, executor)
+        _log.info("turn done")
+        return reply
