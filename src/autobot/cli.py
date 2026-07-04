@@ -8,6 +8,7 @@ prints the reply. Dependency-free: talks HTTP with ``urllib`` and spawns the dae
 from __future__ import annotations
 
 import argparse
+import contextlib
 import json
 import subprocess
 import sys
@@ -148,5 +149,8 @@ def main(argv: list[str] | None = None) -> int:
         return 1
     except KeyboardInterrupt:
         print("\nCancelled.", file=sys.stderr)
+        # Best-effort: unblock a worker parked awaiting a reply; never fail on this.
+        with contextlib.suppress(Exception):
+            _post(f"{base_url}/coder/reply", {"value": "reject"}, 1.0)
         return 130
     return 0

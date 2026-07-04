@@ -128,3 +128,41 @@ def test_main_handles_ctrl_c_cleanly(
     rc = cli.main(["do a thing"])
     assert rc == 130
     assert "cancel" in capsys.readouterr().err.lower()
+
+
+def test_main_ctrl_c_sends_best_effort_reject(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # Ctrl-C best-effort unblocks a worker parked awaiting a reply by POSTing a reject.
+    def interrupted(base: str, port: int) -> None:
+        raise KeyboardInterrupt
+
+    calls: list[tuple[str, dict[str, object]]] = []
+
+    def fake_post(url: str, payload: dict[str, object], timeout: float) -> dict[str, object]:
+        calls.append((url, payload))
+        return {"status": "done"}
+
+    monkeypatch.setattr(cli, "ensure_daemon", interrupted)
+    monkeypatch.setattr(cli, "_post", fake_post)
+    rc = cli.main(["--port", "9001", "do a thing"])
+    assert rc == 130
+    assert "cancel" in capsys.readouterr().err.lower()
+    assert calls == [("http://127.0.0.1:9001/coder/reply", {"value": "reject"})]
+
+
+def test_main_ctrl_c_swallows_post_failure(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # The best-effort reject must never change the exit path if it fails.
+    def interrupted(base: str, port: int) -> None:
+        raise KeyboardInterrupt
+
+    def boom_post(url: str, payload: dict[str, object], timeout: float) -> dict[str, object]:
+        raise OSError("connection refused")
+
+    monkeypatch.setattr(cli, "ensure_daemon", interrupted)
+    monkeypatch.setattr(cli, "_post", boom_post)
+    rc = cli.main(["do a thing"])
+    assert rc == 130
+    assert "cancel" in capsys.readouterr().err.lower()
