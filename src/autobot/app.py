@@ -23,6 +23,7 @@ from autobot.core.interfaces import AudioSource, SpeechToText, TextToSpeech
 from autobot.io.audio import PushToTalkRecorder
 from autobot.llm.ollama_llm import OllamaLanguageModel
 from autobot.logging_setup import get_logger, setup_logging
+from autobot.orchestrator.checkpoint import create_checkpoint
 from autobot.orchestrator.state_machine import Orchestrator, StateListener, _print_transition
 from autobot.orchestrator.wake_gate import PassThroughGate, SttWakeGate, WakeGate
 from autobot.session_log import FileTranscript, NullTranscript, Transcript
@@ -303,6 +304,11 @@ def _build_llm(
 
     _pol = active_policy()
     cwd = str(_pol.cwd) if _pol is not None else str(Path.cwd())
+
+    def _snapshot(label: str) -> None:
+        create_checkpoint(cwd, label)
+
+    checkpoint = _snapshot if settings.checkpoints else None
     if settings.llm_provider == "anthropic":
         try:
             from autobot.llm.anthropic_llm import AnthropicLanguageModel
@@ -323,6 +329,7 @@ def _build_llm(
                 cwd=cwd,
                 model_name=settings.anthropic_model,
                 redact=lambda t: redact_secrets(t)[0],
+                checkpoint=checkpoint,
             )
         except ImportError:
             log.warning("cloud LLM extra missing, falling back to local")
@@ -357,13 +364,19 @@ def _build_llm(
             cwd=cwd,
             model_name=settings.llm_model,
             redact=lambda t: redact_secrets(t)[0],
+            checkpoint=checkpoint,
         )
     from autobot.tools.selection import build_tool_selector
 
     selector = build_tool_selector(settings, registry)
     model = OllamaLanguageModel(settings, registry, transcript, memory=memory, selector=selector)
     return AgentHarness(
-        model, store, cwd=cwd, model_name=settings.llm_model, redact=lambda t: redact_secrets(t)[0]
+        model,
+        store,
+        cwd=cwd,
+        model_name=settings.llm_model,
+        redact=lambda t: redact_secrets(t)[0],
+        checkpoint=checkpoint,
     )
 
 
