@@ -276,3 +276,17 @@ def test_nav_exec_handlers_are_no_arg_safe(tmp_path: Path) -> None:
         assert spec is not None
         out = spec.handler()
         assert isinstance(out, str) and out
+
+
+def test_register_adds_repo_map(tmp_path: Path) -> None:
+    reg = _registry(tmp_path)
+    assert reg.get("repo_map") is not None
+
+
+def test_repo_map_risk_and_no_arg_safe(tmp_path: Path) -> None:
+    reg = _registry(tmp_path)
+    spec = reg.get("repo_map")
+    assert spec is not None
+    assert spec.risk == Risk.READ_ONLY
+    out = spec.handler()  # no args → must return a string, never raise
+    assert isinstance(out, str) and out

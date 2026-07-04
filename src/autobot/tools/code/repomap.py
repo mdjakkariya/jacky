@@ -16,8 +16,10 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from autobot.core.types import Risk
 from autobot.logging_setup import get_logger
 from autobot.tools.access import AccessBroker, AccessDeniedError
+from autobot.tools.registry import ToolRegistry, ToolSpec
 
 _DEFAULT_CHAR_BUDGET = 8000
 
@@ -195,3 +197,33 @@ def build_repo_map(
         return "No Python files found under this path."
     _log.info("repo_map root=%s files=%d", base.name, len(file_maps))
     return render_repo_map(file_maps, char_budget)
+
+
+def register_repomap_tool(registry: ToolRegistry, broker: AccessBroker) -> None:
+    """Register the read-only ``repo_map`` tool (needs the optional ``code`` extra to run)."""
+
+    def _handler(path: str = ".") -> str:
+        return build_repo_map(path, broker)
+
+    registry.register(
+        ToolSpec(
+            name="repo_map",
+            description=(
+                "Show a compact overview of the code in a folder — the classes and functions "
+                "defined in each file, with their signature lines — so you can orient without "
+                "reading whole files. Pass `path` to map a subfolder (defaults to the working "
+                "folder). Use grep/read_file to then dig into specifics."
+            ),
+            parameters={
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string", "description": "Folder to map (optional)."},
+                },
+                "required": [],
+            },
+            handler=_handler,
+            risk=Risk.READ_ONLY,
+            ack="Mapping the code.",
+        )
+    )
+    _log.info("repo_map tool registered")
