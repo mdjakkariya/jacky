@@ -26,6 +26,6 @@ repos:
         # The hook runs in an isolated env, so it needs the deps mypy must
         # resolve (pytest is imported by the test suite mypy type-checks too).
         # Mirrors `make check` / CI, where these are already installed.
-        additional_dependencies: ["numpy>=1.24", "pytest>=8.0"]
+        additional_dependencies: ["numpy>=1.24", "pytest>=8.0", "keyring>=25", "openai>=1.40"]
         args: ["--config-file=pyproject.toml"]
         pass_filenames: false

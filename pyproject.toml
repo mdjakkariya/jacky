@@ -15,6 +15,7 @@ dependencies = [
     "faster-whisper>=1.0.0", # English-only STT (CTranslate2 backend)
     "sounddevice>=0.4.6",    # mic capture; bundles PortAudio in its wheel
     "ollama>=0.4.0",         # local LLM client with tool calling
+    "keyring>=25",           # cross-platform OS secret store (Keychain/Credential Locker/Secret Service)
 ]
 
 [project.optional-dependencies]
@@ -45,10 +46,12 @@ daemon = [
     "fastapi>=0.110",
     "uvicorn[standard]>=0.29",
 ]
-# Optional cloud LLM (Claude). Opt-in, off by default: `uv sync --extra cloud`.
-# Lazy-imported; only needed when llm_provider="anthropic".
+# Optional cloud LLM (Claude, or any OpenAI-compatible endpoint). Opt-in, off by
+# default: `uv sync --extra cloud`. Lazy-imported; only needed when
+# llm_provider="anthropic" or "openai".
 cloud = [
     "anthropic>=0.40",
+    "openai>=1.40",
 ]
 # Optional GPU-accelerated STT (whisper.cpp, Metal on Apple Silicon). Lazy-imported;
 # only needed when stt_engine="whisper_cpp". `uv sync --extra whispercpp`.
@@ -172,6 +175,7 @@ module = [
     "fastapi.*",
     "uvicorn.*",
     "anthropic.*",
+    "openai.*",
     "mcp.*",
     "pywhispercpp.*",
     "objc.*",

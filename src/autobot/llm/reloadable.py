@@ -84,3 +84,18 @@ class ReloadableLanguageModel:
         fn = getattr(inner, "set_delivery_mode", None)
         if callable(fn):
             fn(mode)
+
+    def resume(self, session_id: str) -> bool:
+        """Delegate to the active inner model's ``resume`` (if it has one)."""
+        with self._lock:
+            inner = self._inner
+        fn = getattr(inner, "resume", None)
+        return bool(fn(session_id)) if callable(fn) else False
+
+    def list_sessions(self) -> list[dict[str, Any]]:
+        """Delegate to the active inner model's ``list_sessions`` (if it has one)."""
+        with self._lock:
+            inner = self._inner
+        fn = getattr(inner, "list_sessions", None)
+        result = fn() if callable(fn) else []
+        return result if isinstance(result, list) else []

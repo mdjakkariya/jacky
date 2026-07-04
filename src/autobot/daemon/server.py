@@ -41,7 +41,7 @@ _log = get_logger("daemon")
 
 # Secrets the Settings view may store (Keychain account names). Anything else is
 # rejected so the endpoint can't write arbitrary Keychain items.
-_SECRET_NAMES = ("anthropic_api_key", "web_api_key")
+_SECRET_NAMES = ("anthropic_api_key", "openai_api_key", "web_api_key")
 
 # Valid values for the ``risk`` field on the /mcp/servers/{id}/tools/{tool} endpoint.
 _VALID_MCP_RISKS = frozenset({"read_only", "write", "destructive"})
@@ -87,6 +87,8 @@ def create_app(
     on_action: Any | None = None,
     mcp_provider: McpProvider | None = None,
     on_meeting: Any | None = None,
+    on_list_sessions: Any | None = None,
+    on_resume_session: Any | None = None,
 ) -> Any:
     """Build the FastAPI app: the event stream plus the Settings-view API.
 
@@ -112,6 +114,12 @@ def create_app(
             dispatching meeting actions (``start``/``stop``/``pause``/``resume``/
             ``status``/``list``/``last``/``reveal``) to the recorder. When ``None``,
             all /meeting/* routes return ``{"ok": False, "error": "meetings disabled"}``.
+        on_list_sessions: Optional callback returning the stored agent sessions
+            (id/cwd/model/mtime summaries); wired to the orchestrator's
+            ``list_sessions``. When ``None``, ``GET /sessions`` returns ``[]``.
+        on_resume_session: Optional callback (session_id: str -> bool) that resumes a
+            stored agent session; wired to the orchestrator's ``resume_session``. When
+            ``None``, ``POST /sessions/resume`` returns ``{"ok": False}``.
 
     Returns:
         A FastAPI app: ``/healthz``, WebSocket ``/ws``, the settings API, and
@@ -216,6 +224,7 @@ def create_app(
             "needs_setup": not _Path(path).expanduser().exists(),
             "provider": settings.llm_provider,
             "has_anthropic_key": has_secret("anthropic_api_key"),
+            "has_openai_key": has_secret("openai_api_key"),
             "ollama_models": _installed_ollama_models(settings.ollama_host),
             "voice_present": voice.exists(),
         }
@@ -310,6 +319,22 @@ def create_app(
         if on_new_session is not None:
             await asyncio.to_thread(on_new_session)
         return {"ok": True}
+
+    async def get_sessions() -> list[dict[str, Any]]:
+        """List stored agent sessions (id/cwd/model/mtime), most recent first."""
+        if on_list_sessions is None:
+            return []
+        result = await asyncio.to_thread(on_list_sessions)
+        return result if isinstance(result, list) else []
+
+    async def post_sessions_resume(request: Request) -> dict[str, Any]:
+        """Resume a stored agent session (``{id}``) — replaces the live conversation."""
+        payload = await request.json()
+        session_id = payload.get("id") if isinstance(payload, dict) else None
+        if not session_id or on_resume_session is None:
+            return {"ok": False}
+        ok = await asyncio.to_thread(on_resume_session, str(session_id))
+        return {"ok": bool(ok)}
 
     async def get_voice_status() -> dict[str, Any]:
         """Which voice models are present, and whether voice can be enabled."""
@@ -614,6 +639,8 @@ def create_app(
     app.add_api_route("/access/revoke", post_access_revoke, methods=["POST"])
     app.add_api_route("/chat", post_chat, methods=["POST"])
     app.add_api_route("/session/new", post_new_session, methods=["POST"])
+    app.add_api_route("/sessions", get_sessions, methods=["GET"])
+    app.add_api_route("/sessions/resume", post_sessions_resume, methods=["POST"])
     app.add_api_route("/voice/status", get_voice_status, methods=["GET"])
     app.add_api_route("/voice/download", post_voice_download, methods=["POST"])
 
@@ -668,6 +695,8 @@ def run_daemon(
     on_action: Any | None = None,
     mcp_provider: McpProvider | None = None,
     on_meeting: Any | None = None,
+    on_list_sessions: Any | None = None,
+    on_resume_session: Any | None = None,
 ) -> None:
     """Run the daemon server (blocking) on ``host:port``.
 
@@ -676,6 +705,7 @@ def run_daemon(
     ``on_change`` is invoked after a settings/secret update so the engine can pick
     it up live; ``on_confirm_answer`` delivers a clicked Yes/No to the engine.
     ``on_meeting`` dispatches /meeting/* HTTP actions to the MeetingRecorder.
+    ``on_list_sessions``/``on_resume_session`` back the ``/sessions`` endpoints.
     """
     if host not in {"127.0.0.1", "localhost", "::1"}:
         raise ValueError(f"daemon must bind loopback only, got host={host!r}")
@@ -694,6 +724,8 @@ def run_daemon(
         on_action=on_action,
         mcp_provider=mcp_provider,
         on_meeting=on_meeting,
+        on_list_sessions=on_list_sessions,
+        on_resume_session=on_resume_session,
     )
     try:
         with contextlib.suppress(KeyboardInterrupt):

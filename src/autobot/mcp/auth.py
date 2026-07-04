@@ -33,7 +33,7 @@ from autobot.logging_setup import get_logger
 
 if TYPE_CHECKING:
     from autobot.mcp.config import McpServerConfig
-    from autobot.secrets import Runner
+    from autobot.secrets import _Backend
 
 _log = get_logger("mcp")
 
@@ -88,7 +88,8 @@ class KeychainTokenStorage:
 
     Args:
         server_id: The MCP server's config id (e.g. ``"github"``).
-        runner: Optional Keychain runner for testing (defaults to subprocess).
+        backend: Optional keyring-like backend for testing (defaults to the
+            real ``keyring`` module via ``autobot.secrets``).
         client_id: When set, this storage represents a **pre-registered** OAuth
             app. ``get_client_info()`` returns a constructed
             ``OAuthClientInformationFull`` directly (bypassing Keychain) so the
@@ -104,7 +105,7 @@ class KeychainTokenStorage:
     def __init__(
         self,
         server_id: str,
-        runner: Runner | None = None,
+        backend: _Backend | None = None,
         *,
         client_id: str | None = None,
         client_secret: str | None = None,
@@ -112,7 +113,7 @@ class KeychainTokenStorage:
     ) -> None:
         self._token_key = f"mcp.{server_id}.oauth"
         self._client_key = f"mcp.{server_id}.client"
-        self._runner = runner
+        self._backend = backend
         self._client_id = client_id
         self._client_secret = client_secret
         self._redirect_uri = redirect_uri
@@ -128,7 +129,7 @@ class KeychainTokenStorage:
 
         from autobot.secrets import get_secret
 
-        raw = get_secret(self._token_key, self._runner)
+        raw = get_secret(self._token_key, self._backend)
         if raw is None:
             _log.info("oauth token absent in keychain key=%s", self._token_key)
             return None
@@ -160,7 +161,7 @@ class KeychainTokenStorage:
         from autobot.secrets import set_secret
 
         raw = tokens.model_dump_json()  # type: ignore[attr-defined]
-        set_secret(self._token_key, raw, self._runner)
+        set_secret(self._token_key, raw, self._backend)
         # A persist after a "token loaded (expired)" means a refresh succeeded (silent,
         # no browser). If a browser redirect happens with no persist in between, the
         # refresh path failed. Value never logged — only presence of a refresh token.
@@ -208,7 +209,7 @@ class KeychainTokenStorage:
 
         from autobot.secrets import get_secret
 
-        raw = get_secret(self._client_key, self._runner)
+        raw = get_secret(self._client_key, self._backend)
         if raw is None:
             _log.info("oauth client info absent key=%s — will register new", self._client_key)
             return None
@@ -241,7 +242,7 @@ class KeychainTokenStorage:
         from autobot.secrets import set_secret
 
         raw = info.model_dump_json()  # type: ignore[attr-defined]
-        set_secret(self._client_key, raw, self._runner)
+        set_secret(self._client_key, raw, self._backend)
 
 
 def open_browser(url: str) -> None:

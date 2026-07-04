@@ -12,11 +12,14 @@ audit log and sandboxed filesystem tools) in front of the language model.
 from __future__ import annotations
 
 from collections.abc import Callable
+from pathlib import Path
 from typing import TYPE_CHECKING
 
+from autobot.agent.harness import AgentHarness
+from autobot.agent.session_store import SessionStore
 from autobot.config import Settings
 from autobot.core.events import AmplitudeSink, ChoicesSink, VisibilitySink
-from autobot.core.interfaces import AudioSource, LanguageModel, SpeechToText, TextToSpeech
+from autobot.core.interfaces import AudioSource, SpeechToText, TextToSpeech
 from autobot.io.audio import PushToTalkRecorder
 from autobot.llm.ollama_llm import OllamaLanguageModel
 from autobot.logging_setup import get_logger, setup_logging
@@ -284,13 +287,21 @@ def _build_llm(
     registry: ToolRegistry,
     transcript: Transcript,
     memory: MemoryStore | None,
-) -> LanguageModel:
-    """Pick the language-model backend: local Ollama (default) or Anthropic (opt-in).
+) -> AgentHarness:
+    """Pick the LLM backend: local Ollama (default), Anthropic, or an OpenAI-compatible endpoint.
 
-    Cloud is disclosed and degrades gracefully — a missing key or the missing
-    ``cloud`` extra falls back to local rather than failing startup.
+    The latter two are opt-in. Cloud is disclosed and degrades gracefully — a missing key or
+    the missing ``cloud`` extra falls back to local rather than failing startup. Every backend
+    is wrapped in an :class:`AgentHarness`, which owns the conversation `Session` (history,
+    summary, delivery mode, usage) — the adapters themselves are stateless across turns.
     """
     log = get_logger("app")
+    store = SessionStore(settings.agent_session_dir)
+
+    from autobot.tools.access import active_policy
+
+    _pol = active_policy()
+    cwd = str(_pol.cwd) if _pol is not None else str(Path.cwd())
     if settings.llm_provider == "anthropic":
         try:
             from autobot.llm.anthropic_llm import AnthropicLanguageModel
@@ -305,7 +316,7 @@ def _build_llm(
                 f"[llm] CLOUD mode — Claude ({settings.anthropic_model}). Your requests and "
                 "remembered profile are sent to Anthropic. Actions still run locally."
             )
-            return llm
+            return AgentHarness(llm, store, cwd=cwd, model_name=settings.anthropic_model)
         except ImportError:
             log.warning("cloud LLM extra missing, falling back to local")
             print(
@@ -315,10 +326,30 @@ def _build_llm(
         except ValueError as exc:
             log.warning("cloud LLM unavailable, falling back to local: %s", exc)
             print(f"[llm] cloud unavailable ({exc}) — using local Ollama.")
+    if settings.llm_provider == "openai":
+        from autobot.agent.providers.openai_compatible import OpenAICompatibleModel
+        from autobot.tools.selection import build_tool_selector
+
+        log.info(
+            "llm provider=openai base_url=%s model=%s (OFF-DEVICE)",
+            settings.openai_base_url or "(default)",
+            settings.llm_model,
+        )
+        print(
+            f"[llm] CLOUD mode — OpenAI-compatible ({settings.llm_model} @ "
+            f"{settings.openai_base_url or 'default endpoint'}). Your requests and remembered "
+            "profile are sent to that endpoint. Actions still run locally."
+        )
+        selector = build_tool_selector(settings, registry)
+        openai_model = OpenAICompatibleModel(
+            settings, registry, transcript, memory=memory, selector=selector
+        )
+        return AgentHarness(openai_model, store, cwd=cwd, model_name=settings.llm_model)
     from autobot.tools.selection import build_tool_selector
 
     selector = build_tool_selector(settings, registry)
-    return OllamaLanguageModel(settings, registry, transcript, memory=memory, selector=selector)
+    model = OllamaLanguageModel(settings, registry, transcript, memory=memory, selector=selector)
+    return AgentHarness(model, store, cwd=cwd, model_name=settings.llm_model)
 
 
 def build(

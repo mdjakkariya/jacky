@@ -51,6 +51,7 @@ _DEFAULT_TTS_VOICE = "~/.autobot/voices/en_US-ryan-high.onnx"
 # Absolute (under ~/.autobot) so it works regardless of the working directory —
 # e.g. launched from the bundled .app, whose CWD is "/".
 _DEFAULT_SESSION_DIR = "~/.autobot/sessions"
+_DEFAULT_AGENT_SESSION_DIR = "~/.autobot/agent_sessions"
 _DEFAULT_LOG_DIR = "~/.autobot/logs"
 _DEFAULT_LOG_LEVEL = "DEBUG"
 _DEFAULT_LOG_CONSOLE_LEVEL = "WARNING"
@@ -78,11 +79,17 @@ class Settings:
     """All runtime-tunable configuration for the assistant."""
 
     # --- language model ---
-    # Which brain: "ollama" (local, default) or "anthropic" (cloud, opt-in). The
-    # Anthropic API key lives in the Keychain, never in this file.
+    # Which brain: "ollama" (local, default), "anthropic" (cloud, opt-in), or
+    # "openai" (any OpenAI-compatible endpoint, opt-in). API keys live in the
+    # Keychain, never in this file.
     llm_provider: str = "ollama"
     llm_model: str = _DEFAULT_LLM_MODEL
     ollama_host: str = _DEFAULT_OLLAMA_HOST
+    # OpenAI-compatible provider ("openai"): any endpoint speaking chat.completions
+    # (OpenAI, OpenRouter, Groq, Together, DeepSeek, Mistral, local vLLM/LM Studio,
+    # Gemini's OpenAI-compat endpoint). The model id is llm_model; the key is stored
+    # in the keyring under "openai_api_key". Blank base_url uses the SDK default (OpenAI).
+    openai_base_url: str = ""
     anthropic_model: str = _DEFAULT_ANTHROPIC_MODEL
     anthropic_max_tokens: int = 512
     # Cloud context window (prompt-token budget). 0 -> resolve from a per-model
@@ -246,6 +253,9 @@ class Settings:
     # Keep only the most recent N session transcripts; older ones are pruned on
     # startup so the sessions folder never accumulates hundreds of files.
     session_keep: int = 20
+    # Resumable agent conversation sessions (JSONL via SessionStore); separate from
+    # session_dir's per-run debug transcripts so session_keep pruning can't delete them.
+    agent_session_dir: str = _DEFAULT_AGENT_SESSION_DIR
     show_debug: bool = True
     log_dir: str = _DEFAULT_LOG_DIR
     log_level: str = _DEFAULT_LOG_LEVEL
