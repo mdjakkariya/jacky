@@ -10,7 +10,9 @@ stays within a character budget, and are unit-tested with plain data.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
+from typing import Any
 
 _DEFAULT_CHAR_BUDGET = 8000
 
@@ -55,3 +57,68 @@ def render_repo_map(file_maps: list[FileMap], char_budget: int = _DEFAULT_CHAR_B
     if dropped:
         body += f"\n…({dropped} more file(s) not shown; raise the budget or narrow the path)"
     return body
+
+
+Extractor = Callable[[bytes], list["Symbol"]]
+
+_DEF_NODES = frozenset({"function_definition", "class_definition"})
+
+
+def extract_python(source: bytes) -> list[Symbol]:  # pragma: no cover - needs the optional parser
+    """Extract top-level functions/classes and one level of methods from Python ``source``.
+
+    Uses tree-sitter (imported lazily). Returns signature lines with a ``depth`` so methods
+    render indented under their class. Never raises on a parse quirk — a missing name node
+    yields ``"?"`` and malformed regions are simply skipped.
+
+    Note:
+        The installed ``tree_sitter_language_pack``/``tree-sitter`` build parses ``str``
+        source (not ``bytes``) and exposes nodes via methods (``kind()``, ``named_child()``,
+        ``start_position()``) rather than the classic properties, so this decodes once
+        up front and slices node text by byte offset into the UTF-8 encoding.
+    """
+    from tree_sitter_language_pack import get_parser
+
+    text = source.decode("utf-8", "replace")
+    encoded = text.encode("utf-8")
+    parser = get_parser("python")
+    tree = parser.parse(text)
+    if tree is None:  # defensive: the stub allows it, though real input won't hit this
+        return []
+    lines = text.split("\n")
+    out: list[Symbol] = []
+
+    def node_text(node: Any) -> str:
+        start: int = node.start_byte()
+        end: int = node.end_byte()
+        return encoded[start:end].decode("utf-8", "replace")
+
+    def first_line(node: Any) -> str:
+        row: int = node.start_position().row
+        return lines[row].rstrip() if row < len(lines) else ""
+
+    def visit(node: Any, depth: int) -> None:
+        for i in range(node.named_child_count()):
+            child = node.named_child(i)
+            if child is None:
+                continue
+            if child.kind() in _DEF_NODES:
+                name_node = child.child_by_field_name("name")
+                name = node_text(name_node) if name_node is not None else "?"
+                kind = "class" if child.kind() == "class_definition" else "def"
+                out.append(
+                    Symbol(
+                        name=name,
+                        kind=kind,
+                        line=child.start_position().row + 1,
+                        signature=first_line(child),
+                        depth=depth,
+                    )
+                )
+                if child.kind() == "class_definition":  # one level down for methods
+                    body = child.child_by_field_name("body")
+                    if body is not None:
+                        visit(body, depth + 1)
+
+    visit(tree.root_node(), 0)
+    return out

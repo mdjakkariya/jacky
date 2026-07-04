@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
-from autobot.tools.code.repomap import FileMap, Symbol, render_repo_map
+import pytest
+
+from autobot.tools.code.repomap import FileMap, Symbol, extract_python, render_repo_map
 
 
 def _fm(path: str, *syms: tuple[str, str, int, str, int]) -> FileMap:
@@ -45,3 +47,20 @@ def test_render_respects_char_budget() -> None:
     out = render_repo_map(files, char_budget=300)
     assert len(out) <= 400  # budget + a short truncation note
     assert "more" in out.lower() or "truncat" in out.lower()
+
+
+def test_extract_python_finds_classes_functions_methods() -> None:
+    ts = pytest.importorskip("tree_sitter_language_pack")  # needs the optional `code` extra
+    assert ts  # importorskip returns the module
+    src = (
+        b"import os\n\n\ndef top():\n    return 1\n\n\n"
+        b"class C:\n    def m(self, x):\n        return x\n"
+    )
+    syms = extract_python(src)
+    names = {(s.name, s.kind, s.depth) for s in syms}
+    assert ("top", "def", 0) in names
+    assert ("C", "class", 0) in names
+    assert ("m", "def", 1) in names  # method nested under the class
+    method = next(s for s in syms if s.name == "m")
+    assert method.signature.strip().startswith("def m(self, x):")
+    assert method.line == 9
