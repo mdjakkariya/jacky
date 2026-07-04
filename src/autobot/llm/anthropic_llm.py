@@ -514,7 +514,8 @@ class AnthropicLanguageModel:
 
     def _system(self, session: Session) -> str:
         """System prompt + memory profile + running summary of compacted older turns."""
-        parts = [system_prompt(session.delivery_mode)]
+        coder = self._settings.profile == "coder"
+        parts = [system_prompt(session.delivery_mode, coder=coder)]
         if self._memory is not None:
             ctx = self._memory.context()
             if ctx:

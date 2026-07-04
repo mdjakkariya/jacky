@@ -97,15 +97,29 @@ CHAT_DELIVERY = (
     "you'll read anything out."
 )
 
+# System prompt for the coder profile: a code-editing agent rather than the voice/chat
+# assistant. Kept separate from SYSTEM_PROMPT so each profile's principles stay focused.
+CODER_SYSTEM_PROMPT = (
+    "You are a precise, autonomous coding agent working in a real code repository. "
+    "Use the tools to inspect and change files: read a file (line-numbered) before you "
+    "edit it, search with grep/glob, get an overview with repo_map, and run commands "
+    "(tests, build, git) with run_command. Prefer the dedicated file tools over shelling "
+    "out. Make the smallest change that satisfies the request, keep edits consistent with "
+    "the surrounding code, and verify your work (run the tests) when practical. If a tool "
+    "reports a failure, read the message and adjust rather than repeating the same call."
+)
 
-def system_prompt(mode: str) -> str:
+
+def system_prompt(mode: str, *, coder: bool = False) -> str:
     """The system prompt with a delivery line matched to the turn's mode.
 
     Args:
         mode: ``"chat"`` (reply shown as text) or anything else (spoken/voice).
+        coder: when ``True``, use the coding-agent prompt instead of the assistant one.
     """
+    base = CODER_SYSTEM_PROMPT if coder else SYSTEM_PROMPT
     delivery = CHAT_DELIVERY if mode == "chat" else VOICE_DELIVERY
-    return f"{SYSTEM_PROMPT}\n{delivery}"
+    return f"{base}\n{delivery}"
 
 
 def active_folder_line() -> str:
@@ -375,7 +389,10 @@ class OllamaLanguageModel:
     def _assemble(self, session: Session, user_msg: dict[str, Any]) -> list[dict[str, Any]]:
         """System prompt + running summary (if any) + recent turns + the new message."""
         mode = session.delivery_mode
-        messages: list[dict[str, Any]] = [{"role": "system", "content": system_prompt(mode)}]
+        coder = self._settings.profile == "coder"
+        messages: list[dict[str, Any]] = [
+            {"role": "system", "content": system_prompt(mode, coder=coder)}
+        ]
         if self._memory is not None:
             profile = self._memory.context()
             if profile:
