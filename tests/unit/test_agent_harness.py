@@ -203,3 +203,49 @@ def test_resume_unknown_id_returns_false_and_leaves_session_unchanged(
 
     assert harness.resume("does-not-exist") is False
     assert harness.session is original
+
+
+def test_no_redactor_leaves_tool_result_content_unchanged(store: SessionStore) -> None:
+    """Default behavior (no redactor) is preserved: content reaches the model as-is."""
+    model = FakeChatModel(
+        [
+            ChatResponse(text="", tool_calls=[ToolCall(name="get_secret")]),
+            ChatResponse(text="done", tool_calls=[]),
+        ]
+    )
+
+    def exec_(call: ToolCall) -> ToolResult:
+        return ToolResult(  # gitleaks:allow — synthetic fixture, not a real key
+            name=call.name, content="AKIAIOSFODNN7EXAMPLE", ok=True
+        )
+
+    harness = AgentHarness(model, store)  # redact defaults to None
+    assert harness.run_turn("go", exec_) == "done"
+    recorded_content = model.recorded[0][0][1].content
+    assert recorded_content == "AKIAIOSFODNN7EXAMPLE"  # gitleaks:allow — synthetic fixture
+
+
+def test_redactor_scrubs_secrets_from_tool_results_before_model_sees_them(
+    store: SessionStore,
+) -> None:
+    """With a redactor injected, secret-shaped tool output never reaches record_results."""
+    model = FakeChatModel(
+        [
+            ChatResponse(text="", tool_calls=[ToolCall(name="get_secret")]),
+            ChatResponse(text="done", tool_calls=[]),
+        ]
+    )
+
+    def exec_(call: ToolCall) -> ToolResult:
+        return ToolResult(  # gitleaks:allow — synthetic fixture, not a real key
+            name=call.name, content="AKIAIOSFODNN7EXAMPLE", ok=True
+        )
+
+    def redact(text: str) -> str:
+        return text.replace("AKIAIOSFODNN7EXAMPLE", "«redacted»")  # gitleaks:allow — synthetic
+
+    harness = AgentHarness(model, store, redact=redact)
+    assert harness.run_turn("go", exec_) == "done"
+    recorded_content = model.recorded[0][0][1].content
+    assert "«redacted»" in recorded_content
+    assert "AKIAIOSFODNN7EXAMPLE" not in recorded_content  # gitleaks:allow — synthetic fixture

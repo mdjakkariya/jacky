@@ -175,12 +175,25 @@ def multi_edit(path: str, edits: list[dict[str, str]] | None, broker: AccessBrok
     return f"Applied {n} edit{'s' if n != 1 else ''} to {resolved.name}."
 
 
-def register_code_tools(registry: ToolRegistry, broker: AccessBroker) -> None:
+def register_code_tools(
+    registry: ToolRegistry,
+    broker: AccessBroker,
+    allowlist: list[str] | None = None,
+    blocklist: list[str] | None = None,
+) -> None:
     """Register the coder-profile code tools (read/write/edit/multi_edit).
 
     All are gated (``core=False``) — advertised only when the tool selector judges them
     relevant — and route every path through ``broker`` for the workspace jail. The coder
     profile wires this in a later change (#53).
+
+    Args:
+        registry: Tool registry to register into.
+        broker: Access broker enforcing the workspace jail.
+        allowlist: Commands pre-approved to run without confirmation, forwarded to
+            ``run_command`` via :func:`register_exec_tools`.
+        blocklist: Commands always blocked, forwarded to ``run_command`` via
+            :func:`register_exec_tools`.
     """
     registry.register(
         ToolSpec(
@@ -293,5 +306,5 @@ def register_code_tools(registry: ToolRegistry, broker: AccessBroker) -> None:
     )
     _log.info("code tools registered (read_file/write_file/edit_file/multi_edit)")
     register_nav_tools(registry, broker)
-    register_exec_tools(registry, broker)
+    register_exec_tools(registry, broker, allowlist=allowlist, blocklist=blocklist)
     register_repomap_tool(registry, broker)
