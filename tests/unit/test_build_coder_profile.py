@@ -62,3 +62,25 @@ def test_build_with_coder_profile_registers_code_tools(tmp_path: Path) -> None:
     names = {s.name for s in reg.specs()}
     assert "edit_file" in names and "run_command" in names
     assert "read_file_text" not in names  # the assistant's fileio tool is absent
+
+
+def test_build_with_assistant_profile_registers_assistant_tools(tmp_path: Path) -> None:
+    # The default (assistant) profile still assembles the fileio/assistant tool set and
+    # NOT the code tools — the mirror of the coder branch, and it exercises the assistant
+    # registration path (unchanged by this phase apart from being wrapped in `if not coder:`).
+    import autobot.app as app
+
+    settings = Settings(
+        sandbox_dir=str(tmp_path / "ws"),
+        access_store=str(tmp_path / "a.json"),
+        audit_db=str(tmp_path / "a.db"),
+        agent_session_dir=str(tmp_path / "sess"),
+        memory_db=str(tmp_path / "m.db"),
+        input_mode="ptt",
+        session_log=False,
+    )
+    assert settings.profile == "assistant"
+    orch = app.build(settings)
+    names = {s.name for s in orch._gate._registry.specs()}
+    assert "read_file_text" in names  # assistant fileio tool present
+    assert "run_command" not in names and "repo_map" not in names  # code tools absent
