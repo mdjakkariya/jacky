@@ -53,6 +53,8 @@ def send_chat(
         result = post(f"{base_url}/chat", {"text": text}, 600.0)
     except (OSError, urllib.error.URLError) as exc:
         return f"I couldn't reach the coder daemon: {exc}"
+    except ValueError as exc:  # non-JSON body (e.g. a stranger answering on the port)
+        return f"The coder daemon sent a response I couldn't read: {exc}"
     if not result.get("ok"):
         fallback = "the coder daemon couldn't handle that."
         return result.get("error") or result.get("reply") or fallback

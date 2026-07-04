@@ -29,6 +29,17 @@ def test_send_chat_surfaces_error_reply() -> None:
     assert "unavailable" in reply.lower() or "couldn" in reply.lower()
 
 
+def test_send_chat_handles_non_json_response() -> None:
+    # A stranger answering on the port returns non-JSON → json.loads raises ValueError.
+    # send_chat must return a friendly string, never crash with a traceback.
+    def fake_post(url, payload, timeout):  # type: ignore[no-untyped-def]
+        raise ValueError("Expecting value: line 1 column 1 (char 0)")
+
+    reply = cli.send_chat("http://x", "hi", post=fake_post)
+    assert isinstance(reply, str) and reply
+    assert "couldn't read" in reply.lower() or "response" in reply.lower()
+
+
 def test_daemon_up_probe() -> None:
     # is_daemon_up returns True when the readiness probe succeeds, False on connection error.
     assert cli.is_daemon_up("http://x", probe=lambda url, timeout: True) is True
