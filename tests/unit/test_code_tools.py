@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from autobot.tools.access import AccessBroker, AccessPolicy
-from autobot.tools.code.tools import read_file, write_file
+from autobot.tools.code.tools import edit_file, multi_edit, read_file, write_file
 
 
 class _FakeConfirmer:
@@ -88,3 +88,95 @@ def test_write_file_denied_when_not_granted(tmp_path: Path) -> None:
     out = write_file(str(f), "x", _broker(tmp_path, grant=False))
     assert "don't have access" in out.lower()
     assert not f.exists()
+
+
+def test_edit_file_applies_whitespace_tolerant_edit(tmp_path: Path) -> None:
+    f = tmp_path / "m.py"
+    f.write_text("def f():\n    return 1   \n")  # trailing spaces (invisible drift)
+    out = edit_file(str(f), "    return 1\n", "    return 2\n", _broker(tmp_path))
+    assert f.read_text() == "def f():\n    return 2\n"
+    assert "edited" in out.lower()
+
+
+def test_edit_file_reports_ambiguous_without_writing(tmp_path: Path) -> None:
+    f = tmp_path / "m.py"
+    f.write_text("x = 1\nx = 1\n")
+    out = edit_file(str(f), "x = 1", "x = 2", _broker(tmp_path))
+    assert f.read_text() == "x = 1\nx = 1\n"  # unchanged
+    assert "unique" in out.lower()
+
+
+def test_edit_file_replace_all(tmp_path: Path) -> None:
+    f = tmp_path / "m.py"
+    f.write_text("x = 1\nx = 1\n")
+    out = edit_file(str(f), "x = 1", "x = 2", _broker(tmp_path), replace_all=True)
+    assert f.read_text() == "x = 2\nx = 2\n"
+    assert "edited" in out.lower()
+
+
+def test_edit_file_missing_target(tmp_path: Path) -> None:
+    out = edit_file(str(tmp_path / "nope.py"), "a", "b", _broker(tmp_path))
+    assert "no file" in out.lower()
+
+
+def test_edit_file_empty_find(tmp_path: Path) -> None:
+    f = tmp_path / "m.py"
+    f.write_text("data\n")
+    out = edit_file(str(f), "", "x", _broker(tmp_path))
+    assert f.read_text() == "data\n"
+    assert "exact text" in out.lower()
+
+
+def test_edit_file_identical_find_replace(tmp_path: Path) -> None:
+    f = tmp_path / "m.py"
+    f.write_text("keep = 1\n")
+    out = edit_file(str(f), "keep = 1", "keep = 1", _broker(tmp_path))
+    assert f.read_text() == "keep = 1\n"
+    assert "identical" in out.lower()
+
+
+def test_multi_edit_applies_all_in_order(tmp_path: Path) -> None:
+    f = tmp_path / "m.py"
+    f.write_text("a = 1\nb = 2\nc = 3\n")
+    edits = [{"find": "a = 1", "replace": "a = 9"}, {"find": "c = 3", "replace": "c = 7"}]
+    out = multi_edit(str(f), edits, _broker(tmp_path))
+    assert f.read_text() == "a = 9\nb = 2\nc = 7\n"
+    assert "2" in out
+
+
+def test_multi_edit_is_atomic_on_failure(tmp_path: Path) -> None:
+    # Second edit can't match; the whole operation must write nothing.
+    f = tmp_path / "m.py"
+    f.write_text("a = 1\nb = 2\n")
+    edits = [{"find": "a = 1", "replace": "a = 9"}, {"find": "zzz", "replace": "q"}]
+    out = multi_edit(str(f), edits, _broker(tmp_path))
+    assert f.read_text() == "a = 1\nb = 2\n"  # untouched — atomic
+    assert "edit 2" in out.lower()
+
+
+def test_multi_edit_rejects_cascade_substring(tmp_path: Path) -> None:
+    # Edit 2's find ("foobar") is a substring of edit 1's replace — reject, write nothing.
+    f = tmp_path / "m.py"
+    f.write_text("foo\n")
+    edits = [{"find": "foo", "replace": "foobar"}, {"find": "foobar", "replace": "baz"}]
+    out = multi_edit(str(f), edits, _broker(tmp_path))
+    assert f.read_text() == "foo\n"
+    assert "earlier edit" in out.lower()
+
+
+def test_multi_edit_rejects_empty_list(tmp_path: Path) -> None:
+    f = tmp_path / "m.py"
+    f.write_text("a = 1\n")
+    out = multi_edit(str(f), [], _broker(tmp_path))
+    assert f.read_text() == "a = 1\n"
+    assert "no edits" in out.lower()
+
+
+def test_multi_edit_tolerates_malformed_edits(tmp_path: Path) -> None:
+    # A non-dict / missing-key entry must produce a message, never a crash.
+    f = tmp_path / "m.py"
+    f.write_text("a = 1\n")
+    out = multi_edit(str(f), [{"find": "a = 1"}], _broker(tmp_path))  # no "replace"
+    assert isinstance(out, str)
+    assert f.read_text() == "a = 1\n"
+    assert "malformed" in out.lower()

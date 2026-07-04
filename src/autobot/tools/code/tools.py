@@ -16,6 +16,7 @@ from pathlib import Path
 
 from autobot.logging_setup import get_logger
 from autobot.tools.access import AccessBroker, AccessDeniedError
+from autobot.tools.code.edits import apply_replace
 
 _log = get_logger("coder")
 
@@ -93,3 +94,76 @@ def write_file(path: str, content: str, broker: AccessBroker) -> str:
     n = len(content)
     _log.info("write_file name=%r chars=%d", resolved.name, n)
     return f"Wrote {n} character{'s' if n != 1 else ''} to {resolved.name}."
+
+
+def edit_file(
+    path: str, find: str, replace: str, broker: AccessBroker, replace_all: bool = False
+) -> str:
+    """Replace ``find`` with ``replace`` in an EXISTING file (gated). See :mod:`.edits`."""
+    if not path:
+        return "Which file should I edit? Tell me its path."
+    if not find:
+        return "Tell me the exact text to replace (a non-empty `find`)."
+    try:
+        resolved = broker.ensure(path, write=True)
+    except (AccessDeniedError, PermissionError) as exc:
+        return str(exc)
+    text, err = _read_text(resolved)
+    if text is None:
+        return err
+    result = apply_replace(text, find, replace, replace_all=replace_all)
+    if not result.ok:
+        return f"I couldn't edit {resolved.name}: {result.detail}."
+    try:
+        resolved.write_text(result.content, encoding="utf-8")
+    except OSError as exc:
+        return f"I couldn't save {resolved.name}: {exc}"
+    _log.info("edit_file name=%r detail=%r", resolved.name, result.detail)
+    return f"Edited {resolved.name} ({result.detail})."
+
+
+def multi_edit(path: str, edits: list[dict[str, str]] | None, broker: AccessBroker) -> str:
+    """Apply a list of ``{find, replace}`` edits to one file, atomically (all-or-nothing).
+
+    Edits apply in order to a working copy; the file is written only if every edit matches.
+    A failure (bad shape, no match, ambiguous match, or a ``find`` that is a substring of an
+    earlier edit's ``replace``) writes nothing and reports which edit failed, so a partial
+    edit can never corrupt the file.
+    """
+    if not path:
+        return "Which file should I edit? Tell me its path."
+    if not edits:
+        return "No edits to apply — pass a list of {find, replace} objects."
+    try:
+        resolved = broker.ensure(path, write=True)
+    except (AccessDeniedError, PermissionError) as exc:
+        return str(exc)
+    text, err = _read_text(resolved)
+    if text is None:
+        return err
+    working = text
+    applied_replacements: list[str] = []
+    for idx, edit in enumerate(edits, start=1):
+        if not isinstance(edit, dict) or "find" not in edit or "replace" not in edit:
+            return f"Edit {idx} is malformed — each edit needs a `find` and a `replace`."
+        find, replace = edit["find"], edit["replace"]
+        if not isinstance(find, str) or not isinstance(replace, str) or not find:
+            return f"Edit {idx} is malformed — `find` and `replace` must be text, `find` non-empty."
+        probe = find.rstrip("\n")
+        if probe and any(probe in prev for prev in applied_replacements):
+            return (
+                f"Edit {idx}'s search text was produced by an earlier edit; "
+                "combine them into one edit or reorder them."
+            )
+        result = apply_replace(working, find, replace)
+        if not result.ok:
+            return f"Edit {idx} didn't apply ({result.detail}); nothing was changed."
+        working = result.content
+        applied_replacements.append(replace)
+    try:
+        resolved.write_text(working, encoding="utf-8")
+    except OSError as exc:
+        return f"I couldn't save {resolved.name}: {exc}"
+    n = len(edits)
+    _log.info("multi_edit name=%r edits=%d", resolved.name, n)
+    return f"Applied {n} edit{'s' if n != 1 else ''} to {resolved.name}."
