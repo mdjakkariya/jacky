@@ -2,9 +2,18 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
-from autobot.tools.code.repomap import FileMap, Symbol, extract_python, render_repo_map
+from autobot.tools.access import AccessBroker, AccessPolicy
+from autobot.tools.code.repomap import (
+    FileMap,
+    Symbol,
+    build_repo_map,
+    extract_python,
+    render_repo_map,
+)
 
 
 def _fm(path: str, *syms: tuple[str, str, int, str, int]) -> FileMap:
@@ -64,3 +73,66 @@ def test_extract_python_finds_classes_functions_methods() -> None:
     method = next(s for s in syms if s.name == "m")
     assert method.signature.strip().startswith("def m(self, x):")
     assert method.line == 9
+
+
+class _FakeConfirmer:
+    def __init__(self, grant: bool) -> None:
+        self._grant = grant
+
+    def confirm(self, prompt: str, kind: str = "danger") -> bool:
+        return self._grant
+
+    def choose(
+        self, prompt: str, options: list[dict[str, str]], kind: str = "read", default: str = "read"
+    ) -> str:
+        return default if self._grant else ""
+
+
+def _broker(tmp_path: Path, *, grant: bool = True) -> AccessBroker:
+    pol = AccessPolicy(store_path=tmp_path / "access.json", workspace_root=tmp_path / "ws")
+    return AccessBroker(pol, _FakeConfirmer(grant))
+
+
+def _fake_extractor(source: bytes) -> list[Symbol]:
+    # trivial deterministic "parser": one symbol per line beginning with "def "
+    out: list[Symbol] = []
+    for i, ln in enumerate(source.decode().splitlines(), start=1):
+        if ln.startswith("def "):
+            out.append(Symbol(ln[4:].split("(")[0], "def", i, ln, 0))
+    return out
+
+
+def test_build_repo_map_scans_python_files(tmp_path: Path) -> None:
+    (tmp_path / "pkg").mkdir()
+    (tmp_path / "pkg" / "a.py").write_text("def alpha():\n    pass\n")
+    (tmp_path / "pkg" / "b.py").write_text("def beta():\n    pass\n")
+    (tmp_path / "notes.txt").write_text("def not_code():\n")  # non-.py ignored
+    out = build_repo_map(str(tmp_path), _broker(tmp_path), extractor=_fake_extractor)
+    assert "a.py" in out and "alpha" in out
+    assert "b.py" in out and "beta" in out
+    assert "notes.txt" not in out
+
+
+def test_build_repo_map_denied(tmp_path: Path) -> None:
+    (tmp_path / "a.py").write_text("def x():\n    pass\n")
+    out = build_repo_map(str(tmp_path), _broker(tmp_path, grant=False), extractor=_fake_extractor)
+    assert "don't have access" in out.lower()
+
+
+def test_build_repo_map_empty_tree(tmp_path: Path) -> None:
+    out = build_repo_map(str(tmp_path), _broker(tmp_path), extractor=_fake_extractor)
+    assert "no" in out.lower()  # "No Python files" / "No symbols"
+
+
+def test_build_repo_map_uses_cache_on_second_call(tmp_path: Path) -> None:
+    (tmp_path / "a.py").write_text("def x():\n    pass\n")
+    calls: list[bytes] = []
+
+    def counting(source: bytes) -> list[Symbol]:
+        calls.append(source)
+        return _fake_extractor(source)
+
+    b = _broker(tmp_path)
+    build_repo_map(str(tmp_path), b, extractor=counting)
+    build_repo_map(str(tmp_path), b, extractor=counting)  # unchanged file → cached
+    assert len(calls) == 1  # extractor invoked once across two builds

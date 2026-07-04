@@ -10,9 +10,14 @@ stays within a character budget, and are unit-tested with plain data.
 
 from __future__ import annotations
 
+import os
 from collections.abc import Callable
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
+
+from autobot.logging_setup import get_logger
+from autobot.tools.access import AccessBroker, AccessDeniedError
 
 _DEFAULT_CHAR_BUDGET = 8000
 
@@ -122,3 +127,71 @@ def extract_python(source: bytes) -> list[Symbol]:  # pragma: no cover - needs t
 
     visit(tree.root_node(), 0)
     return out
+
+
+_log = get_logger("coder")
+
+_MAX_FILES = 400  # cap files scanned per build
+_MAX_FILE_BYTES = 500_000  # skip files larger than this
+_SKIP_DIRS = frozenset(
+    {".git", "node_modules", "__pycache__", ".venv", ".mypy_cache", ".ruff_cache", ".tox"}
+)
+
+# module-level cache: abs path -> (mtime, size, symbols). The daemon is long-lived, so an
+# in-memory cache survives across turns; entries self-heal when a file's mtime/size changes.
+_CACHE: dict[str, tuple[float, int, tuple[Symbol, ...]]] = {}
+
+
+def build_repo_map(
+    root: str,
+    broker: AccessBroker,
+    *,
+    char_budget: int = _DEFAULT_CHAR_BUDGET,
+    extractor: Extractor | None = None,
+) -> str:
+    """Scan the jailed ``root`` for Python files and render a bounded symbol overview.
+
+    Resolves ``root`` through ``broker`` (read-only, prompting for a grant if needed),
+    walks the tree pruning noise directories and skipping oversized files, and extracts
+    each file's symbols via ``extractor`` (default :func:`extract_python`), consulting a
+    module-level mtime+size cache so unchanged files are not re-parsed. Never raises: a
+    denied path, a non-folder target, an empty tree, or a single unreadable/unparseable
+    file all degrade to a friendly string or a skipped file rather than an exception.
+    """
+    extract = extractor or extract_python
+    try:
+        base = broker.ensure(root or ".", write=False)
+    except (AccessDeniedError, PermissionError) as exc:
+        return str(exc)
+    if not base.is_dir():
+        return f"'{base.name}' is not a folder to map."
+
+    file_maps: list[FileMap] = []
+    scanned = 0
+    for dirpath, dirs, names in os.walk(base):
+        dirs[:] = [d for d in dirs if d not in _SKIP_DIRS]
+        for name in names:
+            if not name.endswith(".py"):
+                continue
+            if scanned >= _MAX_FILES:
+                break
+            fp = Path(dirpath) / name
+            try:
+                st = fp.stat()
+                if st.st_size > _MAX_FILE_BYTES:
+                    continue
+                cached = _CACHE.get(str(fp))
+                if cached is not None and cached[0] == st.st_mtime and cached[1] == st.st_size:
+                    symbols = cached[2]
+                else:
+                    symbols = tuple(extract(fp.read_bytes()))
+                    _CACHE[str(fp)] = (st.st_mtime, st.st_size, symbols)
+            except Exception:  # skip a file we can't stat, read, or parse
+                continue
+            scanned += 1
+            rel = str(fp.relative_to(base))
+            file_maps.append(FileMap(path=rel, symbols=symbols))
+    if not file_maps:
+        return "No Python files found under this path."
+    _log.info("repo_map root=%s files=%d", base.name, len(file_maps))
+    return render_repo_map(file_maps, char_budget)
