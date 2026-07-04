@@ -175,6 +175,7 @@ module = [
     "fastapi.*",
     "uvicorn.*",
     "anthropic.*",
+    "openai.*",
     "mcp.*",
     "pywhispercpp.*",
     "objc.*",
