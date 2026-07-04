@@ -124,6 +124,21 @@ class Settings:
     # Seconds to wait for a spoken yes/no before auto-cancelling a destructive
     # action (silence/timeout cancels — nothing destructive runs without a clear yes).
     confirm_timeout_s: float = 30.0
+    # --- coding agent (Phase 2) ---
+    # Autonomy for coding turns: "plan" (propose a plan; act only after the user approves —
+    # default, supervised), "confirm" (act, but confirm each destructive step), or "auto"
+    # (apply in-workspace edits without prompting; shell/out-of-scope/destructive still
+    # confirm at the gate). A progressive-trust dial the user raises as confidence grows.
+    coding_autonomy: str = "plan"
+    # Snapshot the workspace (via a git shadow ref) at the start of each coding turn so a
+    # change can be rewound (`jack undo`). Off disables checkpointing entirely.
+    checkpoints: bool = True
+    # Command safety for run_command, layered on the permission gate. These hold the USER's
+    # additions; the built-in dangerous-pattern baseline lives in the command-policy module.
+    # Blocklisted commands are refused outright; allowlisted patterns (e.g. "git *",
+    # "pytest*") are trusted to run with less friction. Empty = baseline + gate only.
+    command_allowlist: list[str] = field(default_factory=list)
+    command_blocklist: list[str] = field(default_factory=list)
     # --- listening (Phase 2) ---
     input_mode: str = _DEFAULT_INPUT_MODE
     wake_detector: str = _DEFAULT_WAKE_DETECTOR
