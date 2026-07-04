@@ -40,6 +40,15 @@ def test_send_chat_handles_non_json_response() -> None:
     assert "couldn't read" in reply.lower() or "response" in reply.lower()
 
 
+def test_send_chat_handles_connection_error() -> None:
+    def fake_post(url, payload, timeout):  # type: ignore[no-untyped-def]
+        raise OSError("Connection refused")
+
+    reply = cli.send_chat("http://x", "hi", post=fake_post)
+    assert isinstance(reply, str)
+    assert "couldn't reach" in reply.lower()
+
+
 def test_daemon_up_probe() -> None:
     # is_daemon_up returns True when the readiness probe succeeds, False on connection error.
     assert cli.is_daemon_up("http://x", probe=lambda url, timeout: True) is True
@@ -58,3 +67,15 @@ def test_main_one_shot(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFi
     assert rc == 0
     assert "the reply" in capsys.readouterr().out
     assert seen_port == [9001]  # main() forwards --port to the daemon spawn
+
+
+def test_main_returns_1_when_daemon_cannot_start(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    def boom(base: str, port: int) -> None:
+        raise TimeoutError("coder daemon did not start")
+
+    monkeypatch.setattr(cli, "ensure_daemon", boom)
+    rc = cli.main(["do a thing"])
+    assert rc == 1
+    assert "did not start" in capsys.readouterr().err
