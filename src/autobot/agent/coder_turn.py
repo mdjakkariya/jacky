@@ -176,10 +176,14 @@ def act_executor(
 
 
 _PLAN_PROMPT_PREFIX = (
-    "You are in PLANNING mode. Use ONLY read-only tools (read_file, grep, glob, "
-    "repo_map) to explore the codebase, then reply with a concise numbered todo list "
-    "of the edits and commands you will make to accomplish the request. Do not edit "
-    "files or run commands yet.\n\nRequest: "
+    "You are a coding agent in PLANNING mode. First decide whether the request needs "
+    "changes to files or commands to run.\n"
+    "- If it does NOT (a greeting, small talk, a question you can answer, or a request "
+    "too vague to act on): just reply normally — answer it, or ask for the detail you "
+    "need. Do NOT write a numbered plan.\n"
+    "- If it DOES: use ONLY read-only tools (read_file, grep, glob, repo_map) to explore, "
+    "then reply with a concise NUMBERED todo list of the edits and commands you will make. "
+    "Do not edit files or run commands yet.\n\nRequest: "
 )
 _ACT_PROMPT = (
     "Your plan is approved. Carry it out now, step by step: make the edits and run the "
@@ -274,10 +278,14 @@ class CoderTurnDriver:
         try:
             autonomy = self._settings().coding_autonomy
             if autonomy == "plan":
-                if not self._plan_loop(channel, text):
+                outcome, payload = self._plan_loop(channel, text)
+                if outcome == "cancel":
                     channel.done(_CANCELLED_REPLY)
                     return
-                reply = self._act()  # session already holds the approved plan
+                if outcome == "reply":  # conversational / no actionable plan — just answer
+                    channel.done(payload)
+                    return
+                reply = self._act()  # outcome == "act": session already holds the plan
             else:
                 reply = self._act(first_text=text)  # confirm/auto: act on the request
             channel.done(reply)
@@ -285,22 +293,37 @@ class CoderTurnDriver:
             _log.exception("coder turn failed")
             channel.done(_ERROR_REPLY)
 
-    def _plan_loop(self, channel: TurnChannel, text: str) -> bool:
-        """Plan (read-only) → ask the CLI → approve/reject/refine. Return True if approved."""
+    def _plan_loop(self, channel: TurnChannel, text: str) -> tuple[str, str]:
+        """Plan (read-only), then decide the next step.
+
+        Returns one of:
+            ``("reply", text)`` — the turn was conversational (a greeting, a question the
+                coder answered from read-only tools, or a request for clarification): there
+                is nothing to approve, so answer directly without a plan-approval gate.
+            ``("act", "")`` — the user approved an actionable plan; run the act phase.
+            ``("cancel", "")`` — the user rejected the plan.
+
+        An actionable plan is detected by the presence of numbered/bulleted todo steps
+        (:func:`_extract_todo`); a reply with none is treated as conversational.
+        """
         request = text
         while True:
             executor = read_only_executor(self._gate)
             reply = self._llm.run_turn(_PLAN_PROMPT_PREFIX + request, executor)
             todo = _extract_todo(reply)
+            if not todo:
+                # No actionable steps — don't force an approve/act gate on a non-task.
+                _log.info("plan: no actionable steps, answering directly")
+                return "reply", reply
             _log.info("plan proposed steps=%d", len(todo))
             answer = channel.ask({"status": "plan", "reply": reply, "todo": todo})
             value = answer.get("value", "").strip().lower()
             if value in {"approve", "yes", "y"}:
                 _log.info("plan approved")
-                return True
+                return "act", ""
             if value in {"reject", "no", "n"}:
                 _log.info("plan rejected")
-                return False
+                return "cancel", ""
             request = answer.get("text") or text  # refine: re-plan with the feedback
             _log.info("plan refined")
 

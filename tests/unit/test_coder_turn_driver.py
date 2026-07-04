@@ -67,6 +67,14 @@ def test_plan_then_approve_then_done() -> None:
     assert final == {"status": "done", "reply": "Edited foo and added a test."}
 
 
+def test_conversational_reply_skips_approval_gate() -> None:
+    # A greeting/question: the plan turn has no numbered steps, so there's nothing to
+    # approve — the driver must answer directly, not emit a plan-approval event.
+    d = _driver(_ScriptedLLM("Hi! What would you like me to work on?", "should not act"))
+    result = d.start("hey")
+    assert result == {"status": "done", "reply": "Hi! What would you like me to work on?"}
+
+
 def test_plan_reject_makes_no_changes() -> None:
     d = _driver(_ScriptedLLM("1. edit foo", "should not run"))
     d.start("do it")
