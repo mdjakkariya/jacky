@@ -17,6 +17,8 @@ from autobot.core.types import Risk
 from autobot.logging_setup import get_logger
 from autobot.tools.access import AccessBroker, AccessDeniedError
 from autobot.tools.code.edits import apply_replace
+from autobot.tools.code.search import register_nav_tools
+from autobot.tools.code.shell import register_exec_tools
 from autobot.tools.registry import ToolRegistry, ToolSpec
 
 _log = get_logger("coder")
@@ -289,3 +291,5 @@ def register_code_tools(registry: ToolRegistry, broker: AccessBroker) -> None:
         )
     )
     _log.info("code tools registered (read_file/write_file/edit_file/multi_edit)")
+    register_nav_tools(registry, broker)
+    register_exec_tools(registry, broker)

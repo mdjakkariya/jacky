@@ -13,8 +13,10 @@ import os
 import re
 from pathlib import Path
 
+from autobot.core.types import Risk
 from autobot.logging_setup import get_logger
 from autobot.tools.access import AccessBroker, AccessDeniedError
+from autobot.tools.registry import ToolRegistry, ToolSpec
 
 _log = get_logger("coder")
 
@@ -147,3 +149,76 @@ def grep(
     tail = "\n…(results truncated; narrow the search or add a glob filter)" if truncated else ""
     _log.info("grep pattern=%r mode=%s results=%d", pattern, output_mode, len(results))
     return f"matches for {pattern!r} ({output_mode}):\n{text}{tail}"
+
+
+def register_nav_tools(registry: ToolRegistry, broker: AccessBroker) -> None:
+    """Register the navigation tools (glob, grep). Both are read-only and gated."""
+    registry.register(
+        ToolSpec(
+            name="glob",
+            description=(
+                "List files whose path matches a shell glob (e.g. '**/*.py', 'src/**/*.ts'), "
+                "newest first. Use this to find files by name/location before reading them. "
+                "Pass `path` to search a subfolder. For searching file CONTENTS, use grep."
+            ),
+            parameters={
+                "type": "object",
+                "properties": {
+                    "pattern": {"type": "string", "description": "Glob pattern, e.g. '**/*.py'."},
+                    "path": {"type": "string", "description": "Folder to search in (optional)."},
+                },
+                "required": ["pattern"],
+            },
+            handler=lambda pattern="", path=".": glob_files(pattern, broker, path),
+            risk=Risk.READ_ONLY,
+            ack="Looking for files.",
+        )
+    )
+
+    # A nested typed def (not a lambda) keeps the handler under the 100-char line limit
+    # while staying no-arg-safe; it closes over ``broker``.
+    def _grep_handler(
+        pattern: str = "",
+        path: str = ".",
+        glob: str | None = None,
+        ignore_case: bool = False,
+        output_mode: str = "files_with_matches",
+    ) -> str:
+        return grep(pattern, broker, path, glob, ignore_case, output_mode)
+
+    registry.register(
+        ToolSpec(
+            name="grep",
+            description=(
+                "Search file contents for a regular expression. `output_mode`: "
+                "'files_with_matches' (default, paths only), 'content' (path:line:text), or "
+                "'count' (path:N). Filter files with `glob` (e.g. '*.py'); set `ignore_case` "
+                "for case-insensitive. Use this to find where code/text lives."
+            ),
+            parameters={
+                "type": "object",
+                "properties": {
+                    "pattern": {"type": "string", "description": "Regex or literal to search for."},
+                    "path": {"type": "string", "description": "Folder to search in (optional)."},
+                    "glob": {
+                        "type": "string",
+                        "description": "Only search files matching this glob.",
+                    },
+                    "ignore_case": {
+                        "type": "boolean",
+                        "description": "Case-insensitive (default false).",
+                    },
+                    "output_mode": {
+                        "type": "string",
+                        "enum": ["files_with_matches", "content", "count"],
+                        "description": "How to report matches (default files_with_matches).",
+                    },
+                },
+                "required": ["pattern"],
+            },
+            handler=_grep_handler,
+            risk=Risk.READ_ONLY,
+            ack="Searching the code.",
+        )
+    )
+    _log.info("nav tools registered (glob/grep)")

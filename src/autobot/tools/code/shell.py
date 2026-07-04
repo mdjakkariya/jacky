@@ -14,8 +14,10 @@ from __future__ import annotations
 import sys
 from collections.abc import Callable
 
+from autobot.core.types import Risk
 from autobot.logging_setup import get_logger
 from autobot.tools.access import AccessBroker, AccessDeniedError
+from autobot.tools.registry import ToolRegistry, ToolSpec
 
 _log = get_logger("coder")
 
@@ -72,3 +74,36 @@ def run_command(
         return f"Command timed out after {int(limit)}s (partial output):\n{body}"
     status = "ok" if rc == 0 else f"exit {rc}"
     return f"[{status}]\n{body}" if body.strip() else f"[{status}] (no output)"
+
+
+def register_exec_tools(registry: ToolRegistry, broker: AccessBroker) -> None:
+    """Register the execution tool (run_command). Destructive → the gate confirms it."""
+    registry.register(
+        ToolSpec(
+            name="run_command",
+            description=(
+                "Run a shell command (e.g. tests, a build, git, a linter) in the working "
+                "folder and return its output. Cross-platform. Prefer the dedicated tools "
+                "(read_file/edit_file/grep/glob) over shelling out for file work. Long-running "
+                "or interactive commands aren't supported; keep it to commands that finish."
+            ),
+            parameters={
+                "type": "object",
+                "properties": {
+                    "command": {"type": "string", "description": "The shell command to run."},
+                    "cwd": {"type": "string", "description": "Folder to run in (optional)."},
+                    "timeout": {
+                        "type": "number",
+                        "description": "Seconds before it's killed (default 120, max 600).",
+                    },
+                },
+                "required": ["command"],
+            },
+            handler=lambda command="", cwd=".", timeout=_DEFAULT_TIMEOUT: run_command(
+                command, broker, cwd, timeout
+            ),
+            risk=Risk.DESTRUCTIVE,
+            ack="Running that command.",
+        )
+    )
+    _log.info("exec tools registered (run_command)")
