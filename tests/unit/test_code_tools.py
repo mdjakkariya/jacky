@@ -254,3 +254,25 @@ def test_dispatch_edit_file_replace_all_through_registry(tmp_path: Path) -> None
     )
     assert res.ok
     assert f.read_text() == "v = 2\nv = 2\n"
+
+
+def test_register_adds_nav_and_exec_tools(tmp_path: Path) -> None:
+    reg = _registry(tmp_path)
+    for name in ("glob", "grep", "run_command"):
+        assert reg.get(name) is not None, name
+
+
+def test_nav_exec_risk_levels(tmp_path: Path) -> None:
+    reg = _registry(tmp_path)
+    assert reg.get("glob").risk == Risk.READ_ONLY  # type: ignore[union-attr]
+    assert reg.get("grep").risk == Risk.READ_ONLY  # type: ignore[union-attr]
+    assert reg.get("run_command").risk == Risk.DESTRUCTIVE  # type: ignore[union-attr]
+
+
+def test_nav_exec_handlers_are_no_arg_safe(tmp_path: Path) -> None:
+    reg = _registry(tmp_path)
+    for name in ("glob", "grep", "run_command"):
+        spec = reg.get(name)
+        assert spec is not None
+        out = spec.handler()
+        assert isinstance(out, str) and out
