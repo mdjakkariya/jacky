@@ -17,6 +17,7 @@ from collections.abc import Callable
 from autobot.core.types import Risk
 from autobot.logging_setup import get_logger
 from autobot.tools.access import AccessBroker, AccessDeniedError
+from autobot.tools.code.command_policy import classify_command
 from autobot.tools.registry import ToolRegistry, ToolSpec
 
 _log = get_logger("coder")
@@ -54,10 +55,23 @@ def run_command(
     cwd: str = ".",
     timeout: float = _DEFAULT_TIMEOUT,
     runner: CommandRunner | None = None,
+    allowlist: list[str] | None = None,
+    blocklist: list[str] | None = None,
 ) -> str:
-    """Run a shell ``command`` in a jailed ``cwd`` (gated), returning bounded output."""
+    """Run a shell ``command`` in a jailed ``cwd`` (gated), returning bounded output.
+
+    Before running, ``command`` is classified against the built-in dangerous-command
+    baseline and the user ``allowlist``/``blocklist`` (see
+    :func:`autobot.tools.code.command_policy.classify_command`); a ``"block"``
+    decision refuses to run it at all. This is a last-resort backstop — the
+    permission gate (``Risk.DESTRUCTIVE``) still confirms everything that isn't
+    blocked.
+    """
     if not command or not command.strip():
         return "What command should I run?"
+    decision, reason = classify_command(command, allowlist, blocklist)
+    if decision == "block":
+        return f"That command is blocked for safety ({reason})."
     try:
         workdir = broker.ensure(cwd or ".", write=True)
     except (AccessDeniedError, PermissionError) as exc:
@@ -78,8 +92,20 @@ def run_command(
     return f"[{status}]\n{body}" if body.strip() else f"[{status}] (no output)"
 
 
-def register_exec_tools(registry: ToolRegistry, broker: AccessBroker) -> None:
-    """Register the execution tool (run_command). Destructive → the gate confirms it."""
+def register_exec_tools(
+    registry: ToolRegistry,
+    broker: AccessBroker,
+    allowlist: list[str] | None = None,
+    blocklist: list[str] | None = None,
+) -> None:
+    """Register the execution tool (run_command). Destructive → the gate confirms it.
+
+    Args:
+        registry: Tool registry to register into.
+        broker: Access broker enforcing the workspace jail.
+        allowlist: Commands pre-approved by the user to run without confirmation.
+        blocklist: Commands the user has pre-refused; always blocked.
+    """
     registry.register(
         ToolSpec(
             name="run_command",
@@ -102,7 +128,7 @@ def register_exec_tools(registry: ToolRegistry, broker: AccessBroker) -> None:
                 "required": ["command"],
             },
             handler=lambda command="", cwd=".", timeout=_DEFAULT_TIMEOUT: run_command(
-                command, broker, cwd, timeout
+                command, broker, cwd, timeout, allowlist=allowlist, blocklist=blocklist
             ),
             risk=Risk.DESTRUCTIVE,
             ack="Running that command.",

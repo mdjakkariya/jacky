@@ -30,6 +30,7 @@ from autobot.stt.faster_whisper_stt import FasterWhisperSTT
 from autobot.tools.access import AccessPolicy, set_active_policy
 from autobot.tools.audit import AuditLog
 from autobot.tools.builtin import register_builtins
+from autobot.tools.code.redact import redact_secrets
 from autobot.tools.filesystem import register_filesystem_tools
 from autobot.tools.permission import Confirmer, PermissionGate
 from autobot.tools.registry import ToolRegistry
@@ -316,7 +317,13 @@ def _build_llm(
                 f"[llm] CLOUD mode — Claude ({settings.anthropic_model}). Your requests and "
                 "remembered profile are sent to Anthropic. Actions still run locally."
             )
-            return AgentHarness(llm, store, cwd=cwd, model_name=settings.anthropic_model)
+            return AgentHarness(
+                llm,
+                store,
+                cwd=cwd,
+                model_name=settings.anthropic_model,
+                redact=lambda t: redact_secrets(t)[0],
+            )
         except ImportError:
             log.warning("cloud LLM extra missing, falling back to local")
             print(
@@ -344,12 +351,20 @@ def _build_llm(
         openai_model = OpenAICompatibleModel(
             settings, registry, transcript, memory=memory, selector=selector
         )
-        return AgentHarness(openai_model, store, cwd=cwd, model_name=settings.llm_model)
+        return AgentHarness(
+            openai_model,
+            store,
+            cwd=cwd,
+            model_name=settings.llm_model,
+            redact=lambda t: redact_secrets(t)[0],
+        )
     from autobot.tools.selection import build_tool_selector
 
     selector = build_tool_selector(settings, registry)
     model = OllamaLanguageModel(settings, registry, transcript, memory=memory, selector=selector)
-    return AgentHarness(model, store, cwd=cwd, model_name=settings.llm_model)
+    return AgentHarness(
+        model, store, cwd=cwd, model_name=settings.llm_model, redact=lambda t: redact_secrets(t)[0]
+    )
 
 
 def build(

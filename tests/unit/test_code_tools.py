@@ -290,3 +290,20 @@ def test_repo_map_risk_and_no_arg_safe(tmp_path: Path) -> None:
     assert spec.risk == Risk.READ_ONLY
     out = spec.handler()  # no args → must return a string, never raise
     assert isinstance(out, str) and out
+
+
+def test_register_code_tools_forwards_blocklist_to_run_command(tmp_path: Path) -> None:
+    reg = ToolRegistry()
+    register_code_tools(reg, _broker(tmp_path), blocklist=["npm publish"])
+    spec = reg.get("run_command")
+    assert spec is not None
+    out = spec.handler(command="npm publish")
+    assert "blocked" in out.lower()
+
+
+def test_register_code_tools_default_lists_do_not_block_normal_commands(tmp_path: Path) -> None:
+    reg = _registry(tmp_path)  # no allowlist/blocklist passed — defaults to None
+    spec = reg.get("run_command")
+    assert spec is not None
+    out = spec.handler(command="echo hi")
+    assert "blocked" not in out.lower()

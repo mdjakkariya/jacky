@@ -18,6 +18,8 @@ what keeps the provider adapters stateless across turns.
 from __future__ import annotations
 
 import json
+from collections.abc import Callable
+from dataclasses import replace
 from typing import TYPE_CHECKING, Any
 
 from autobot.core.types import ToolCall, ToolResult
@@ -55,13 +57,29 @@ class AgentHarness:
         model_name: str = "",
         max_rounds: int = _MAX_TOOL_ROUNDS,
         doom_limit: int = _DOOM_LIMIT,
+        redact: Callable[[str], str] | None = None,
     ) -> None:
+        """Wire the harness.
+
+        Args:
+            model: The provider adapter driving one turn.
+            store: Persists the conversation session across turns.
+            cwd: Working directory recorded on the session.
+            model_name: Model identifier recorded on the session.
+            max_rounds: Cap on the plan-tool-result loop per turn.
+            doom_limit: Times an identical call may repeat before aborting.
+            redact: Optional scrubber applied to each tool result's content right
+                before it is handed to the model (e.g. to strip secrets from tool
+                output before any provider sees it). ``None`` (the default) passes
+                content through unchanged.
+        """
         self._model = model
         self._store = store
         self._cwd = cwd
         self._model_name = model_name
         self._max_rounds = max_rounds
         self._doom_limit = doom_limit
+        self._redact = redact
         self._session = store.create(cwd, model_name)
 
     @property
@@ -106,6 +124,13 @@ class AgentHarness:
                         failed[key] = out
                         last_fail = out
                 results.append((call, ToolResult(name=call.name, content=out, ok=ok)))
+            if self._redact is not None:
+                # Egress chokepoint: scrub secret-shaped tool output before it enters the
+                # conversation the model sees, regardless of provider.
+                results = [
+                    (call, replace(result, content=self._redact(result.content)))
+                    for call, result in results
+                ]
             self._model.record_results(self._session, results)
             if doomed:
                 _log.info("stopping: identical tool call repeated past doom-loop guard")

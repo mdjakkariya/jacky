@@ -82,3 +82,46 @@ def test_run_command_timeout_is_clamped(tmp_path: Path) -> None:
 
     run_command("echo hi", _broker(tmp_path), str(tmp_path), timeout=10_000.0, runner=run)
     assert seen == [600.0]
+
+
+def test_run_command_blocks_dangerous_command_without_running_it(tmp_path: Path) -> None:
+    calls: list[str] = []
+
+    def run(command: str, cwd: str, timeout: float) -> tuple[int, str, bool]:
+        calls.append(command)
+        return 0, "should not run", False
+
+    out = run_command("rm -rf /", _broker(tmp_path), str(tmp_path), runner=run)
+    assert "blocked" in out.lower()
+    assert calls == []  # the runner was never invoked
+
+
+def test_run_command_runs_normally_with_empty_allow_and_blocklists(tmp_path: Path) -> None:
+    out = run_command(
+        "echo hi",
+        _broker(tmp_path),
+        str(tmp_path),
+        runner=_fake_runner(0, "hi\n"),
+        allowlist=[],
+        blocklist=[],
+    )
+    assert "hi" in out
+    assert "ok" in out.lower()
+
+
+def test_run_command_blocks_command_matching_user_blocklist(tmp_path: Path) -> None:
+    calls: list[str] = []
+
+    def run(command: str, cwd: str, timeout: float) -> tuple[int, str, bool]:
+        calls.append(command)
+        return 0, "should not run", False
+
+    out = run_command(
+        "npm publish",
+        _broker(tmp_path),
+        str(tmp_path),
+        runner=run,
+        blocklist=["npm publish"],
+    )
+    assert "blocked" in out.lower()
+    assert calls == []
