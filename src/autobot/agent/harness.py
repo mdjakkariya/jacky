@@ -58,6 +58,7 @@ class AgentHarness:
         max_rounds: int = _MAX_TOOL_ROUNDS,
         doom_limit: int = _DOOM_LIMIT,
         redact: Callable[[str], str] | None = None,
+        checkpoint: Callable[[str], None] | None = None,
     ) -> None:
         """Wire the harness.
 
@@ -72,6 +73,11 @@ class AgentHarness:
                 before it is handed to the model (e.g. to strip secrets from tool
                 output before any provider sees it). ``None`` (the default) passes
                 content through unchanged.
+            checkpoint: Optional hook called once at the start of each turn with a
+                label derived from the user's text (e.g. to snapshot the workspace
+                before the model makes any changes). ``None`` (the default) skips
+                checkpointing. A failure in this hook is logged and swallowed — it
+                must never break or abort the turn.
         """
         self._model = model
         self._store = store
@@ -80,6 +86,7 @@ class AgentHarness:
         self._max_rounds = max_rounds
         self._doom_limit = doom_limit
         self._redact = redact
+        self._checkpoint = checkpoint
         self._session = store.create(cwd, model_name)
 
     @property
@@ -89,6 +96,11 @@ class AgentHarness:
 
     def run_turn(self, user_text: str, execute: ToolExecutor) -> str:
         """Handle one user turn end-to-end; tool calls run through ``execute`` (the gate)."""
+        if self._checkpoint is not None:
+            try:
+                self._checkpoint(user_text)
+            except Exception:  # a checkpoint failure must never break or abort the turn
+                _log.exception("checkpoint hook failed; continuing turn")
         self._model.begin_turn(self._session, user_text)
         failed: dict[str, str] = {}  # anti-thrash: call key -> failure text
         seen: dict[str, int] = {}  # doom-loop: call key -> times issued this turn
