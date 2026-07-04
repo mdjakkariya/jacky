@@ -93,20 +93,37 @@ def test_plan_refine_replans_then_approve() -> None:
     assert final["status"] == "done"
 
 
-def test_act_suspends_to_ask_then_resumes() -> None:
+def test_confirm_mode_asks_before_each_command() -> None:
+    # confirm mode: no plan phase; act directly and suspend-to-ask before a non-allowlisted
+    # command. This is the mode where the escalate-to-ask mechanism is the primary UX.
     llm = _ScriptedLLM(
-        "1. run tests",
+        "(no plan in confirm mode)",
         "Tests passed.",
         act_calls=[
             ToolCall(name="run_command", arguments={"command": "pytest -q"}),
         ],
     )
-    d = _driver(llm)  # plan mode; pytest not allowlisted → confirm → ask
-    d.start("run the tests")
-    pending = d.reply("approve")
+    d = _driver(llm, autonomy="confirm")
+    pending = d.start("run the tests")  # straight to act; pytest not allowlisted → ask
     assert pending["status"] == "pending" and "pytest" in pending["prompt"]
     final = d.reply("yes")
     assert final == {"status": "done", "reply": "Tests passed."}
+
+
+def test_plan_mode_does_not_reconfirm_planned_command() -> None:
+    # Approving the plan IS the approval for its commands — the act phase must NOT ask a
+    # second time for a planned (non-allowlisted) command; it runs pre-authorized.
+    llm = _ScriptedLLM(
+        "1. run the script",
+        "Ran it.",
+        act_calls=[
+            ToolCall(name="run_command", arguments={"command": "bash check_ip.sh"}),
+        ],
+    )
+    d = _driver(llm)  # plan mode
+    assert d.start("run the script")["status"] == "plan"
+    final = d.reply("approve")  # no second pending — runs straight through to done
+    assert final == {"status": "done", "reply": "Ran it."}
 
 
 def test_auto_mode_skips_plan_and_runs_command() -> None:
@@ -198,28 +215,25 @@ def test_reclaim_close_does_not_leak_a_parked_confirm() -> None:
     just the plan phase), using a bounded queue.get so a regression here fails fast
     instead of hanging the test suite.
     """
+    # confirm mode parks mid-act awaiting a command confirm (plan mode doesn't re-ask).
     llm = _ScriptedLLM(
-        "1. run tests",
+        "(confirm mode: no plan)",
         "Tests passed.",
         act_calls=[ToolCall(name="run_command", arguments={"command": "pytest -q"})],
     )
-    d = _driver(llm)
-    d.start("run the tests")
-    pending = d.reply("approve")
+    d = _driver(llm, autonomy="confirm")
+    pending = d.start("run the tests")
     assert pending["status"] == "pending"  # parked awaiting the run_command confirm
 
-    done_events: queue.Queue[dict[str, object]] = queue.Queue()
+    events: queue.Queue[dict[str, object]] = queue.Queue()
 
     def fresh_start() -> None:
-        done_events.put(d.start("a different request"))
+        events.put(d.start("a different request"))
 
     t = threading.Thread(target=fresh_start, name="reclaimer")
     t.start()
     t.join(timeout=_JOIN_TIMEOUT_S)
     assert not t.is_alive(), "reclaiming start() hung"
 
-    event = done_events.get(timeout=_JOIN_TIMEOUT_S)
-    assert event["status"] == "plan"  # the fresh turn's own plan, not stale state
-
-    final = d.reply("approve")
-    assert final["status"] == "pending"  # fresh turn's own act phase, own confirm
+    event = events.get(timeout=_JOIN_TIMEOUT_S)
+    assert event["status"] == "pending"  # the fresh turn's own act confirm, not stale state

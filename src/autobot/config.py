@@ -125,10 +125,15 @@ class Settings:
     # action (silence/timeout cancels — nothing destructive runs without a clear yes).
     confirm_timeout_s: float = 30.0
     # --- coding agent (Phase 2) ---
-    # Autonomy for coding turns: "plan" (propose a plan; act only after the user approves —
-    # default, supervised), "confirm" (act, but confirm each destructive step), or "auto"
-    # (apply in-workspace edits without prompting; shell/out-of-scope/destructive still
-    # confirm at the gate). A progressive-trust dial the user raises as confidence grows.
+    # Autonomy for coding turns — a progressive-trust dial:
+    #   "plan" (default) — propose a plan; act only after the user approves it, then carry
+    #     out the whole plan without re-prompting per step (approving the plan IS the
+    #     approval for its commands);
+    #   "confirm" — no plan phase; act directly but ask before each command not on the
+    #     allowlist;
+    #   "auto" — no plan phase; act directly and run everything without prompting.
+    # All three still refuse blocklisted commands and stay within the cwd jail + a
+    # start-of-turn git checkpoint (undoable), so nothing is unrecoverable.
     coding_autonomy: str = "plan"
     # Snapshot the workspace (via a git shadow ref) at the start of each coding turn so a
     # change can be rewound (`jack undo`). Off disables checkpointing entirely.

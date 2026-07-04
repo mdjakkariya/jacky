@@ -149,9 +149,11 @@ def act_executor(
     ``run_command`` is classified by :func:`classify_command`: ``"block"`` is refused
     outright; ``"allow"`` (user allowlist) runs pre-authorized (no prompt); ``"confirm"``
     falls through to the gate, which asks the CLI via the :class:`SuspendingConfirmer` —
-    unless ``ask_on_confirm`` is ``False`` (``auto`` mode), where it runs pre-authorized
-    too. Everything else (reads, in-cwd edits) goes straight to the gate; being below the
-    gate's destructive threshold, edits never prompt.
+    unless ``ask_on_confirm`` is ``False``, where it runs pre-authorized too.
+    ``ask_on_confirm`` is ``True`` only in ``confirm`` mode; in ``plan`` mode the plan was
+    already approved and in ``auto`` mode nothing prompts. Everything else (reads, in-cwd
+    edits) goes straight to the gate; being below the gate's destructive threshold, edits
+    never prompt.
     """
 
     def execute(call: ToolCall) -> ToolResult:
@@ -328,9 +330,15 @@ class CoderTurnDriver:
             _log.info("plan refined")
 
     def _act(self, *, first_text: str | None = None) -> str:
-        """Run the act phase with the escalate-to-ask executor tuned by the dial."""
+        """Run the act phase with the executor tuned by the dial.
+
+        Only ``confirm`` mode asks before each non-allowlisted command. In ``plan`` mode
+        the user already approved the whole plan, so its commands run without a second
+        prompt; ``auto`` runs everything. All three still refuse blocklisted commands and
+        stay within the cwd jail + start-of-turn checkpoint.
+        """
         settings = self._settings()
-        ask_on_confirm = settings.coding_autonomy != "auto"
+        ask_on_confirm = settings.coding_autonomy == "confirm"
         executor = act_executor(
             self._gate,
             settings.command_allowlist,
