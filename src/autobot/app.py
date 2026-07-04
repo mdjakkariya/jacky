@@ -12,6 +12,7 @@ audit log and sandboxed filesystem tools) in front of the language model.
 from __future__ import annotations
 
 from collections.abc import Callable
+from dataclasses import replace
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -32,6 +33,7 @@ from autobot.tools.access import AccessPolicy, set_active_policy
 from autobot.tools.audit import AuditLog
 from autobot.tools.builtin import register_builtins
 from autobot.tools.code.redact import redact_secrets
+from autobot.tools.code.tools import register_code_tools
 from autobot.tools.filesystem import register_filesystem_tools
 from autobot.tools.permission import Confirmer, PermissionGate
 from autobot.tools.registry import ToolRegistry
@@ -444,14 +446,20 @@ def build(
         the audit log, prepares the sandbox, and connects to Ollama.
     """
     settings = settings or Settings.load()
+    # Coder profile: a lean, code-only tool registry (read_file/edit_file/grep/
+    # run_command/repo_map) instead of the assistant's fileio/apps/notes/etc. tools —
+    # the two sets share names (write_file, edit_file), so they can never coexist in
+    # one registry. See the `coder` branches below and the `register_code_tools` call.
+    coder = settings.profile == "coder"
     log_path = setup_logging(settings)
     log = get_logger("app")
     log.info(
-        "starting input=%s llm=%s stt=%s sandbox=%s",
+        "starting input=%s llm=%s stt=%s sandbox=%s profile=%s",
         settings.input_mode,
         settings.llm_model,
         settings.stt_model,
         settings.sandbox_dir,
+        settings.profile,
     )
     print(f"[log] writing debug log to {log_path}")
 
@@ -471,99 +479,108 @@ def build(
 
     access_policy = AccessPolicy(settings.access_store, workspace_root, on_cwd_change=_cwd_changed)
     set_active_policy(access_policy)  # so the Settings access endpoints can manage grants
-    if settings.allow_app_control:
-        # macOS app lifecycle by voice; gated like everything else (uninstall
-        # confirms, the rest are audited WRITEs).
-        from autobot.tools.apps import register_app_tools
-
-        register_app_tools(registry)
-        log.info("app control ENABLED (open/focus/quit/uninstall …)")
-        print("[apps] app control ENABLED — Jack can open/quit apps by voice.")
-    if settings.allow_system_info:
-        # Read-only system status (battery/wifi/disk) — safe, queries only.
-        from autobot.tools.system import register_system_tools
-
-        register_system_tools(registry)
-        log.info("system info ENABLED (battery/wifi/disk)")
-
-    if settings.allow_system_toggles:
-        # Write-side system controls (volume/brightness/appearance/sleep/wifi/
-        # keep-awake/lock) — audited WRITEs through the gate; no sudo, ever.
-        from autobot.tools.toggles import register_system_toggles
-
-        register_system_toggles(registry)
-        log.info("system toggles ENABLED (volume/brightness/appearance/sleep/wifi/keep-awake/lock)")
-
-    if settings.allow_file_search:
-        # Read-only Spotlight file search (on-device).
-        from autobot.tools.files import register_file_tools
-
-        register_file_tools(registry, choices=on_choices)
-        log.info("file search ENABLED (Spotlight)")
-
-    if settings.allow_clipboard:
-        # Read/set the macOS clipboard (on-device).
-        from autobot.tools.clipboard import register_clipboard_tools
-
-        register_clipboard_tools(registry)
-        log.info("clipboard ENABLED (read/set)")
-
-    if settings.allow_reminders:
-        # macOS Reminders (create/list/complete/delete) via osascript; gated like
-        # everything else — list is READ_ONLY, create/complete are WRITE, delete
-        # confirms (DESTRUCTIVE). On-device.
-        from autobot.tools.reminders import register_reminders_tools
-
-        register_reminders_tools(registry)
-        log.info("reminders ENABLED (create/update/list/complete/delete)")
-        print("[reminders] reminders ENABLED — Jack can manage your Reminders.")
-
-    if settings.allow_notes:
-        # macOS Notes (capture/read/organize/delete) via osascript; gated like
-        # everything else — reads are READ_ONLY, note/move are WRITE, delete
-        # confirms (DESTRUCTIVE). On-device.
-        from autobot.tools.notes import register_notes_tools
-
-        register_notes_tools(registry)
-        log.info("notes ENABLED (note/list/read/move/delete/folders)")
-        print("[notes] notes ENABLED — Jack can manage your Notes.")
 
     # Phase 4: persistent personalization. The store is read into the prompt each
-    # turn and grown via the (gated) memory tools.
+    # turn and grown via the (gated) memory tools. Declared here (not inside the
+    # assistant-only block below) because it's referenced unconditionally later.
     memory = None
-    if settings.allow_memory:
-        from autobot.memory.store import MemoryStore
-        from autobot.tools.memory import register_memory_tools
 
-        memory = MemoryStore(settings.memory_db)
-        register_memory_tools(registry, memory)
-        log.info("memory ENABLED db=%s", settings.memory_db)
-        name = memory.get_name()
-        print(f"[memory] personalization ON{f' — hi {name}!' if name else ''}")
-    if settings.allow_web:
-        # The one tool that reaches off-device; only registered when opted in.
-        from autobot.tools.web import register_web_tools
+    # Assistant-only tools: the coder profile skips this whole section (macOS
+    # lifecycle/system/notes/reminders/memory/web/orb/trash) in favor of the lean
+    # code-tool set registered further down, once ``broker`` exists.
+    if not coder:
+        if settings.allow_app_control:
+            # macOS app lifecycle by voice; gated like everything else (uninstall
+            # confirms, the rest are audited WRITEs).
+            from autobot.tools.apps import register_app_tools
 
-        register_web_tools(registry, settings)
-        from autobot.secrets import get_secret
+            register_app_tools(registry)
+            log.info("app control ENABLED (open/focus/quit/uninstall …)")
+            print("[apps] app control ENABLED — Jack can open/quit apps by voice.")
+        if settings.allow_system_info:
+            # Read-only system status (battery/wifi/disk) — safe, queries only.
+            from autobot.tools.system import register_system_tools
 
-        using_api = settings.web_provider != "ddgs" and bool(get_secret("web_api_key"))
-        provider = "API" if using_api else "ddgs scraping"
-        log.info("web search ENABLED provider=%s (queries leave the device)", provider)
-        print(f"[web] web search ENABLED via {provider} — queries leave the device.")
+            register_system_tools(registry)
+            log.info("system info ENABLED (battery/wifi/disk)")
 
-    if on_visibility is not None:
-        # A UI is attached: let the user dismiss the orb by voice ("go away").
-        from autobot.tools.orb import register_orb_tools
+        if settings.allow_system_toggles:
+            # Write-side system controls (volume/brightness/appearance/sleep/wifi/
+            # keep-awake/lock) — audited WRITEs through the gate; no sudo, ever.
+            from autobot.tools.toggles import register_system_toggles
 
-        visibility = on_visibility
-        register_orb_tools(registry, lambda: visibility(False))
-        log.info("orb dismiss tool ENABLED")
+            register_system_toggles(registry)
+            log.info(
+                "system toggles ENABLED (volume/brightness/appearance/sleep/wifi/keep-awake/lock)"
+            )
 
-    # Empty-the-Trash: a destructive action, so the gate confirms it (by voice).
-    from autobot.tools.trash import register_trash_tools
+        if settings.allow_file_search:
+            # Read-only Spotlight file search (on-device).
+            from autobot.tools.files import register_file_tools
 
-    register_trash_tools(registry)
+            register_file_tools(registry, choices=on_choices)
+            log.info("file search ENABLED (Spotlight)")
+
+        if settings.allow_clipboard:
+            # Read/set the macOS clipboard (on-device).
+            from autobot.tools.clipboard import register_clipboard_tools
+
+            register_clipboard_tools(registry)
+            log.info("clipboard ENABLED (read/set)")
+
+        if settings.allow_reminders:
+            # macOS Reminders (create/list/complete/delete) via osascript; gated like
+            # everything else — list is READ_ONLY, create/complete are WRITE, delete
+            # confirms (DESTRUCTIVE). On-device.
+            from autobot.tools.reminders import register_reminders_tools
+
+            register_reminders_tools(registry)
+            log.info("reminders ENABLED (create/update/list/complete/delete)")
+            print("[reminders] reminders ENABLED — Jack can manage your Reminders.")
+
+        if settings.allow_notes:
+            # macOS Notes (capture/read/organize/delete) via osascript; gated like
+            # everything else — reads are READ_ONLY, note/move are WRITE, delete
+            # confirms (DESTRUCTIVE). On-device.
+            from autobot.tools.notes import register_notes_tools
+
+            register_notes_tools(registry)
+            log.info("notes ENABLED (note/list/read/move/delete/folders)")
+            print("[notes] notes ENABLED — Jack can manage your Notes.")
+
+        if settings.allow_memory:
+            from autobot.memory.store import MemoryStore
+            from autobot.tools.memory import register_memory_tools
+
+            memory = MemoryStore(settings.memory_db)
+            register_memory_tools(registry, memory)
+            log.info("memory ENABLED db=%s", settings.memory_db)
+            name = memory.get_name()
+            print(f"[memory] personalization ON{f' — hi {name}!' if name else ''}")
+        if settings.allow_web:
+            # The one tool that reaches off-device; only registered when opted in.
+            from autobot.tools.web import register_web_tools
+
+            register_web_tools(registry, settings)
+            from autobot.secrets import get_secret
+
+            using_api = settings.web_provider != "ddgs" and bool(get_secret("web_api_key"))
+            provider = "API" if using_api else "ddgs scraping"
+            log.info("web search ENABLED provider=%s (queries leave the device)", provider)
+            print(f"[web] web search ENABLED via {provider} — queries leave the device.")
+
+        if on_visibility is not None:
+            # A UI is attached: let the user dismiss the orb by voice ("go away").
+            from autobot.tools.orb import register_orb_tools
+
+            visibility = on_visibility
+            register_orb_tools(registry, lambda: visibility(False))
+            log.info("orb dismiss tool ENABLED")
+
+        # Empty-the-Trash: a destructive action, so the gate confirms it (by voice).
+        from autobot.tools.trash import register_trash_tools
+
+        register_trash_tools(registry)
 
     # Per-session transcript (readable conversation + debug notes).
     transcript = _build_transcript(settings)
@@ -657,25 +674,45 @@ def build(
     from autobot.tools.access import AccessBroker
 
     broker = AccessBroker(access_policy, confirmer)
-    register_filesystem_tools(registry, broker)  # now active-folder aware
 
-    from autobot.tools.workspace import register_workspace_tools
+    if coder:
+        # Lean code-tool registry: read_file/write_file/edit_file/multi_edit, nav
+        # (glob/grep), run_command, repo_map — no fileio/filesystem/workspace tools
+        # (their write_file/edit_file names would clash with the code tools above).
+        register_code_tools(
+            registry,
+            broker,
+            allowlist=settings.command_allowlist,
+            blocklist=settings.command_blocklist,
+        )
+        log.info("coder profile ENABLED (code tools only)")
+    else:
+        register_filesystem_tools(registry, broker)  # now active-folder aware
 
-    register_workspace_tools(registry, broker, access_policy)
+        from autobot.tools.workspace import register_workspace_tools
 
-    if settings.allow_file_io:
-        # Broad read/copy/write/edit, scoped by the access policy; first use of a new
-        # folder asks for a grant via the same confirmer the gate uses.
-        from autobot.tools.fileio import register_file_io_tools
+        register_workspace_tools(registry, broker, access_policy)
 
-        register_file_io_tools(registry, broker)
-        log.info("file I/O ENABLED (read/copy/write/edit, access-gated)")
+        if settings.allow_file_io:
+            # Broad read/copy/write/edit, scoped by the access policy; first use of a
+            # new folder asks for a grant via the same confirmer the gate uses.
+            from autobot.tools.fileio import register_file_io_tools
+
+            register_file_io_tools(registry, broker)
+            log.info("file I/O ENABLED (read/copy/write/edit, access-gated)")
 
     # Reloadable LLM: rebuilt from fresh settings + Keychain when the Settings
     # view changes the provider/model/key — no restart needed (applies next turn).
+    # The profile is pinned to this build (never hot-swapped mid-daemon-life), so it's
+    # forced onto every reload — otherwise a daemon started with --profile coder would
+    # silently fall back to the assistant prompt/registry choice baked into settings.json.
     from autobot.llm.reloadable import ReloadableLanguageModel
 
-    llm = ReloadableLanguageModel(lambda: _build_llm(Settings.load(), registry, transcript, memory))
+    llm = ReloadableLanguageModel(
+        lambda: _build_llm(
+            replace(Settings.load(), profile=settings.profile), registry, transcript, memory
+        )
+    )
 
     # Barge-in engages in voice mode when the user wants it AND the mic is
     # echo-cancelled. The voice I/O is built lazily (chat-first), so we can't probe
