@@ -11,7 +11,7 @@ from typing import TYPE_CHECKING
 from autobot.cli.classify import Segment
 
 if TYPE_CHECKING:
-    from rich.console import RenderableType  # type: ignore[import-not-found]
+    from rich.console import RenderableType
 
 
 def render_plain(seg: Segment) -> str:
@@ -25,9 +25,9 @@ def render_plain(seg: Segment) -> str:
 
 def render_rich(seg: Segment) -> RenderableType:
     """Rich rendering of a segment: plan/error/pending as panels, done as markdown."""
-    from rich.markdown import Markdown  # type: ignore[import-not-found]
-    from rich.panel import Panel  # type: ignore[import-not-found]
-    from rich.text import Text  # type: ignore[import-not-found]
+    from rich.markdown import Markdown
+    from rich.panel import Panel
+    from rich.text import Text
 
     if seg.kind == "plan":
         return Panel(Markdown(seg.text), title="Plan", border_style="cyan")
@@ -45,6 +45,6 @@ def render_diff_plain(diff: str) -> str:
 
 def render_diff_rich(diff: str) -> RenderableType:
     """Rich diff: syntax-highlighted unified diff."""
-    from rich.syntax import Syntax  # type: ignore[import-not-found]
+    from rich.syntax import Syntax
 
     return Syntax(diff, "diff", theme="ansi_dark", word_wrap=True)

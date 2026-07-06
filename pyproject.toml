@@ -193,6 +193,8 @@ module = [
     "mcp.*",
     "pywhispercpp.*",
     "tree_sitter_language_pack.*",
+    "rich.*",
+    "textual.*",
     "objc.*",
     "AVFoundation.*",
     "ApplicationServices.*",

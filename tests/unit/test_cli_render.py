@@ -27,7 +27,7 @@ def test_diff_plain_passthrough() -> None:
 
 def test_rich_plan_renders_text() -> None:
     pytest.importorskip("rich")
-    from rich.console import Console  # type: ignore[import-not-found]
+    from rich.console import Console
 
     from autobot.cli.render import render_rich
 
