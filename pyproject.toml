@@ -86,6 +86,12 @@ freeze = [
 code = [
     "tree-sitter-language-pack>=0.1",
 ]
+# Terminal UI (coding agent CLI). Textual (pulls rich) renders the plan/diff/log
+# views; lazy-imported so the daemon and other clients don't need it.
+# `uv sync --extra tui`.
+tui = [
+    "textual>=0.80",
+]
 dev = [
     "ruff>=0.6",
     "mypy>=1.11",
