@@ -12,10 +12,10 @@ setup: install hooks ## Create the env and install git hooks
 	@echo "Setup complete. Run 'make run' to start (needs Ollama running)."
 
 # `uv sync` REPLACES the installed extra set, so always sync the whole set at once.
-EXTRAS := dev all daemon cloud whispercpp aec mcp
+EXTRAS := dev all daemon cloud whispercpp aec mcp tui
 EXTRA_FLAGS := $(addprefix --extra ,$(EXTRAS))
 
-install: ## Sync the virtualenv with all deps (dev + wake + tts + daemon + cloud + whispercpp + aec + mcp)
+install: ## Sync the virtualenv with all deps (dev + wake + tts + daemon + cloud + whispercpp + aec + mcp + tui)
 	uv sync $(EXTRA_FLAGS)
 
 lint: ## Lint with ruff

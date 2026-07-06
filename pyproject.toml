@@ -97,6 +97,7 @@ dev = [
     "mypy>=1.11",
     "pytest>=8.0",
     "pytest-cov>=5.0",
+    "pytest-asyncio>=0.24",
     "pre-commit>=3.7",
 ]
 
@@ -209,6 +210,7 @@ minversion = "8.0"
 testpaths = ["tests"]
 addopts = "-ra -q --strict-markers --cov=autobot --cov-report=term-missing --cov-report=xml"
 pythonpath = ["src"]
+asyncio_mode = "auto"
 # Silence a third-party deprecation from Starlette's TestClient (it nudges toward
 # 'httpx2'); it's emitted on import of fastapi.testclient and is out of our hands.
 filterwarnings = [

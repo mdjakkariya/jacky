@@ -24,7 +24,10 @@ jobs:
       - name: Sync dependencies
         # `daemon` (fastapi) is needed so the daemon-server tests run in CI and their
         # coverage counts; without it those tests skip and server.py shows 0% covered.
-        run: uv sync --extra dev --extra daemon
+        # `tui` (textual) is needed for the same reason: `cli/tui.py` subclasses
+        # `textual.app.App` at module scope, so mypy needs the real types to check it
+        # and the TUI tests need it to not skip.
+        run: uv sync --extra dev --extra daemon --extra tui
 
       - name: Lint (ruff)
         run: uv run ruff check .
