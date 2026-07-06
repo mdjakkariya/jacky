@@ -200,3 +200,37 @@ def test_start_turn_maps_connection_error_to_string() -> None:
         raise OSError("refused")
 
     assert "couldn't reach" in cli.start_turn("http://x", "hi", post=boom).lower()  # type: ignore[union-attr]
+
+
+def test_main_no_args_launches_tui(monkeypatch: pytest.MonkeyPatch) -> None:
+    launched: list[tuple[str, str]] = []
+    monkeypatch.setattr(cli, "ensure_daemon", lambda base, port: None)
+    import autobot.cli.tui as tui
+
+    monkeypatch.setattr(tui, "run", lambda base_url, cwd: launched.append((base_url, cwd)))
+    rc = cli.main(["--port", "8766"])
+    assert rc == 0 and launched and launched[0][0].endswith("8766")
+
+
+def test_main_no_args_without_textual_prints_hint(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setattr(cli, "ensure_daemon", lambda base, port: None)
+
+    def raise_import(base_url: str, cwd: str) -> None:
+        raise ImportError("No module named 'textual'")
+
+    import autobot.cli.tui as tui
+
+    monkeypatch.setattr(tui, "run", raise_import)
+    rc = cli.main([])
+    assert rc == 1 and "tui" in capsys.readouterr().err.lower()
+
+
+def test_main_with_text_still_one_shot(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setattr(cli, "ensure_daemon", lambda base, port: None)
+    monkeypatch.setattr(cli, "run_coder_turn", lambda base, text, **k: "the reply")
+    rc = cli.main(["do a thing"])
+    assert rc == 0 and "the reply" in capsys.readouterr().out

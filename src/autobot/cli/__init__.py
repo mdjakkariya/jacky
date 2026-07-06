@@ -37,20 +37,30 @@ __all__ = [
 
 
 def main(argv: list[str] | None = None) -> int:
-    """`jack "…"` — send one coding request to the coder daemon and print the reply."""
-    parser = argparse.ArgumentParser(
-        prog="jack", description="Jack coding agent (terminal client)."
-    )
-    parser.add_argument("text", nargs="+", help='the coding request, e.g. jack "add a test"')
+    """`jack` opens the TUI; `jack "…"` runs one coding request and prints the reply."""
+    parser = argparse.ArgumentParser(prog="jack", description="Jack coding agent (terminal).")
+    parser.add_argument("text", nargs="*", help="a coding request; omit to open the TUI")
     parser.add_argument("--port", type=int, default=_CODER_PORT, help="coder daemon port")
     args = parser.parse_args(argv)
     base_url = f"http://127.0.0.1:{args.port}"
-    text = " ".join(args.text)
     try:
         ensure_daemon(base_url, args.port)
-        print(run_coder_turn(base_url, text))
+        if args.text:
+            print(run_coder_turn(base_url, " ".join(args.text)))
+        else:
+            from pathlib import Path
+
+            import autobot.cli.tui as tui
+
+            tui.run(base_url, str(Path.cwd()))
     except (RuntimeError, TimeoutError) as exc:
         print(str(exc), file=sys.stderr)
+        return 1
+    except ImportError:
+        print(
+            "The interactive TUI needs the 'tui' extra — run `uv sync --extra tui`.",
+            file=sys.stderr,
+        )
         return 1
     except KeyboardInterrupt:
         print("\nCancelled.", file=sys.stderr)
