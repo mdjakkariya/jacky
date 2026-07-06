@@ -46,7 +46,7 @@ def test_run_coder_turn_plan_approve_done() -> None:
     assert reply == "Edited foo."
     assert calls[0][0].endswith("/coder/turn")
     assert calls[1][0].endswith("/coder/reply")
-    assert calls[1][1] == {"value": "approve"}
+    assert calls[1][1] == {"value": "approve", "text": ""}
 
 
 def test_run_coder_turn_pending_command_yes() -> None:
@@ -166,3 +166,37 @@ def test_main_ctrl_c_swallows_post_failure(
     rc = cli.main(["do a thing"])
     assert rc == 130
     assert "cancel" in capsys.readouterr().err.lower()
+
+
+def test_start_turn_posts_text() -> None:
+    seen: dict[str, Any] = {}
+
+    def fake_post(url: str, payload: dict[str, Any], timeout: float) -> dict[str, Any]:
+        seen["url"] = url
+        seen["payload"] = payload
+        return {"status": "plan", "reply": "1. x", "todo": ["x"]}
+
+    resp = cli.start_turn("http://x", "do it", post=fake_post)
+    assert isinstance(resp, dict)
+    assert resp["status"] == "plan"
+    assert seen["url"].endswith("/coder/turn") and seen["payload"] == {"text": "do it"}
+
+
+def test_answer_posts_value_and_text() -> None:
+    seen: dict[str, Any] = {}
+
+    def fake_post(url: str, payload: dict[str, Any], timeout: float) -> dict[str, Any]:
+        seen["url"] = url
+        seen["payload"] = payload
+        return {"status": "done", "reply": "ok"}
+
+    cli.answer("http://x", "refine", "use bash", post=fake_post)
+    assert seen["url"].endswith("/coder/reply")
+    assert seen["payload"] == {"value": "refine", "text": "use bash"}
+
+
+def test_start_turn_maps_connection_error_to_string() -> None:
+    def boom(url, payload, timeout):  # type: ignore[no-untyped-def]
+        raise OSError("refused")
+
+    assert "couldn't reach" in cli.start_turn("http://x", "hi", post=boom).lower()  # type: ignore[union-attr]
