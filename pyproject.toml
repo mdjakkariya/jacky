@@ -86,11 +86,18 @@ freeze = [
 code = [
     "tree-sitter-language-pack>=0.1",
 ]
+# Terminal UI (coding agent CLI). Textual (pulls rich) renders the plan/diff/log
+# views; lazy-imported so the daemon and other clients don't need it.
+# `uv sync --extra tui`.
+tui = [
+    "textual>=0.80",
+]
 dev = [
     "ruff>=0.6",
     "mypy>=1.11",
     "pytest>=8.0",
     "pytest-cov>=5.0",
+    "pytest-asyncio>=0.24",
     "pre-commit>=3.7",
 ]
 
@@ -187,6 +194,8 @@ module = [
     "mcp.*",
     "pywhispercpp.*",
     "tree_sitter_language_pack.*",
+    "rich.*",
+    "textual.*",
     "objc.*",
     "AVFoundation.*",
     "ApplicationServices.*",
@@ -201,6 +210,7 @@ minversion = "8.0"
 testpaths = ["tests"]
 addopts = "-ra -q --strict-markers --cov=autobot --cov-report=term-missing --cov-report=xml"
 pythonpath = ["src"]
+asyncio_mode = "auto"
 # Silence a third-party deprecation from Starlette's TestClient (it nudges toward
 # 'httpx2'); it's emitted on import of fastapi.testclient and is out of our hands.
 filterwarnings = [

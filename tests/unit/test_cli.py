@@ -46,7 +46,7 @@ def test_run_coder_turn_plan_approve_done() -> None:
     assert reply == "Edited foo."
     assert calls[0][0].endswith("/coder/turn")
     assert calls[1][0].endswith("/coder/reply")
-    assert calls[1][1] == {"value": "approve"}
+    assert calls[1][1] == {"value": "approve", "text": ""}
 
 
 def test_run_coder_turn_pending_command_yes() -> None:
@@ -166,3 +166,71 @@ def test_main_ctrl_c_swallows_post_failure(
     rc = cli.main(["do a thing"])
     assert rc == 130
     assert "cancel" in capsys.readouterr().err.lower()
+
+
+def test_start_turn_posts_text() -> None:
+    seen: dict[str, Any] = {}
+
+    def fake_post(url: str, payload: dict[str, Any], timeout: float) -> dict[str, Any]:
+        seen["url"] = url
+        seen["payload"] = payload
+        return {"status": "plan", "reply": "1. x", "todo": ["x"]}
+
+    resp = cli.start_turn("http://x", "do it", post=fake_post)
+    assert isinstance(resp, dict)
+    assert resp["status"] == "plan"
+    assert seen["url"].endswith("/coder/turn") and seen["payload"] == {"text": "do it"}
+
+
+def test_answer_posts_value_and_text() -> None:
+    seen: dict[str, Any] = {}
+
+    def fake_post(url: str, payload: dict[str, Any], timeout: float) -> dict[str, Any]:
+        seen["url"] = url
+        seen["payload"] = payload
+        return {"status": "done", "reply": "ok"}
+
+    cli.answer("http://x", "refine", "use bash", post=fake_post)
+    assert seen["url"].endswith("/coder/reply")
+    assert seen["payload"] == {"value": "refine", "text": "use bash"}
+
+
+def test_start_turn_maps_connection_error_to_string() -> None:
+    def boom(url, payload, timeout):  # type: ignore[no-untyped-def]
+        raise OSError("refused")
+
+    assert "couldn't reach" in cli.start_turn("http://x", "hi", post=boom).lower()  # type: ignore[union-attr]
+
+
+def test_main_no_args_launches_tui(monkeypatch: pytest.MonkeyPatch) -> None:
+    launched: list[tuple[str, str]] = []
+    monkeypatch.setattr(cli, "ensure_daemon", lambda base, port: None)
+    import autobot.cli.tui as tui
+
+    monkeypatch.setattr(tui, "run", lambda base_url, cwd: launched.append((base_url, cwd)))
+    rc = cli.main(["--port", "8766"])
+    assert rc == 0 and launched and launched[0][0].endswith("8766")
+
+
+def test_main_no_args_without_textual_prints_hint(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setattr(cli, "ensure_daemon", lambda base, port: None)
+
+    def raise_import(base_url: str, cwd: str) -> None:
+        raise ImportError("No module named 'textual'")
+
+    import autobot.cli.tui as tui
+
+    monkeypatch.setattr(tui, "run", raise_import)
+    rc = cli.main([])
+    assert rc == 1 and "tui" in capsys.readouterr().err.lower()
+
+
+def test_main_with_text_still_one_shot(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setattr(cli, "ensure_daemon", lambda base, port: None)
+    monkeypatch.setattr(cli, "run_coder_turn", lambda base, text, **k: "the reply")
+    rc = cli.main(["do a thing"])
+    assert rc == 0 and "the reply" in capsys.readouterr().out
