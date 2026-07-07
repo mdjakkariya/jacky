@@ -134,11 +134,6 @@ class Shell:
             if phase is None:
                 self._console.print()
                 return
-            if isinstance(phase, str):  # transport error surfaced as a string reply
-                self._console.print()
-                self._console.print(phase, markup=False, style="red")
-                self._console.print()
-                return
             seg = classify(phase)
             if seg.kind in ("plan", "pending"):
                 self._console.print()
@@ -157,7 +152,7 @@ class Shell:
             self._console.print()
             return
 
-    def _consume_until_phase(self, events: Any, verb: str) -> dict[str, Any] | str | None:
+    def _consume_until_phase(self, events: Any, verb: str) -> dict[str, Any] | None:
         """Drain streaming (tool) events — rendering them live — and return the next phase event.
 
         Returns the phase dict, or None if the stream ended without one.

@@ -8,7 +8,6 @@ confirmations to the active turn's channel instead of a TTY it doesn't have).
 
 from __future__ import annotations
 
-import inspect
 import queue
 import re
 import threading
@@ -26,24 +25,6 @@ _log = get_logger("coder")
 
 class _TurnBusyError(Exception):
     """Raised internally when a fresh turn starts while one is actively running."""
-
-
-def _supports_on_event(llm: Any) -> bool:
-    """Whether ``llm.run_turn`` takes an ``on_event`` keyword, without calling it.
-
-    Production LLMs (:class:`~autobot.agent.harness.AgentHarness`) declare ``on_event``
-    explicitly. Some fakes in existing tests predate streaming and expose only
-    ``run_turn(text, execute)`` — calling those with an unexpected keyword would raise
-    ``TypeError`` from *inside* the try/except in ``_run``, silently turning a good turn
-    into an error reply. Introspecting the signature once avoids that footgun.
-    """
-    try:
-        params = inspect.signature(llm.run_turn).parameters
-    except (TypeError, ValueError):
-        return False
-    return "on_event" in params or any(
-        p.kind is inspect.Parameter.VAR_KEYWORD for p in params.values()
-    )
 
 
 class TurnChannel:
@@ -233,11 +214,10 @@ def _extract_todo(reply: str) -> list[str]:
 class CoderTurnDriver:
     """Runs one coder turn (plan → approve → act) on a worker thread over a TurnChannel.
 
-    ``start`` spawns the worker and returns its first event; ``reply`` delivers the CLI's
-    answer and returns the next event. ``start_stream``/``reply_stream`` are the streaming
-    counterparts: they yield every non-terminal event (tool start/end, tokens) the worker
-    emits via ``TurnChannel.emit`` along the way, in addition to the same final phase
-    event. Only one turn runs at a time (guarded by a lock): a second ``start``/
+    ``start_stream`` spawns the worker and yields its events (tool start/end, tokens) as
+    they're emitted via ``TurnChannel.emit``, ending with the phase event (plan, pending,
+    done, or error); ``reply_stream`` delivers the CLI's answer and streams the next
+    phase the same way. Only one turn runs at a time (guarded by a lock): a second
     ``start_stream`` while a turn is actively running is rejected, while a turn is
     *parked* awaiting an answer (a CLI that died) is reclaimed.
     """
@@ -249,7 +229,7 @@ class CoderTurnDriver:
         confirmer: SuspendingConfirmer,
         settings_provider: Callable[[], Settings],
     ) -> None:
-        """Wire the driver. ``llm`` must expose ``run_turn(text, execute)``."""
+        """Wire the driver. ``llm`` must expose ``run_turn(text, execute, on_event=...)``."""
         self._llm = llm
         self._gate = gate
         self._confirmer = confirmer
@@ -257,32 +237,6 @@ class CoderTurnDriver:
         self._lock = threading.Lock()
         self._channel: TurnChannel | None = None
         self._awaiting = False  # True when the worker is parked awaiting an answer
-
-    def start(self, text: str) -> dict[str, Any]:
-        """Begin a coder turn; return its first event (plan, pending, done, or error)."""
-        try:
-            channel = self._spawn(text)
-        except _TurnBusyError:
-            return {"status": "error", "reply": "A coding turn is already running."}
-        return self._collect(channel)
-
-    def reply(self, value: str, text: str = "") -> dict[str, Any]:
-        """Deliver the CLI's answer to the parked turn; return the next event."""
-        channel = self._resume(value, text)
-        if channel is None:
-            return {"status": "error", "reply": "No coding turn is awaiting a reply."}
-        return self._collect(channel)
-
-    def _collect(self, channel: TurnChannel) -> dict[str, Any]:
-        """Poll the channel for the next event, updating turn state."""
-        event = channel.poll()
-        with self._lock:
-            if event.get("status") == "done":
-                self._channel = None
-                self._awaiting = False
-            else:
-                self._awaiting = True
-        return event
 
     @staticmethod
     def _is_phase_ender(evt: dict[str, Any]) -> bool:
@@ -293,7 +247,7 @@ class CoderTurnDriver:
         """Take the lock, reclaim any parked turn, start a fresh worker; return its channel.
 
         Raises :class:`_TurnBusyError` if a turn is actively running (not parked) — the caller
-        decides how to surface that (a plain error event for ``start``/``start_stream``).
+        decides how to surface that (a plain error event for ``start_stream``).
         """
         with self._lock:
             if self._channel is not None and not self._awaiting:
@@ -399,10 +353,7 @@ class CoderTurnDriver:
         while True:
             executor = read_only_executor(self._gate)
             prompt = _PLAN_PROMPT_PREFIX + request
-            if _supports_on_event(self._llm):
-                reply = self._llm.run_turn(prompt, executor, on_event=channel.emit)
-            else:
-                reply = self._llm.run_turn(prompt, executor)
+            reply = self._llm.run_turn(prompt, executor, on_event=channel.emit)
             todo = _extract_todo(reply)
             if not todo:
                 # No actionable steps — don't force an approve/act gate on a non-task.
@@ -437,9 +388,6 @@ class CoderTurnDriver:
             ask_on_confirm=ask_on_confirm,
         )
         prompt = first_text if first_text is not None else _ACT_PROMPT
-        if _supports_on_event(self._llm):
-            reply: str = self._llm.run_turn(prompt, executor, on_event=channel.emit)
-        else:
-            reply = self._llm.run_turn(prompt, executor)
+        reply: str = self._llm.run_turn(prompt, executor, on_event=channel.emit)
         _log.info("turn done")
         return reply

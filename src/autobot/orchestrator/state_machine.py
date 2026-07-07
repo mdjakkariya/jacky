@@ -960,18 +960,6 @@ class Orchestrator:
         finally:
             self._text_mode = False
 
-    def start_coder_turn(self, text: str) -> dict[str, Any]:
-        """Begin a coder plan→approve→act turn (coder profile only)."""
-        if self.coder_driver is None:
-            return {"status": "error", "reply": "coding turns aren't available here."}
-        return self.coder_driver.start(text)
-
-    def reply_coder_turn(self, value: str, text: str = "") -> dict[str, Any]:
-        """Deliver the CLI's answer to a parked coder turn (coder profile only)."""
-        if self.coder_driver is None:
-            return {"status": "error", "reply": "coding turns aren't available here."}
-        return self.coder_driver.reply(value, text)
-
     def start_coder_stream(self, text: str) -> Iterator[dict[str, Any]]:
         """Begin a coder turn and stream its events (coder profile only)."""
         if self.coder_driver is None:

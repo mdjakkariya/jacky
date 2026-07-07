@@ -19,8 +19,6 @@ from typing import Any
 _CODER_PORT = 8766  # coder daemon port (kept off the assistant daemon's 8765)
 _SPAWN_TIMEOUT_S = 30.0
 
-Post = Callable[[str, dict[str, Any], float], dict[str, Any]]
-
 
 def _post(url: str, payload: dict[str, Any], timeout: float) -> dict[str, Any]:  # pragma: no cover
     data = json.dumps(payload).encode("utf-8")
