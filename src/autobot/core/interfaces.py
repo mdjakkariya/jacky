@@ -97,6 +97,10 @@ class LanguageModel(Protocol):
     def run_turn(self, user_text: str, execute: ToolExecutor) -> str:
         """Handle one user utterance end-to-end.
 
+        (Concrete models also accept an optional ``on_event`` streaming callback — an
+        extension used by the coder driver; kept out of this minimal protocol so 2-arg
+        callers/fakes still satisfy it.)
+
         Implementations advertise the registered tools to the model, run any tool
         calls it returns **through the provided executor** (never directly), feed
         the results back, and return the model's final natural-language reply.
