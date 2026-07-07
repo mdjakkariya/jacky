@@ -786,12 +786,12 @@ class AnthropicLanguageModel:
             )
         except Exception:
             _log.warning("cloud forced final answer failed")
-            return "Sorry, that took too many steps."
+            return "I hit my step limit; partial changes are saved."
         content = _get(resp, "content") or []
         session.history.append(
             {"role": "assistant", "content": [_block_to_dict(b) for b in content]}
         )
-        return text_from_content(content) or "Sorry, that took too many steps."
+        return text_from_content(content) or "I hit my step limit; partial changes are saved."
 
     def finalize_turn(self, session: Session) -> list[dict[str, Any]]:
         """Record usage, compact if over threshold, trim to the hard backstop.

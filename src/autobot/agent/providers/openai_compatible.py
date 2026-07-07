@@ -236,10 +236,10 @@ class OpenAICompatibleModel:
             resp = self._create(self._messages, with_tools=False)
         except Exception:
             _log.exception("forced final answer failed")
-            return "Sorry, that took too many steps."
+            return "I hit my step limit; partial changes are saved."
         text, _calls, assistant = self._parse(resp)
         self._messages.append(assistant)
-        return text or "Sorry, that took too many steps."
+        return text or "I hit my step limit; partial changes are saved."
 
     def finalize_turn(self, session: Session) -> list[dict[str, Any]]:
         """Persist this turn append-only, then post-turn compact; return new messages."""
