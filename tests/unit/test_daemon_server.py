@@ -18,6 +18,8 @@ from autobot.core.events import EventBus, OrbState
 from autobot.daemon.server import create_app, run_daemon
 
 if TYPE_CHECKING:
+    from collections.abc import Iterator
+
     from autobot.mcp.manager import McpManager
 
 
@@ -773,25 +775,27 @@ def test_mcp_list_includes_secret_present_true_when_ref_set() -> None:
 
 
 def test_coder_turn_and_reply_dispatch_to_callbacks() -> None:
+    # on_coder_turn/on_coder_reply are now sync generators streamed as SSE.
     seen: list[tuple[str, tuple[object, ...]]] = []
 
-    def on_turn(text: str) -> dict[str, object]:
+    def on_turn(text: str) -> Iterator[dict[str, object]]:
         seen.append(("turn", (text,)))
-        return {"status": "plan", "reply": "1. x", "todo": ["x"]}
+        yield {"status": "plan", "reply": "1. x", "todo": ["x"]}
 
-    def on_reply(value: str, text: str) -> dict[str, object]:
+    def on_reply(value: str, text: str) -> Iterator[dict[str, object]]:
         seen.append(("reply", (value, text)))
-        return {"status": "done", "reply": "ok"}
+        yield {"status": "done", "reply": "ok"}
 
     client = TestClient(create_app(EventBus(), on_coder_turn=on_turn, on_coder_reply=on_reply))
     r1 = client.post("/coder/turn", json={"text": "do it"})
-    assert r1.json()["status"] == "plan"
+    assert r1.headers["content-type"].startswith("text/event-stream")
+    assert 'data: {"status": "plan", "reply": "1. x", "todo": ["x"]}\n\n' in r1.text
     r2 = client.post("/coder/reply", json={"value": "approve", "text": ""})
-    assert r2.json()["status"] == "done"
+    assert 'data: {"status": "done", "reply": "ok"}\n\n' in r2.text
     assert seen == [("turn", ("do it",)), ("reply", ("approve", ""))]
 
 
 def test_coder_routes_graceful_when_disabled() -> None:
     client = TestClient(create_app(EventBus()))  # no coder callbacks
-    assert client.post("/coder/turn", json={"text": "x"}).json()["status"] == "error"
-    assert client.post("/coder/reply", json={"value": "yes"}).json()["status"] == "error"
+    assert 'data: {"status": "error"' in client.post("/coder/turn", json={"text": "x"}).text
+    assert 'data: {"status": "error"' in client.post("/coder/reply", json={"value": "yes"}).text

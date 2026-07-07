@@ -22,7 +22,7 @@ import re
 from collections.abc import Sequence
 from typing import TYPE_CHECKING, Any
 
-from autobot.agent.chat_model import ChatResponse
+from autobot.agent.chat_model import ChatResponse, OnEvent
 from autobot.config import Settings
 from autobot.core.types import ToolCall, ToolResult
 from autobot.llm.ollama_llm import _SUMMARIZE_INSTRUCTION, system_prompt
@@ -716,12 +716,14 @@ class AnthropicLanguageModel:
         self._turn_failed = False
         self._turn_error = ""
 
-    def send(self, session: Session) -> ChatResponse:
+    def send(self, session: Session, on_event: OnEvent | None = None) -> ChatResponse:
         """Send once; record the assistant blocks; return text + tool calls.
 
         On a cloud failure the turn is abandoned (history rolled back to the start)
         and the stashed error reply is returned directly as the response text (with
         no tool calls), so the harness's round loop breaks and surfaces it as-is.
+
+        ``on_event`` is accepted for the streaming seam; token streaming lands in Plan B.
         """
         problem = _first_pairing_problem(session.history)
         if problem:

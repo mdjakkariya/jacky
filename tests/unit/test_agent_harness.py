@@ -35,7 +35,7 @@ class FakeChatModel:
         self.turns.append(user_text)
         session.history.append({"role": "user", "content": user_text})
 
-    def send(self, session: Session) -> ChatResponse:
+    def send(self, session: Session, on_event: Any = None) -> ChatResponse:
         resp = self._responses.pop(0)
         session.history.append({"role": "assistant", "content": resp.text})
         return resp

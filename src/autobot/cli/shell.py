@@ -8,7 +8,7 @@ All I/O collaborators are injected so the loop is unit-tested without a TTY or a
 from __future__ import annotations
 
 import subprocess
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from contextlib import AbstractContextManager
 from typing import Any
 
@@ -22,6 +22,8 @@ _log = get_logger("cli")
 
 _Reader = Callable[[str], str | None]
 _Spin = Callable[[Any, str], AbstractContextManager[None]]
+_StreamTurn = Callable[[str, str], Iterator[dict[str, Any]]]
+_StreamAnswer = Callable[[str, str, str], Iterator[dict[str, Any]]]
 
 
 def gather_context(cwd: str) -> dict[str, str]:
@@ -68,7 +70,8 @@ class Shell:
         base_url: str,
         cwd: str,
         *,
-        post: client.Post,
+        stream_turn: _StreamTurn = client.stream_turn,
+        stream_answer: _StreamAnswer = client.stream_answer,
         reader: _Reader,
         console: Any,
         snapshot: Callable[[str], str | None] = gitdiff.snapshot,
@@ -78,7 +81,8 @@ class Shell:
         """Wire the shell; all collaborators are injectable for tests."""
         self._base_url = base_url
         self._cwd = cwd
-        self._post = post
+        self._stream_turn = stream_turn
+        self._stream_answer = stream_answer
         self._reader = reader
         self._console = console
         self._snapshot = snapshot
@@ -120,38 +124,58 @@ class Shell:
         return False
 
     def _turn(self, text: str) -> None:
-        """Drive plan/pending to done, then print the diff — with blank-line spacing.
-
-        The user's turn is the input-prompt line prompt_toolkit already leaves in the
-        scrollback, so it is not re-rendered here (doing so double-printed each message).
-        A blank line precedes each spinner: it spaces the live spinner from the line above
-        and, once the transient spinner clears, becomes the gap before the reply it produced.
-        """
+        """Drive a turn from the event stream: render tool lines live, cards, reply, diff."""
         snap = self._snapshot(self._cwd)
         verb = spinner.verb_for(self._turn_no)
         _log.info("turn start")
-        self._console.print()  # gap before the spinner / the first reply
-        with self._spin(self._console, verb):
-            resp = client.start_turn(self._base_url, text, post=self._post)
-        while isinstance(resp, dict) and resp.get("status") in ("plan", "pending"):
-            seg = classify(resp)
+        events = self._stream_turn(self._base_url, text)
+        while True:
+            phase = self._consume_until_phase(events, verb)
+            if phase is None:
+                self._console.print()
+                return
+            if isinstance(phase, str):  # transport error surfaced as a string reply
+                self._console.print()
+                self._console.print(phase, markup=False, style="red")
+                self._console.print()
+                return
+            seg = classify(phase)
+            if seg.kind in ("plan", "pending"):
+                self._console.print()
+                self._console.print(render.render_rich(seg))
+                ans = self._ask(seg.kind)
+                events = self._stream_answer(self._base_url, ans.value, ans.text)
+                continue
+            # done / error
+            self._console.print()
             self._console.print(render.render_rich(seg))
-            ans = self._ask(seg.kind)
-            self._console.print()  # gap before the spinner / the next reply
-            with self._spin(self._console, verb):
-                resp = client.answer(self._base_url, ans.value, ans.text, post=self._post)
-        if isinstance(resp, str):  # transport/JSON error, already friendly
-            _log.error("turn failed: %s", resp)
-            self._console.print(resp, markup=False, style="red")
+            if phase.get("status") == "done":
+                diff = self._diff_since(self._cwd, snap)
+                if diff:
+                    self._console.print()
+                    self._console.print(render.render_diff_rich(diff, width=self._console.width))
             self._console.print()
             return
-        self._console.print(render.render_rich(classify(resp)))
-        if resp.get("status") == "done":
-            diff = self._diff_since(self._cwd, snap)
-            if diff:
-                self._console.print()
-                self._console.print(render.render_diff_rich(diff, width=self._console.width))
-        self._console.print()  # trailing blank line before the next prompt
+
+    def _consume_until_phase(self, events: Any, verb: str) -> dict[str, Any] | str | None:
+        """Drain streaming (tool) events — rendering them live — and return the next phase event.
+
+        Returns the phase dict, or None if the stream ended without one.
+        """
+        with self._spin(self._console, verb):
+            for evt in events:
+                if isinstance(evt, dict) and evt.get("status") in (
+                    "plan",
+                    "pending",
+                    "done",
+                    "error",
+                ):
+                    return evt
+                seg = classify(evt)
+                if seg.kind == "tool" and evt.get("event") == "start":
+                    self._console.print(render.render_tool(seg))
+                # token events are rendered live in Plan B; ignored here
+        return None
 
     def _ask(self, kind: str) -> Answer:
         """Read a plan/permission choice, re-asking until it parses; EOF/Ctrl-C → reject."""
@@ -186,4 +210,11 @@ def run(base_url: str, cwd: str) -> None:  # pragma: no cover - launches the int
 
     console = Console(theme=jack_theme())
     reader = make_reader(make_session(cwd, commands.COMMANDS))
-    Shell(base_url, cwd, post=client._post, reader=reader, console=console).run()
+    Shell(
+        base_url,
+        cwd,
+        stream_turn=client.stream_turn,
+        stream_answer=client.stream_answer,
+        reader=reader,
+        console=console,
+    ).run()

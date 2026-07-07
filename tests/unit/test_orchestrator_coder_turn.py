@@ -39,3 +39,15 @@ def test_errors_without_driver() -> None:
     orch = _bare_orchestrator()
     assert orch.start_coder_turn("x")["status"] == "error"
     assert orch.reply_coder_turn("yes")["status"] == "error"
+
+
+def test_start_coder_stream_no_driver_yields_error() -> None:
+    orch = _bare_orchestrator()
+    events = list(orch.start_coder_stream("do it"))
+    assert events == [{"status": "error", "reply": "coding turns aren't available here."}]
+
+
+def test_reply_coder_stream_no_driver_yields_error() -> None:
+    orch = _bare_orchestrator()
+    events = list(orch.reply_coder_stream("approve"))
+    assert events == [{"status": "error", "reply": "coding turns aren't available here."}]

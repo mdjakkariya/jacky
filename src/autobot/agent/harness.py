@@ -26,7 +26,7 @@ from autobot.core.types import ToolCall, ToolResult
 from autobot.logging_setup import get_logger
 
 if TYPE_CHECKING:
-    from autobot.agent.chat_model import ChatModel
+    from autobot.agent.chat_model import ChatModel, OnEvent
     from autobot.agent.session import Session
     from autobot.agent.session_store import SessionStore
     from autobot.core.types import ToolExecutor
@@ -43,6 +43,22 @@ _DOOM_LIMIT = 4  # abort if one identical (name+args) call repeats this many tim
 def _call_key(call: ToolCall) -> str:
     """Stable identity for a call (name + canonical args) for anti-thrash/doom checks."""
     return call.name + "\0" + json.dumps(call.arguments, sort_keys=True, default=str)
+
+
+def tool_label(call: ToolCall) -> str:
+    """A short human label for a tool call, for the ⎿ activity line."""
+    args = call.arguments
+    if call.name == "read_file":
+        return f"Read {args.get('path', '')}".strip()
+    if call.name == "grep":
+        return f'Searched "{args.get("pattern", "")}"'
+    if call.name in ("glob", "list_dir"):
+        return f"Listed {args.get('pattern', args.get('path', ''))}".strip()
+    if call.name == "run_command":
+        return f"$ {str(args.get('command', ''))[:80]}"
+    if call.name in ("write_file", "edit_file", "multi_edit"):
+        return f"Edited {args.get('path', '')}".strip()
+    return call.name
 
 
 class AgentHarness:
@@ -94,8 +110,23 @@ class AgentHarness:
         """The current conversation session."""
         return self._session
 
-    def run_turn(self, user_text: str, execute: ToolExecutor) -> str:
-        """Handle one user turn end-to-end; tool calls run through ``execute`` (the gate)."""
+    def run_turn(
+        self, user_text: str, execute: ToolExecutor, on_event: OnEvent | None = None
+    ) -> str:
+        """Handle one user turn end-to-end; tool calls run through ``execute`` (the gate).
+
+        When ``on_event`` is provided, emits ``{"type": "tool", "event": "start"/"end", ...}``
+        around each executed tool call (and token events come from the provider's ``send``).
+        """
+
+        def emit(evt: dict[str, Any]) -> None:
+            if on_event is None:
+                return
+            try:
+                on_event(evt)
+            except Exception:  # a bad sink must never break a turn
+                _log.exception("on_event sink failed; continuing turn")
+
         if self._checkpoint is not None:
             try:
                 self._checkpoint(user_text)
@@ -106,7 +137,7 @@ class AgentHarness:
         seen: dict[str, int] = {}  # doom-loop: call key -> times issued this turn
         reply = ""
         for _ in range(self._max_rounds):
-            resp = self._model.send(self._session)
+            resp = self._model.send(self._session, on_event)
             if not resp.tool_calls:
                 reply = resp.text
                 break
@@ -130,8 +161,25 @@ class AgentHarness:
                     last_fail = out
                 else:
                     all_repeat = False
+                    emit(
+                        {
+                            "type": "tool",
+                            "event": "start",
+                            "name": call.name,
+                            "label": tool_label(call),
+                        }
+                    )
                     result = execute(call)  # through the permission gate
                     out, ok = result.content, result.ok
+                    emit(
+                        {
+                            "type": "tool",
+                            "event": "end",
+                            "name": call.name,
+                            "label": tool_label(call),
+                            "ok": ok,
+                        }
+                    )
                     if not result.ok:
                         failed[key] = out
                         last_fail = out

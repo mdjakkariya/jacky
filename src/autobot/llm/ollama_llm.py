@@ -17,7 +17,7 @@ if TYPE_CHECKING:
     from autobot.agent.session import Session
     from autobot.core.interfaces import ToolSelector
 
-from autobot.agent.chat_model import ChatResponse
+from autobot.agent.chat_model import ChatResponse, OnEvent
 from autobot.config import Settings
 from autobot.core.types import ToolCall, ToolResult
 from autobot.logging_setup import get_logger
@@ -422,8 +422,11 @@ class OllamaLanguageModel:
         self._messages = self._assemble(session, self._user_msg)
         self._sent_start = len(self._messages)
 
-    def send(self, session: Session) -> ChatResponse:
-        """Call the model once, record the assistant message, return text + tool calls."""
+    def send(self, session: Session, on_event: OnEvent | None = None) -> ChatResponse:
+        """Call the model once, record the assistant message, return text + tool calls.
+
+        ``on_event`` is accepted for the streaming seam; token streaming lands in Plan B.
+        """
         response = self._chat(self._messages)
         message = _get(response, "message")
         calls = normalize_tool_calls(message)

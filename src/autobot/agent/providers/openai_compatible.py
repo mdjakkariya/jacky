@@ -17,7 +17,7 @@ from __future__ import annotations
 import json
 from typing import TYPE_CHECKING, Any
 
-from autobot.agent.chat_model import ChatResponse
+from autobot.agent.chat_model import ChatResponse, OnEvent
 from autobot.config import Settings
 from autobot.core.types import ToolCall, ToolResult
 from autobot.llm.ollama_llm import (
@@ -206,8 +206,11 @@ class OpenAICompatibleModel:
         self._sent_start = len(self._messages)
         self._last_tool_calls = []
 
-    def send(self, session: Session) -> ChatResponse:
-        """Call the model once, record the assistant message, return text + tool calls."""
+    def send(self, session: Session, on_event: OnEvent | None = None) -> ChatResponse:
+        """Call the model once, record the assistant message, return text + tool calls.
+
+        ``on_event`` is accepted for the streaming seam; token streaming lands in Plan B.
+        """
         resp = self._create(self._messages)
         text, calls, assistant = self._parse(resp)
         self._messages.append(assistant)
