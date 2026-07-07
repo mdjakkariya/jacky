@@ -346,8 +346,9 @@ class OllamaLanguageModel:
         When ``on_event`` is set, streams the response and emits a ``{"type":
         "token", "text": ...}`` event per content delta, then returns a synthetic
         response shaped like the blocking one (a ``{"message": {...}}`` dict) so
-        callers (:meth:`send`) read it through the same helpers. ``on_event=None``
-        keeps the blocking call — including the ``think`` handling — unchanged.
+        callers (:meth:`send`) read it through the same helpers. Both paths pass
+        ``think=think_on`` for qwen3 models (falling back without it on
+        ``TypeError``), so streamed turns respect ``llm_think`` too.
         """
         model = self._settings.llm_model
         think_on = "qwen3" in model and self._settings.llm_think
@@ -375,7 +376,17 @@ class OllamaLanguageModel:
             content_parts: list[str] = []
             tool_calls_raw: list[Any] = []
             prompt_tok = eval_tok = 0
-            for chunk in self._client.chat(**kwargs):  # think kwarg omitted in the stream path
+            # Only qwen3 supports the reasoning toggle; other models reject the kwarg —
+            # same fallback as the blocking path, so a streamed turn doesn't silently
+            # ignore `llm_think`.
+            if "qwen3" in model:
+                try:
+                    stream = self._client.chat(think=think_on, **kwargs)
+                except TypeError:
+                    stream = self._client.chat(**kwargs)
+            else:
+                stream = self._client.chat(**kwargs)
+            for chunk in stream:
                 msg = _get(chunk, "message")
                 # Read the raw delta (not via message_content, which strips whitespace —
                 # fine once on a whole message, but would eat meaningful inter-token

@@ -151,6 +151,54 @@ def test_chat_stream_collects_whole_tool_call_from_final_chunk() -> None:
     assert [c.name for c in resp.tool_calls] == ["get_time"]
 
 
+def test_chat_stream_passes_think_for_qwen3_model() -> None:
+    # The blocking path threads `think=think_on` for qwen3 models (I1); the streaming
+    # path must do the same, or a streamed turn silently ignores `llm_think`.
+    chunks: list[dict[str, Any]] = [{"message": {"role": "assistant", "content": "hi"}}]
+    client = _FakeStreamingOllamaClient(chunks)
+    from autobot.llm.ollama_llm import OllamaLanguageModel
+
+    model = OllamaLanguageModel(
+        Settings(llm_model="qwen3:8b", llm_think=True), ToolRegistry(), client=client
+    )
+    session = _session()
+    model.begin_turn(session, "hi")
+    model.send(session, on_event=lambda _e: None)
+    assert client.sent[-1].get("think") is True
+
+
+def test_chat_stream_falls_back_without_think_on_type_error() -> None:
+    # If the installed ollama client's chat() rejects the `think` kwarg (older
+    # versions), the streaming branch must retry without it, like the blocking path.
+    chunks: list[dict[str, Any]] = [{"message": {"role": "assistant", "content": "hi"}}]
+
+    class _RejectsThinkClient:
+        def __init__(self) -> None:
+            self.sent: list[dict[str, Any]] = []
+
+        def chat(self, **kwargs: Any) -> Any:
+            if "think" in kwargs:
+                raise TypeError("chat() got an unexpected keyword argument 'think'")
+            self.sent.append(kwargs)
+            assert kwargs.get("stream") is True
+            return iter(chunks)
+
+        def show(self, model: str) -> dict[str, Any]:
+            return {"modelinfo": {"qwen2.context_length": 4096}}
+
+    from autobot.llm.ollama_llm import OllamaLanguageModel
+
+    client = _RejectsThinkClient()
+    model = OllamaLanguageModel(
+        Settings(llm_model="qwen3:8b", llm_think=True), ToolRegistry(), client=client
+    )
+    session = _session()
+    model.begin_turn(session, "hi")
+    resp = model.send(session, on_event=lambda _e: None)
+    assert resp.text == "hi"
+    assert "think" not in client.sent[-1]
+
+
 def test_chat_stream_not_used_when_on_event_is_none() -> None:
     # Without on_event, _chat() must take the blocking path: no stream kwarg, and
     # the client's chat() is called once (not iterated as a stream).

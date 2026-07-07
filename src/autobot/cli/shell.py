@@ -8,6 +8,7 @@ All I/O collaborators are injected so the loop is unit-tested without a TTY or a
 from __future__ import annotations
 
 import subprocess
+import sys
 from collections.abc import Callable, Iterator
 from contextlib import AbstractContextManager
 from typing import Any
@@ -155,7 +156,11 @@ class Shell:
     def _consume_until_phase(self, events: Any, verb: str) -> dict[str, Any] | None:
         """Drain streaming (token/tool) events — rendering them live — and return the phase event.
 
-        Reply tokens accumulate into ``buffer`` and repaint a transient ``rich.Live`` region
+        The spinner runs alone until the *first* streaming event (token or tool) arrives —
+        it and the token ``rich.Live`` region must never be active at once, since both drive
+        their own ``Live`` on the same console and a nested one simply never paints. On that
+        first event the spinner is torn down and the token ``Live`` takes over for the rest
+        of the phase: reply tokens accumulate into ``buffer`` and repaint the transient region
         as plain text (``⏺ <buffer>``); tool ``start`` events print as dim ``⎿`` lines above
         it. Because the region is transient, it clears the instant a phase event arrives —
         the caller then prints ``render.render_rich(seg)`` (the finalized markdown reply), so
@@ -168,7 +173,11 @@ class Shell:
 
         buffer = ""
         live_region = Live(console=self._console, refresh_per_second=12, transient=True)
-        with self._spin(self._console, verb), live_region as live:
+        spin_cm = self._spin(self._console, verb)
+        spin_cm.__enter__()
+        spinning = True
+        live: Live | None = None
+        try:
             for evt in events:
                 if isinstance(evt, dict) and evt.get("status") in (
                     "plan",
@@ -178,11 +187,23 @@ class Shell:
                 ):
                     return evt
                 seg = classify(evt)
+                is_tool_start = seg.kind == "tool" and evt.get("event") == "start"
+                if (seg.kind == "token" or is_tool_start) and spinning:
+                    spin_cm.__exit__(None, None, None)
+                    spinning = False
+                    live = live_region.__enter__()
                 if seg.kind == "token":
                     buffer += seg.text
+                    assert live is not None
                     live.update(Text(f"{theme.GLYPH_ASSISTANT} {buffer}", style="assistant"))
-                elif seg.kind == "tool" and evt.get("event") == "start":
+                elif is_tool_start:
                     self._console.print(render.render_tool(seg))
+        finally:
+            exc_info = sys.exc_info()
+            if spinning:
+                spin_cm.__exit__(*exc_info)
+            elif live is not None:
+                live_region.__exit__(*exc_info)
         return None
 
     def _ask(self, kind: str) -> Answer:

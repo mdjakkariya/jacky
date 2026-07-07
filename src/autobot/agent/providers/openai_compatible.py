@@ -179,6 +179,10 @@ class OpenAICompatibleModel:
                 kwargs["tools"] = tools
         if on_event is not None:
             kwargs["stream"] = True
+            # Best-effort: ask compliant backends to include a final usage chunk on the
+            # stream (the loop below already reads `chunk.usage` when present); backends
+            # that reject the option simply ignore it.
+            kwargs["stream_options"] = {"include_usage": True}
             content = ""
             frags: dict[int, dict[str, str]] = {}  # stream index -> {id, name, args}
             prompt_tok = eval_tok = 0
@@ -190,7 +194,8 @@ class OpenAICompatibleModel:
                     on_event({"type": "token", "text": piece})
                     content += piece
                 for tc in getattr(delta, "tool_calls", None) or []:
-                    slot = frags.setdefault(tc.index, {"id": "", "name": "", "args": ""})
+                    index = getattr(tc, "index", 0)
+                    slot = frags.setdefault(index, {"id": "", "name": "", "args": ""})
                     if getattr(tc, "id", None):
                         slot["id"] = tc.id
                     fn = getattr(tc, "function", None)

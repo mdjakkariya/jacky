@@ -11,7 +11,7 @@ from typing import Any
 import pytest
 from rich.console import Console
 
-from autobot.cli import shell
+from autobot.cli import shell, spinner
 from autobot.cli.prompt import Answer
 from autobot.cli.theme import GLYPH_ASSISTANT, jack_theme
 
@@ -243,3 +243,48 @@ def test_stream_tokens_render_live_then_markdown(
     assert fakes[0].updates == [f"{GLYPH_ASSISTANT} Hel", f"{GLYPH_ASSISTANT} Hello!"]
     out = console.export_text()
     assert "Hello!" in out  # the done phase's markdown reply is what persists
+
+
+def test_stream_tokens_paint_with_the_real_spinner(tmp_path: Path) -> None:
+    """Regression test: the spinner and the token Live must never both be active.
+
+    Uses the REAL ``spinner.with_spinner`` (not the no-op fake the other tests inject)
+    so this exercises actual nested-``Live`` semantics. If the token ``Live`` is opened
+    while the spinner's ``Live`` is still active, ``rich`` marks it "nested"; a nested,
+    transient ``Live`` never paints its content on ``stop()`` — so the streamed buffer
+    text would never reach the console at all, only the finalized phase reply would.
+    The phase's reply is deliberately distinct from the buffered tokens so the two
+    sources can't be confused: this test fails against a nested structure and passes
+    once the spinner is torn down before the token Live starts.
+    """
+    turns = {
+        "start": [
+            {"type": "token", "text": "Hel"},
+            {"type": "token", "text": "lo!"},
+            {"status": "done", "reply": "Done."},
+        ],
+    }
+
+    def stream_turn(_b: str, _t: str) -> Iterator[dict[str, Any]]:
+        return iter(turns["start"])
+
+    def stream_answer(_b: str, _v: str, _t: str = "") -> Iterator[dict[str, Any]]:
+        return iter([])
+
+    console = _console()
+    sh = shell.Shell(
+        "http://x",
+        str(tmp_path),
+        stream_turn=stream_turn,
+        stream_answer=stream_answer,
+        reader=_scripted_reader(["hi", None]),
+        console=console,
+        snapshot=lambda _c: None,
+        diff_since=lambda _c, _b: None,
+        spin=spinner.with_spinner,  # the real, threaded spinner — not the no-op fake
+    )
+    sh.run()
+
+    out = console.export_text()
+    assert "Done." in out  # the finalized phase reply always prints
+    assert "Hello!" in out  # the live-streamed buffer must have actually painted too
