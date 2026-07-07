@@ -124,20 +124,22 @@ class Shell:
 
         The user's turn is the input-prompt line prompt_toolkit already leaves in the
         scrollback, so it is not re-rendered here (doing so double-printed each message).
+        A blank line precedes each spinner: it spaces the live spinner from the line above
+        and, once the transient spinner clears, becomes the gap before the reply it produced.
         """
         snap = self._snapshot(self._cwd)
         verb = spinner.verb_for(self._turn_no)
         _log.info("turn start")
+        self._console.print()  # gap before the spinner / the first reply
         with self._spin(self._console, verb):
             resp = client.start_turn(self._base_url, text, post=self._post)
         while isinstance(resp, dict) and resp.get("status") in ("plan", "pending"):
             seg = classify(resp)
-            self._console.print()  # breathing room before the plan/permission prompt
             self._console.print(render.render_rich(seg))
             ans = self._ask(seg.kind)
+            self._console.print()  # gap before the spinner / the next reply
             with self._spin(self._console, verb):
                 resp = client.answer(self._base_url, ans.value, ans.text, post=self._post)
-        self._console.print()  # breathing room before the reply
         if isinstance(resp, str):  # transport/JSON error, already friendly
             _log.error("turn failed: %s", resp)
             self._console.print(resp, markup=False, style="red")

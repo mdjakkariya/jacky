@@ -59,7 +59,7 @@ def frame_text(verb: str, frame_char: str, elapsed_s: float, width: int) -> Text
     """Compose one spinner frame: ``<glyph> <verb>…  · byline``."""
     line = Text()
     line.append(frame_char + " ", style="teal")
-    line.append(f"{verb}…", style="dim")
+    line.append(f"{verb}…", style="bold")
     tail = byline(elapsed_s, width)
     if tail:
         line.append("  ·  " + tail, style="dim")
