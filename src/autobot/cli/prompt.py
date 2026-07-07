@@ -46,7 +46,7 @@ def parse_confirm_choice(raw: str) -> Answer | None:
     return None
 
 
-class JackCompleter(Completer):  # type: ignore[misc]
+class JackCompleter(Completer):
     """Completes ``/command`` at the line start and ``@path`` for the current word."""
 
     def __init__(self, commands: dict[str, str], cwd: str) -> None:
@@ -96,7 +96,7 @@ def make_reader(session: PromptSession[str]) -> Callable[[str], str | None]:
         from prompt_toolkit.formatted_text import ANSI
 
         try:
-            return session.prompt(ANSI(f"\x1b[1;38;2;79;214;184m{prompt_str}\x1b[0m"))  # type: ignore[no-any-return]
+            return session.prompt(ANSI(f"\x1b[1;38;2;79;214;184m{prompt_str}\x1b[0m"))
         except EOFError:
             return None
 
