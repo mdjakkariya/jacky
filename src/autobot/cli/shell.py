@@ -141,7 +141,7 @@ class Shell:
         if resp.get("status") == "done":
             diff = self._diff_since(self._cwd, snap)
             if diff:
-                self._console.print(render.render_diff_rich(diff))
+                self._console.print(render.render_diff_rich(diff, width=self._console.width))
 
     def _ask(self, kind: str) -> Answer:
         """Read a plan/permission choice, re-asking until it parses; EOF/Ctrl-C → reject."""
