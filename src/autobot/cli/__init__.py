@@ -13,11 +13,11 @@ from autobot.cli.client import (
     _post,
     _probe,
     _prompt_user,
-    answer,
     ensure_daemon,
     is_daemon_up,
     run_coder_turn,
-    start_turn,
+    stream_answer,
+    stream_turn,
 )
 
 __all__ = [
@@ -27,12 +27,12 @@ __all__ = [
     "_post",
     "_probe",
     "_prompt_user",
-    "answer",
     "ensure_daemon",
     "is_daemon_up",
     "main",
     "run_coder_turn",
-    "start_turn",
+    "stream_answer",
+    "stream_turn",
 ]
 
 

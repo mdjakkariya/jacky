@@ -15,7 +15,9 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import json
 import threading
+from collections.abc import Iterable, Iterator
 from typing import TYPE_CHECKING, Any
 
 # Imported at module top (not lazily) on purpose: with ``from __future__ import
@@ -26,6 +28,7 @@ from typing import TYPE_CHECKING, Any
 # This module is the daemon transport, so requiring FastAPI to import it is fine;
 # nothing on the core/engine import path pulls this in. uvicorn stays lazy.
 from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
+from fastapi.responses import StreamingResponse
 
 from autobot.core.events import EventBus, StateEvent
 from autobot.logging_setup import get_logger
@@ -38,6 +41,17 @@ if TYPE_CHECKING:
     from autobot.mcp.provider import McpProvider
 
 _log = get_logger("daemon")
+
+
+def _sse_frames(events: Iterable[dict[str, Any]]) -> Iterator[str]:
+    """Serialize coder events to SSE ``data:`` frames; a bad event degrades to an error frame."""
+    for evt in events:
+        try:
+            payload = json.dumps(evt)
+        except (TypeError, ValueError):
+            payload = json.dumps({"status": "error", "reply": "unserializable event"})
+        yield f"data: {payload}\n\n"
+
 
 # Secrets the Settings view may store (Keychain account names). Anything else is
 # rejected so the endpoint can't write arbitrary Keychain items.
@@ -122,13 +136,14 @@ def create_app(
         on_resume_session: Optional callback (session_id: str -> bool) that resumes a
             stored agent session; wired to the orchestrator's ``resume_session``. When
             ``None``, ``POST /sessions/resume`` returns ``{"ok": False}``.
-        on_coder_turn: Optional callback (text: str -> dict) that starts a coder
-            plan→approve→act turn; wired to the orchestrator's ``start_coder_turn``.
-            When ``None``, ``POST /coder/turn`` returns an error status dict.
-        on_coder_reply: Optional callback (value: str, text: str -> dict) that
-            delivers the CLI's answer to a parked coder turn; wired to the
-            orchestrator's ``reply_coder_turn``. When ``None``, ``POST /coder/reply``
-            returns an error status dict.
+        on_coder_turn: Optional callback (text: str -> Iterator[dict]) that starts a
+            coder plan→approve→act turn and streams its events; wired to the
+            orchestrator's ``start_coder_stream``. When ``None``, ``POST /coder/turn``
+            streams a single error status event.
+        on_coder_reply: Optional callback (value: str, text: str -> Iterator[dict])
+            that delivers the CLI's answer to a parked coder turn and streams the
+            next phase's events; wired to the orchestrator's ``reply_coder_stream``.
+            When ``None``, ``POST /coder/reply`` streams a single error status event.
 
     Returns:
         A FastAPI app: ``/healthz``, WebSocket ``/ws``, the settings API, and
@@ -319,24 +334,32 @@ def create_app(
         reply = await asyncio.to_thread(on_chat, str(text))
         return {"ok": True, "reply": reply}
 
-    async def post_coder_turn(request: Request) -> dict[str, Any]:
-        """Start a coder plan→approve→act turn; return the first status event."""
+    async def post_coder_turn(request: Request) -> Any:
+        """Start a coder plan→approve→act turn; stream its events as SSE."""
         payload = await request.json()
         text = payload.get("text") if isinstance(payload, dict) else None
         if not text or on_coder_turn is None:
-            return {"status": "error", "reply": "no text / coder unavailable"}
-        result = await asyncio.to_thread(on_coder_turn, str(text))
-        return result if isinstance(result, dict) else {"status": "error", "reply": "bad result"}
+            return StreamingResponse(
+                _sse_frames(iter([{"status": "error", "reply": "no text / coder unavailable"}])),
+                media_type="text/event-stream",
+            )
+        return StreamingResponse(
+            _sse_frames(on_coder_turn(str(text))), media_type="text/event-stream"
+        )
 
-    async def post_coder_reply(request: Request) -> dict[str, Any]:
-        """Deliver the CLI's answer to a parked coder turn; return the next status event."""
+    async def post_coder_reply(request: Request) -> Any:
+        """Deliver the CLI's answer to a parked coder turn; stream the next phase as SSE."""
         payload = await request.json()
         value = payload.get("value") if isinstance(payload, dict) else None
         text = payload.get("text", "") if isinstance(payload, dict) else ""
         if value is None or on_coder_reply is None:
-            return {"status": "error", "reply": "no value / coder unavailable"}
-        result = await asyncio.to_thread(on_coder_reply, str(value), str(text))
-        return result if isinstance(result, dict) else {"status": "error", "reply": "bad result"}
+            return StreamingResponse(
+                _sse_frames(iter([{"status": "error", "reply": "no value / coder unavailable"}])),
+                media_type="text/event-stream",
+            )
+        return StreamingResponse(
+            _sse_frames(on_coder_reply(str(value), str(text))), media_type="text/event-stream"
+        )
 
     async def post_new_session() -> dict[str, Any]:
         """Start a fresh chat session — discard the engine's conversation history.

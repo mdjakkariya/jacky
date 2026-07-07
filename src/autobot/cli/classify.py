@@ -20,7 +20,12 @@ class Segment:
 
 
 def classify(event: dict[str, Any]) -> Segment:
-    """Classify a daemon status dict (``plan``/``pending``/``done``/``error``)."""
+    """Classify a daemon dict: streaming (``type``) or phase (``status``) event."""
+    etype = event.get("type")
+    if etype == "token":
+        return Segment("token", str(event.get("text", "")))
+    if etype == "tool":
+        return Segment("tool", str(event.get("label", event.get("name", ""))))
     status = event.get("status", "")
     if status == "plan":
         todo = tuple(str(s) for s in (event.get("todo") or []))

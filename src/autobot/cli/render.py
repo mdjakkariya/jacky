@@ -24,6 +24,10 @@ def render_plain(seg: Segment) -> str:
         return f"PLAN\n{seg.text}"
     if seg.kind == "error":
         return f"Error: {seg.text}"
+    if seg.kind == "token":
+        return seg.text
+    if seg.kind == "tool":
+        return f"{theme.GLYPH_TOOL}  {seg.text}"
     return seg.text  # pending / done
 
 
@@ -37,6 +41,12 @@ def render_rich(seg: Segment) -> RenderableType:
         from rich.text import Text
 
         return Text(f"Error: {seg.text}", style="red")
+    if seg.kind == "token":
+        from rich.text import Text
+
+        return Text(seg.text)
+    if seg.kind == "tool":
+        return render_tool(seg)
     return render_reply(seg.text)  # done
 
 
@@ -55,6 +65,13 @@ def render_reply(text: str) -> RenderableType:
     grid.add_column()  # content
     grid.add_row(Text(theme.GLYPH_ASSISTANT, style="assistant"), Markdown(text))
     return grid
+
+
+def render_tool(seg: Segment) -> RenderableType:
+    """A dim nested tool-activity line: ``⎿ <label>``."""
+    from rich.text import Text
+
+    return Text(f"{theme.GLYPH_TOOL}  {seg.text}", style="tool")
 
 
 def _proceed(*labels: str) -> Text:

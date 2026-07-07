@@ -25,3 +25,13 @@ def test_error_uses_reply() -> None:
 
 def test_unknown_status_falls_back_to_done() -> None:
     assert classify({"reply": "hi"}).kind == "done"
+
+
+def test_classify_token_event() -> None:
+    seg = classify({"type": "token", "text": "hel"})
+    assert seg.kind == "token" and seg.text == "hel"
+
+
+def test_classify_tool_event() -> None:
+    seg = classify({"type": "tool", "event": "start", "name": "read_file", "label": "Read a.py"})
+    assert seg.kind == "tool" and "Read a.py" in seg.text

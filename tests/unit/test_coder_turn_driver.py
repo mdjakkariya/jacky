@@ -28,7 +28,7 @@ class _ScriptedLLM:
         self.act_calls = act_calls or []
         self.plans = 0
 
-    def run_turn(self, user_text: str, execute) -> str:  # type: ignore[no-untyped-def]
+    def run_turn(self, user_text: str, execute, on_event=None) -> str:  # type: ignore[no-untyped-def]
         if "PLANNING" in user_text:
             self.plans += 1
             return self.plan_reply
@@ -60,37 +60,37 @@ def _driver(llm: _ScriptedLLM, autonomy: str = "plan") -> CoderTurnDriver:
 
 def test_plan_then_approve_then_done() -> None:
     d = _driver(_ScriptedLLM("1. edit foo\n2. add test", "Edited foo and added a test."))
-    first = d.start("add a test for foo")
-    assert first["status"] == "plan"
-    assert first["todo"] == ["edit foo", "add test"]
-    final = d.reply("approve")
-    assert final == {"status": "done", "reply": "Edited foo and added a test."}
+    first = list(d.start_stream("add a test for foo"))
+    assert first[-1]["status"] == "plan"
+    assert first[-1]["todo"] == ["edit foo", "add test"]
+    final = list(d.reply_stream("approve"))
+    assert final[-1] == {"status": "done", "reply": "Edited foo and added a test."}
 
 
 def test_conversational_reply_skips_approval_gate() -> None:
     # A greeting/question: the plan turn has no numbered steps, so there's nothing to
     # approve — the driver must answer directly, not emit a plan-approval event.
     d = _driver(_ScriptedLLM("Hi! What would you like me to work on?", "should not act"))
-    result = d.start("hey")
-    assert result == {"status": "done", "reply": "Hi! What would you like me to work on?"}
+    result = list(d.start_stream("hey"))
+    assert result[-1] == {"status": "done", "reply": "Hi! What would you like me to work on?"}
 
 
 def test_plan_reject_makes_no_changes() -> None:
     d = _driver(_ScriptedLLM("1. edit foo", "should not run"))
-    d.start("do it")
-    final = d.reply("reject")
-    assert final["status"] == "done"
-    assert "won't" in final["reply"].lower() or "not" in final["reply"].lower()
+    list(d.start_stream("do it"))
+    final = list(d.reply_stream("reject"))
+    assert final[-1]["status"] == "done"
+    assert "won't" in final[-1]["reply"].lower() or "not" in final[-1]["reply"].lower()
 
 
 def test_plan_refine_replans_then_approve() -> None:
     llm = _ScriptedLLM("1. first plan", "done acting")
     d = _driver(llm)
-    d.start("do it")
-    again = d.reply("refine", "also update the docs")
-    assert again["status"] == "plan" and llm.plans == 2
-    final = d.reply("approve")
-    assert final["status"] == "done"
+    list(d.start_stream("do it"))
+    again = list(d.reply_stream("refine", "also update the docs"))
+    assert again[-1]["status"] == "plan" and llm.plans == 2
+    final = list(d.reply_stream("approve"))
+    assert final[-1]["status"] == "done"
 
 
 def test_confirm_mode_asks_before_each_command() -> None:
@@ -104,10 +104,10 @@ def test_confirm_mode_asks_before_each_command() -> None:
         ],
     )
     d = _driver(llm, autonomy="confirm")
-    pending = d.start("run the tests")  # straight to act; pytest not allowlisted → ask
-    assert pending["status"] == "pending" and "pytest" in pending["prompt"]
-    final = d.reply("yes")
-    assert final == {"status": "done", "reply": "Tests passed."}
+    pending = list(d.start_stream("run the tests"))  # straight to act; pytest not allowlisted
+    assert pending[-1]["status"] == "pending" and "pytest" in pending[-1]["prompt"]
+    final = list(d.reply_stream("yes"))
+    assert final[-1] == {"status": "done", "reply": "Tests passed."}
 
 
 def test_plan_mode_does_not_reconfirm_planned_command() -> None:
@@ -121,9 +121,9 @@ def test_plan_mode_does_not_reconfirm_planned_command() -> None:
         ],
     )
     d = _driver(llm)  # plan mode
-    assert d.start("run the script")["status"] == "plan"
-    final = d.reply("approve")  # no second pending — runs straight through to done
-    assert final == {"status": "done", "reply": "Ran it."}
+    assert list(d.start_stream("run the script"))[-1]["status"] == "plan"
+    final = list(d.reply_stream("approve"))  # no second pending — runs straight through to done
+    assert final[-1] == {"status": "done", "reply": "Ran it."}
 
 
 def test_auto_mode_skips_plan_and_runs_command() -> None:
@@ -135,17 +135,17 @@ def test_auto_mode_skips_plan_and_runs_command() -> None:
         ],
     )
     d = _driver(llm, autonomy="auto")
-    final = d.start("build it")  # no plan phase, no ask (auto)
-    assert final == {"status": "done", "reply": "Built."}
+    final = list(d.start_stream("build it"))  # no plan phase, no ask (auto)
+    assert final[-1] == {"status": "done", "reply": "Built."}
 
 
 def test_reply_without_active_turn_errors() -> None:
     d = _driver(_ScriptedLLM("1. x", "y"))
-    assert d.reply("yes")["status"] == "error"
+    assert list(d.reply_stream("yes"))[-1]["status"] == "error"
 
 
 def test_reclaimed_parked_turn_does_not_block_fresh_start() -> None:
-    """A fresh start() while a prior turn is parked reclaims it (CLI died) cleanly.
+    """A fresh start_stream() while a prior turn is parked reclaims it (CLI died) cleanly.
 
     The stale worker's ask() must self-decline via the closed channel instead of
     hanging, so it terminates via its own channel.done(...) and the daemon never
@@ -155,17 +155,17 @@ def test_reclaimed_parked_turn_does_not_block_fresh_start() -> None:
     llm = _ScriptedLLM("1. edit foo\n2. add test", "Edited foo and added a test.")
     d = _driver(llm)
 
-    first = d.start("add a test for foo")  # parks awaiting plan approval
-    assert first["status"] == "plan"
+    first = list(d.start_stream("add a test for foo"))  # parks awaiting plan approval
+    assert first[-1]["status"] == "plan"
 
-    # A fresh start() while the first turn is parked reclaims it instead of hanging.
-    second = d.start("do something else")
-    assert second["status"] == "plan"
-    assert second["reply"] == first["reply"]  # same scripted plan reply, fresh turn
+    # A fresh start_stream() while the first turn is parked reclaims it instead of hanging.
+    second = list(d.start_stream("do something else"))
+    assert second[-1]["status"] == "plan"
+    assert second[-1]["reply"] == first[-1]["reply"]  # same scripted plan reply, fresh turn
 
     # The fresh turn proceeds normally to completion.
-    final = d.reply("approve")
-    assert final == {"status": "done", "reply": "Edited foo and added a test."}
+    final = list(d.reply_stream("approve"))
+    assert final[-1] == {"status": "done", "reply": "Edited foo and added a test."}
 
     # The reclaimed (stale) worker thread must have terminated on its own — never left
     # parked — by self-declining via the closed channel's reject. Give it a bounded
@@ -222,18 +222,18 @@ def test_reclaim_close_does_not_leak_a_parked_confirm() -> None:
         act_calls=[ToolCall(name="run_command", arguments={"command": "pytest -q"})],
     )
     d = _driver(llm, autonomy="confirm")
-    pending = d.start("run the tests")
-    assert pending["status"] == "pending"  # parked awaiting the run_command confirm
+    pending = list(d.start_stream("run the tests"))
+    assert pending[-1]["status"] == "pending"  # parked awaiting the run_command confirm
 
     events: queue.Queue[dict[str, object]] = queue.Queue()
 
     def fresh_start() -> None:
-        events.put(d.start("a different request"))
+        events.put(list(d.start_stream("a different request"))[-1])
 
     t = threading.Thread(target=fresh_start, name="reclaimer")
     t.start()
     t.join(timeout=_JOIN_TIMEOUT_S)
-    assert not t.is_alive(), "reclaiming start() hung"
+    assert not t.is_alive(), "reclaiming start_stream() hung"
 
     event = events.get(timeout=_JOIN_TIMEOUT_S)
     assert event["status"] == "pending"  # the fresh turn's own act confirm, not stale state

@@ -17,7 +17,7 @@ if TYPE_CHECKING:
     from autobot.agent.session import Session
     from autobot.core.interfaces import ToolSelector
 
-from autobot.agent.chat_model import ChatResponse
+from autobot.agent.chat_model import ChatResponse, OnEvent
 from autobot.config import Settings
 from autobot.core.types import ToolCall, ToolResult
 from autobot.logging_setup import get_logger
@@ -268,6 +268,25 @@ def _to_message_dict(message: Any) -> dict[str, Any]:
     return {"role": "assistant", "content": message_content(message)}
 
 
+def _to_plain(obj: Any) -> Any:
+    """Best-effort convert a (possibly pydantic) object to a JSON-serializable value.
+
+    Used to make streamed tool-call chunks (which arrive as SDK objects, not dicts)
+    safe to store in session history, matching the shape the blocking path produces
+    (where the whole response is dict-ified via :func:`_to_message_dict`).
+    """
+    for attr in ("model_dump", "dict"):
+        fn = getattr(obj, attr, None)
+        if callable(fn):
+            try:
+                result = fn()
+                if isinstance(result, dict):
+                    return result
+            except Exception:  # fall through and store the raw object
+                pass
+    return obj
+
+
 class OllamaLanguageModel:
     """Runs user turns against a local Ollama model with tool calling."""
 
@@ -315,8 +334,22 @@ class OllamaLanguageModel:
             _log.warning("could not detect context length; using %d", _DEFAULT_CONTEXT_TOKENS)
             return _DEFAULT_CONTEXT_TOKENS
 
-    def _chat(self, messages: list[dict[str, Any]], *, with_tools: bool = True) -> Any:
-        """Call Ollama with the full window + bounded output; track prompt tokens."""
+    def _chat(
+        self,
+        messages: list[dict[str, Any]],
+        *,
+        with_tools: bool = True,
+        on_event: OnEvent | None = None,
+    ) -> Any:
+        """Call Ollama with the full window + bounded output; track prompt tokens.
+
+        When ``on_event`` is set, streams the response and emits a ``{"type":
+        "token", "text": ...}`` event per content delta, then returns a synthetic
+        response shaped like the blocking one (a ``{"message": {...}}`` dict) so
+        callers (:meth:`send`) read it through the same helpers. Both paths pass
+        ``think=think_on`` for qwen3 models (falling back without it on
+        ``TypeError``), so streamed turns respect ``llm_think`` too.
+        """
         model = self._settings.llm_model
         think_on = "qwen3" in model and self._settings.llm_think
         # Reasoning tokens count against num_predict but go to `thinking`, not the
@@ -338,6 +371,41 @@ class OllamaLanguageModel:
         }
         if with_tools:
             kwargs["tools"] = self._tools_for_round()
+        if on_event is not None:
+            kwargs["stream"] = True
+            content_parts: list[str] = []
+            tool_calls_raw: list[Any] = []
+            prompt_tok = eval_tok = 0
+            # Only qwen3 supports the reasoning toggle; other models reject the kwarg —
+            # same fallback as the blocking path, so a streamed turn doesn't silently
+            # ignore `llm_think`.
+            if "qwen3" in model:
+                try:
+                    stream = self._client.chat(think=think_on, **kwargs)
+                except TypeError:
+                    stream = self._client.chat(**kwargs)
+            else:
+                stream = self._client.chat(**kwargs)
+            for chunk in stream:
+                msg = _get(chunk, "message")
+                # Read the raw delta (not via message_content, which strips whitespace —
+                # fine once on a whole message, but would eat meaningful inter-token
+                # spaces if applied per chunk).
+                piece = _get(msg, "content") or ""
+                if piece:
+                    on_event({"type": "token", "text": piece})
+                    content_parts.append(piece)
+                tc = _get(msg, "tool_calls")
+                if tc:  # Ollama sends whole tool_calls, usually on the final chunk
+                    tool_calls_raw = [_to_plain(t) for t in tc]
+                prompt_tok = int(_get(chunk, "prompt_eval_count") or prompt_tok)
+                eval_tok = int(_get(chunk, "eval_count") or eval_tok)
+            self._last_prompt_tokens = prompt_tok
+            self._last_eval_tokens = eval_tok
+            message: dict[str, Any] = {"role": "assistant", "content": "".join(content_parts)}
+            if tool_calls_raw:
+                message["tool_calls"] = tool_calls_raw
+            return {"message": message}
         # Only qwen3 supports the reasoning toggle; other models reject the kwarg.
         if "qwen3" in model:
             try:
@@ -422,9 +490,13 @@ class OllamaLanguageModel:
         self._messages = self._assemble(session, self._user_msg)
         self._sent_start = len(self._messages)
 
-    def send(self, session: Session) -> ChatResponse:
-        """Call the model once, record the assistant message, return text + tool calls."""
-        response = self._chat(self._messages)
+    def send(self, session: Session, on_event: OnEvent | None = None) -> ChatResponse:
+        """Call the model once, record the assistant message, return text + tool calls.
+
+        When ``on_event`` is set, streams ``{"type": "token", ...}`` events as they
+        arrive from Ollama; ``on_event=None`` keeps the blocking call.
+        """
+        response = self._chat(self._messages, on_event=on_event)
         message = _get(response, "message")
         calls = normalize_tool_calls(message)
         self._messages.append(_to_message_dict(message))  # record assistant turn faithfully

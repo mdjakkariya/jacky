@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from collections.abc import Callable
+import json
+from collections.abc import Callable, Iterator
 from typing import Any
 
 import pytest
@@ -18,30 +19,56 @@ def test_daemon_up_probe() -> None:
     assert cli.is_daemon_up("http://x", probe=raising_probe) is False
 
 
-_Post = Callable[[str, dict[str, Any], float], dict[str, Any]]
+def test_parse_sse_yields_event_dicts() -> None:
+    from autobot.cli.client import _parse_sse
+
+    lines = [
+        'data: {"type": "tool", "event": "start", "name": "read_file", "label": "Read a"}',
+        "",
+        'data: {"status": "done", "reply": "ok"}',
+        "",
+    ]
+    events = list(_parse_sse(iter(lines)))
+    assert events[0]["type"] == "tool"
+    assert events[1] == {"status": "done", "reply": "ok"}
+
+
+_OpenStream = Callable[[str, dict[str, Any]], Iterator[str]]
 _Call = tuple[str, dict[str, Any]]
 
 
-def _scripted_post(script: list[dict[str, Any]]) -> tuple[_Post, list[_Call]]:
-    """Return a fake post() that yields the next scripted response each call."""
+def _sse_lines(events: list[dict[str, Any]]) -> list[str]:
+    """Render event dicts as ``data: {json}`` SSE lines, each followed by a blank line."""
+    lines: list[str] = []
+    for evt in events:
+        lines.append(f"data: {json.dumps(evt)}")
+        lines.append("")
+    return lines
+
+
+def _scripted_stream(
+    script: dict[str, list[dict[str, Any]]],
+) -> tuple[_OpenStream, list[_Call]]:
+    """Return a fake open_stream() that replays scripted SSE events per path."""
     calls: list[tuple[str, dict[str, Any]]] = []
 
-    def post(url: str, payload: dict[str, Any], timeout: float) -> dict[str, Any]:
+    def open_stream(url: str, payload: dict[str, Any]) -> Iterator[str]:
         calls.append((url, payload))
-        return script[len(calls) - 1]
+        path = "/coder/turn" if url.endswith("/coder/turn") else "/coder/reply"
+        return iter(_sse_lines(script[path]))
 
-    return post, calls
+    return open_stream, calls
 
 
 def test_run_coder_turn_plan_approve_done() -> None:
-    post, calls = _scripted_post(
-        [
-            {"status": "plan", "reply": "1. edit foo", "todo": ["edit foo"]},
-            {"status": "done", "reply": "Edited foo."},
-        ]
+    open_stream, calls = _scripted_stream(
+        {
+            "/coder/turn": [{"status": "plan", "reply": "1. edit foo", "todo": ["edit foo"]}],
+            "/coder/reply": [{"status": "done", "reply": "Edited foo."}],
+        }
     )
     reply = cli.run_coder_turn(
-        "http://x", "edit foo", post=post, prompt=lambda r: {"value": "approve"}
+        "http://x", "edit foo", open_stream=open_stream, prompt=lambda r: {"value": "approve"}
     )
     assert reply == "Edited foo."
     assert calls[0][0].endswith("/coder/turn")
@@ -50,35 +77,70 @@ def test_run_coder_turn_plan_approve_done() -> None:
 
 
 def test_run_coder_turn_pending_command_yes() -> None:
-    post, _ = _scripted_post(
-        [
-            {"status": "plan", "reply": "1. run tests", "todo": ["run tests"]},
-            {"status": "pending", "kind": "command", "prompt": "Run `pytest -q`?"},
-            {"status": "done", "reply": "Tests passed."},
-        ]
-    )
+    turn_calls = {"n": 0}
+
+    def open_stream(url: str, payload: dict[str, Any]) -> Iterator[str]:
+        if url.endswith("/coder/turn"):
+            return iter(_sse_lines([{"status": "plan", "reply": "1. run tests"}]))
+        turn_calls["n"] += 1
+        if turn_calls["n"] == 1:
+            return iter(_sse_lines([{"status": "pending", "kind": "command", "prompt": "Run?"}]))
+        return iter(_sse_lines([{"status": "done", "reply": "Tests passed."}]))
+
     answers = iter([{"value": "approve"}, {"value": "yes"}])
-    reply = cli.run_coder_turn("http://x", "run tests", post=post, prompt=lambda r: next(answers))
+    reply = cli.run_coder_turn(
+        "http://x", "run tests", open_stream=open_stream, prompt=lambda r: next(answers)
+    )
     assert reply == "Tests passed."
 
 
 def test_run_coder_turn_reject() -> None:
-    post, _ = _scripted_post(
-        [
-            {"status": "plan", "reply": "1. edit foo", "todo": ["edit foo"]},
-            {"status": "done", "reply": "Okay, I won't make any changes."},
-        ]
+    open_stream, _ = _scripted_stream(
+        {
+            "/coder/turn": [{"status": "plan", "reply": "1. edit foo", "todo": ["edit foo"]}],
+            "/coder/reply": [{"status": "done", "reply": "Okay, I won't make any changes."}],
+        }
     )
-    reply = cli.run_coder_turn("http://x", "edit", post=post, prompt=lambda r: {"value": "reject"})
+    reply = cli.run_coder_turn(
+        "http://x", "edit", open_stream=open_stream, prompt=lambda r: {"value": "reject"}
+    )
     assert "won't" in reply.lower()
 
 
 def test_run_coder_turn_handles_connection_error() -> None:
-    def post(url, payload, timeout):  # type: ignore[no-untyped-def]
+    def open_stream(url: str, payload: dict[str, Any]) -> Iterator[str]:
         raise OSError("Connection refused")
 
-    reply = cli.run_coder_turn("http://x", "hi", post=post, prompt=lambda r: {"value": "approve"})
+    reply = cli.run_coder_turn(
+        "http://x", "hi", open_stream=open_stream, prompt=lambda r: {"value": "approve"}
+    )
     assert "couldn't reach" in reply.lower()
+
+
+def test_run_coder_turn_over_stream_plan_approve_done() -> None:
+    from autobot.cli.client import run_coder_turn
+
+    scripted = {
+        "/coder/turn": [
+            'data: {"status": "plan", "reply": "1. edit foo", "todo": ["edit foo"]}',
+            "",
+        ],
+        "/coder/reply": [
+            'data: {"type": "tool", "event": "start", "name": "edit_file", "label": "Edited foo"}',
+            "",
+            'data: {"status": "done", "reply": "Edited foo."}',
+            "",
+        ],
+    }
+
+    def open_stream(url: str, payload: dict[str, object]) -> Iterator[str]:
+        path = "/coder/turn" if url.endswith("/coder/turn") else "/coder/reply"
+        return iter(scripted[path])
+
+    reply = run_coder_turn(
+        "http://x", "edit foo", open_stream=open_stream, prompt=lambda r: {"value": "approve"}
+    )
+    assert reply == "Edited foo."
 
 
 def test_main_one_shot(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
@@ -168,38 +230,40 @@ def test_main_ctrl_c_swallows_post_failure(
     assert "cancel" in capsys.readouterr().err.lower()
 
 
-def test_start_turn_posts_text() -> None:
+def test_stream_turn_posts_text() -> None:
     seen: dict[str, Any] = {}
 
-    def fake_post(url: str, payload: dict[str, Any], timeout: float) -> dict[str, Any]:
+    def fake_open_stream(url: str, payload: dict[str, Any]) -> Iterator[str]:
         seen["url"] = url
         seen["payload"] = payload
-        return {"status": "plan", "reply": "1. x", "todo": ["x"]}
+        return iter(_sse_lines([{"status": "plan", "reply": "1. x", "todo": ["x"]}]))
 
-    resp = cli.start_turn("http://x", "do it", post=fake_post)
-    assert isinstance(resp, dict)
-    assert resp["status"] == "plan"
+    events = list(cli.stream_turn("http://x", "do it", open_stream=fake_open_stream))
+    assert events[0]["status"] == "plan"
     assert seen["url"].endswith("/coder/turn") and seen["payload"] == {"text": "do it"}
 
 
-def test_answer_posts_value_and_text() -> None:
+def test_stream_answer_posts_value_and_text() -> None:
     seen: dict[str, Any] = {}
 
-    def fake_post(url: str, payload: dict[str, Any], timeout: float) -> dict[str, Any]:
+    def fake_open_stream(url: str, payload: dict[str, Any]) -> Iterator[str]:
         seen["url"] = url
         seen["payload"] = payload
-        return {"status": "done", "reply": "ok"}
+        return iter(_sse_lines([{"status": "done", "reply": "ok"}]))
 
-    cli.answer("http://x", "refine", "use bash", post=fake_post)
+    list(cli.stream_answer("http://x", "refine", "use bash", open_stream=fake_open_stream))
     assert seen["url"].endswith("/coder/reply")
     assert seen["payload"] == {"value": "refine", "text": "use bash"}
 
 
-def test_start_turn_maps_connection_error_to_string() -> None:
-    def boom(url, payload, timeout):  # type: ignore[no-untyped-def]
+def test_stream_turn_maps_connection_error_to_error_event() -> None:
+    def boom(url: str, payload: dict[str, Any]) -> Iterator[str]:
         raise OSError("refused")
 
-    assert "couldn't reach" in cli.start_turn("http://x", "hi", post=boom).lower()  # type: ignore[union-attr]
+    events = list(cli.stream_turn("http://x", "hi", open_stream=boom))
+    assert len(events) == 1
+    assert events[0]["status"] == "error"
+    assert "couldn't reach" in events[0]["reply"].lower()
 
 
 def test_main_no_args_launches_tui(monkeypatch: pytest.MonkeyPatch) -> None:

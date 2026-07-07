@@ -10,12 +10,15 @@ or resume a conversation without knowing provider message shapes.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 
 if TYPE_CHECKING:
     from autobot.agent.session import Session
     from autobot.core.types import ToolCall, ToolResult
+
+OnEvent = Callable[[dict[str, Any]], None]
 
 
 @dataclass(frozen=True, slots=True)
@@ -43,8 +46,12 @@ class ChatModel(Protocol):
         """Start a turn: record the user message and reset per-turn state."""
         ...
 
-    def send(self, session: Session) -> ChatResponse:
-        """Assemble + send the current history, record the assistant reply natively."""
+    def send(self, session: Session, on_event: OnEvent | None = None) -> ChatResponse:
+        """Assemble + send the current history, record the assistant reply natively.
+
+        When ``on_event`` is provided, the adapter may emit streaming events
+        (``{"type": "token", ...}``) as they arrive; ``None`` keeps the blocking path.
+        """
         ...
 
     def record_results(self, session: Session, results: list[tuple[ToolCall, ToolResult]]) -> None:
