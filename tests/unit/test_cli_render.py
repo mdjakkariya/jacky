@@ -34,3 +34,39 @@ def test_rich_plan_renders_text() -> None:
     console = Console(record=True, width=80)
     console.print(render_rich(Segment("plan", "wrap fetch in retry", ("step",))))
     assert "wrap fetch in retry" in console.export_text()
+
+
+def test_rich_dispatch_plan_lists_steps() -> None:
+    pytest.importorskip("rich")
+    from rich.console import Console
+
+    from autobot.cli.classify import Segment
+    from autobot.cli.render import render_rich
+
+    console = Console(record=True, width=80)
+    reply = "Here's my plan:\n1. wrap fetch\n2. add test"
+    console.print(render_rich(Segment("plan", reply, ("wrap fetch", "add test"))))
+    out = console.export_text()
+    assert "wrap fetch" in out and "add test" in out and "Proceed" in out
+
+
+def test_rich_dispatch_pending_is_a_permission_card() -> None:
+    pytest.importorskip("rich")
+    from rich.console import Console
+
+    from autobot.cli.classify import Segment
+    from autobot.cli.render import render_rich
+
+    console = Console(record=True, width=80)
+    console.print(render_rich(Segment("pending", "run pytest -q?")))
+    assert "pytest -q" in console.export_text()
+
+
+def test_render_footer_has_context_and_gates_on_width() -> None:
+    from autobot.cli.render import render_footer
+
+    ctx = {"model": "qwen3:8b", "autonomy": "plan", "branch": "main", "cwd": "~/proj"}
+    wide = render_footer(ctx, width=80)
+    assert "qwen3:8b" in wide and "plan" in wide and "main" in wide
+    narrow = render_footer(ctx, width=20)
+    assert len(narrow) <= 20

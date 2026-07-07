@@ -86,11 +86,12 @@ freeze = [
 code = [
     "tree-sitter-language-pack>=0.1",
 ]
-# Terminal UI (coding agent CLI). Textual (pulls rich) renders the plan/diff/log
-# views; lazy-imported so the daemon and other clients don't need it.
-# `uv sync --extra tui`.
+# Terminal UI (coding agent CLI). rich renders every segment; prompt_toolkit drives the
+# inline input (completion, key bindings, history). Lazy-imported by the cli shell modules
+# so the daemon and other clients don't need them. `uv sync --extra tui`.
 tui = [
-    "textual>=0.80",
+    "rich>=13",
+    "prompt_toolkit>=3.0",
 ]
 dev = [
     "ruff>=0.6",
@@ -195,7 +196,7 @@ module = [
     "pywhispercpp.*",
     "tree_sitter_language_pack.*",
     "rich.*",
-    "textual.*",
+    "prompt_toolkit.*",
     "objc.*",
     "AVFoundation.*",
     "ApplicationServices.*",
