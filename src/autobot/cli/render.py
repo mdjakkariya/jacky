@@ -1,8 +1,9 @@
 """Render a :class:`~autobot.cli.classify.Segment` to plain text or a rich renderable.
 
 Plain forms back the one-shot mode and keep rendering testable without a TTY. Rich forms
-back the inline shell: the gutter grammar (⏺ / ▌ / ⎿), border-as-rule plan and permission
-cards, the welcome banner, the footer byline, and full-width diffs (via ``diffview``).
+back the inline shell: the ⏺ assistant gutter, the plan and permission prompts, the welcome
+banner, the footer byline, and full-width diffs (via ``diffview``). The user's own turn is
+the input-prompt line the shell already leaves in the scrollback, so it isn't re-rendered.
 """
 
 from __future__ import annotations
@@ -14,6 +15,7 @@ from autobot.cli.classify import Segment
 
 if TYPE_CHECKING:
     from rich.console import RenderableType
+    from rich.text import Text
 
 
 def render_plain(seg: Segment) -> str:
@@ -28,7 +30,7 @@ def render_plain(seg: Segment) -> str:
 def render_rich(seg: Segment) -> RenderableType:
     """Dispatch a segment to its rich renderable by kind."""
     if seg.kind == "plan":
-        return render_plan_card(seg.text, seg.todo)
+        return render_plan_card(seg.text)
     if seg.kind == "pending":
         return render_permission_card(seg.text)
     if seg.kind == "error":
@@ -38,51 +40,53 @@ def render_rich(seg: Segment) -> RenderableType:
     return render_reply(seg.text)  # done
 
 
-def render_user(text: str) -> RenderableType:
-    """The user turn block: a ▌-edged line in the user style."""
-    from rich.text import Text
-
-    return Text(f"{theme.GLYPH_USER} {text}", style="user")
-
-
 def render_reply(text: str) -> RenderableType:
-    """The assistant turn: a ⏺ gutter dot followed by markdown."""
-    from rich.columns import Columns
+    """The assistant turn: a ⏺ gutter dot inline with the reply's markdown.
+
+    A two-column ``Table.grid`` keeps the dot on the same row as the first line of the
+    reply (a plain ``Columns`` layout drops it onto its own line).
+    """
     from rich.markdown import Markdown
+    from rich.table import Table
     from rich.text import Text
 
-    return Columns(
-        [Text(theme.GLYPH_ASSISTANT, style="assistant"), Markdown(text)],
-        padding=(0, 1),
-        expand=False,
-    )
+    grid = Table.grid(padding=(0, 1))
+    grid.add_column()  # gutter
+    grid.add_column()  # content
+    grid.add_row(Text(theme.GLYPH_ASSISTANT, style="assistant"), Markdown(text))
+    return grid
 
 
-def render_plan_card(reply: str, todo: tuple[str, ...]) -> RenderableType:
-    """A border-as-rule plan card: the reply, the numbered steps, then the choices."""
+def _proceed(*labels: str) -> Text:
+    """A ``Proceed?   [1] … [2] …`` choice line with teal-numbered options."""
+    from rich.text import Text
+
+    line = Text("Proceed?", style="bold")
+    for i, label in enumerate(labels, 1):
+        line.append("   ")
+        line.append(f"[{i}]", style="teal")
+        line.append(f" {label}")
+    return line
+
+
+def render_plan_card(reply: str) -> RenderableType:
+    """The plan: the assistant's numbered plan, then the approve / edit / cancel choices.
+
+    The reply already contains the numbered steps, so they are shown once (via the reply)
+    and never re-listed.
+    """
     from rich.console import Group
     from rich.text import Text
 
-    parts: list[RenderableType] = [render_reply(reply)]
-    parts.append(Text(f"{theme.RULE_CHAR} Plan " + theme.RULE_CHAR * 48, style="teal"))
-    for i, step in enumerate(todo, 1):
-        parts.append(Text(f" {i}. {step}", style="none"))
-    parts.append(Text(theme.RULE_CHAR * 54, style="dim"))
-    parts.append(Text("Proceed?  [1] Yes  [2] Edit  [3] No", style="teal"))
-    return Group(*parts)
+    return Group(render_reply(reply), Text(""), _proceed("Yes", "Edit", "No"))
 
 
 def render_permission_card(prompt_text: str) -> RenderableType:
-    """A border-as-rule, amber permission card with the yes/no choices."""
+    """The permission prompt: the (amber) request, then the run / decline choices."""
     from rich.console import Group
     from rich.text import Text
 
-    return Group(
-        Text(f"{theme.RULE_CHAR} Permission " + theme.RULE_CHAR * 42, style="amber"),
-        Text(f" {prompt_text}", style="amber"),
-        Text(theme.RULE_CHAR * 54, style="dim"),
-        Text("Proceed?  [1] Yes, run it  [2] No", style="teal"),
-    )
+    return Group(Text(prompt_text, style="amber"), Text(""), _proceed("Yes, run it", "No"))
 
 
 def render_welcome(ctx: dict[str, str]) -> RenderableType:

@@ -61,7 +61,7 @@ def test_plan_approve_done(tmp_path: Path) -> None:
     sh, console = _make(
         ["add retry", "1", None],
         [
-            {"status": "plan", "reply": "the plan", "todo": ["wrap fetch"]},
+            {"status": "plan", "reply": "Here's my plan:\n1. wrap fetch", "todo": ["wrap fetch"]},
             {"status": "done", "reply": "Done."},
         ],
         tmp_path,

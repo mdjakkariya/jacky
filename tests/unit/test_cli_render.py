@@ -36,18 +36,6 @@ def test_rich_plan_renders_text() -> None:
     assert "wrap fetch in retry" in console.export_text()
 
 
-def test_rich_user_block_shows_the_glyph_and_text() -> None:
-    pytest.importorskip("rich")
-    from rich.console import Console
-
-    from autobot.cli.render import render_user
-
-    console = Console(record=True, width=80)
-    console.print(render_user("add a test"))
-    out = console.export_text()
-    assert "add a test" in out and "▌" in out  # ▌
-
-
 def test_rich_dispatch_plan_lists_steps() -> None:
     pytest.importorskip("rich")
     from rich.console import Console
@@ -56,9 +44,10 @@ def test_rich_dispatch_plan_lists_steps() -> None:
     from autobot.cli.render import render_rich
 
     console = Console(record=True, width=80)
-    console.print(render_rich(Segment("plan", "here's the plan", ("wrap fetch", "add test"))))
+    reply = "Here's my plan:\n1. wrap fetch\n2. add test"
+    console.print(render_rich(Segment("plan", reply, ("wrap fetch", "add test"))))
     out = console.export_text()
-    assert "wrap fetch" in out and "add test" in out
+    assert "wrap fetch" in out and "add test" in out and "Proceed" in out
 
 
 def test_rich_dispatch_pending_is_a_permission_card() -> None:

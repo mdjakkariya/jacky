@@ -120,8 +120,11 @@ class Shell:
         return False
 
     def _turn(self, text: str) -> None:
-        """Echo the user turn, drive plan/pending to done, then print the diff."""
-        self._console.print(render.render_user(text))
+        """Drive plan/pending to done, then print the diff — with blank-line spacing.
+
+        The user's turn is the input-prompt line prompt_toolkit already leaves in the
+        scrollback, so it is not re-rendered here (doing so double-printed each message).
+        """
         snap = self._snapshot(self._cwd)
         verb = spinner.verb_for(self._turn_no)
         _log.info("turn start")
@@ -129,19 +132,24 @@ class Shell:
             resp = client.start_turn(self._base_url, text, post=self._post)
         while isinstance(resp, dict) and resp.get("status") in ("plan", "pending"):
             seg = classify(resp)
+            self._console.print()  # breathing room before the plan/permission prompt
             self._console.print(render.render_rich(seg))
             ans = self._ask(seg.kind)
             with self._spin(self._console, verb):
                 resp = client.answer(self._base_url, ans.value, ans.text, post=self._post)
+        self._console.print()  # breathing room before the reply
         if isinstance(resp, str):  # transport/JSON error, already friendly
             _log.error("turn failed: %s", resp)
-            self._console.print(resp)
+            self._console.print(resp, markup=False, style="red")
+            self._console.print()
             return
         self._console.print(render.render_rich(classify(resp)))
         if resp.get("status") == "done":
             diff = self._diff_since(self._cwd, snap)
             if diff:
+                self._console.print()
                 self._console.print(render.render_diff_rich(diff, width=self._console.width))
+        self._console.print()  # trailing blank line before the next prompt
 
     def _ask(self, kind: str) -> Answer:
         """Read a plan/permission choice, re-asking until it parses; EOF/Ctrl-C → reject."""
