@@ -25,11 +25,10 @@ repos:
       - id: mypy
         # The hook runs in an isolated env, so it needs the deps mypy must
         # resolve (pytest is imported by the test suite mypy type-checks too;
-        # rich + prompt_toolkit are used/subclassed by the cli shell, and textual
-        # by cli/tui.py until the inline-shell cutover, so mypy needs their real
-        # types). Mirrors `make check` / CI, where these are already installed.
+        # rich + prompt_toolkit are used by the cli shell, so mypy needs their
+        # real types). Mirrors `make check` / CI, where these are already installed.
         additional_dependencies:
           ["numpy>=1.24", "pytest>=8.0", "keyring>=25", "openai>=1.40",
-           "rich>=13", "prompt_toolkit>=3.0", "textual>=0.80"]
+           "rich>=13", "prompt_toolkit>=3.0"]
         args: ["--config-file=pyproject.toml"]
         pass_filenames: false
