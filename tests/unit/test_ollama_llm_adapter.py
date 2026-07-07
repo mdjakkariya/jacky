@@ -68,3 +68,107 @@ def test_record_results_appends_tool_messages() -> None:
     m.send(s)  # second send must include the tool result in the messages
     roles = [msg.get("role") for msg in client.sent[-1]]
     assert "tool" in roles
+
+
+class _FakeStreamingOllamaClient:
+    """Fake Ollama client whose ``chat(stream=True)`` yields scripted chunks."""
+
+    def __init__(self, chunks: list[dict[str, Any]]) -> None:
+        self._chunks = chunks
+        self.sent: list[dict[str, Any]] = []
+
+    def chat(self, **kwargs: Any) -> Any:
+        self.sent.append(kwargs)
+        assert kwargs.get("stream") is True  # the streaming branch always sets this
+        return iter(self._chunks)
+
+    def show(self, model: str) -> dict[str, Any]:
+        return {"modelinfo": {"qwen2.context_length": 4096}}
+
+
+def _streaming_model(chunks: list[dict[str, Any]]) -> Any:
+    from autobot.llm.ollama_llm import OllamaLanguageModel
+
+    return OllamaLanguageModel(
+        Settings(), ToolRegistry(), client=_FakeStreamingOllamaClient(chunks)
+    )
+
+
+def test_chat_streams_tokens_and_assembles_message() -> None:
+    chunks: list[dict[str, Any]] = [
+        {"message": {"role": "assistant", "content": "Hel"}},
+        {
+            "message": {"role": "assistant", "content": "lo"},
+            "done": True,
+            "prompt_eval_count": 3,
+            "eval_count": 2,
+        },
+    ]
+    model = _streaming_model(chunks)
+    events: list[dict[str, Any]] = []
+    session = _session()
+    model.begin_turn(session, "hi")
+    resp = model.send(session, on_event=events.append)
+    assert [e["text"] for e in events if e.get("type") == "token"] == ["Hel", "lo"]
+    assert resp.text == "Hello"
+    assert resp.tool_calls == []
+    # Usage bookkeeping updates from the final chunk's counts, same as the blocking path.
+    assert model._last_prompt_tokens == 3
+    assert model._last_eval_tokens == 2
+
+
+def test_chat_stream_preserves_inter_token_whitespace() -> None:
+    # A per-token strip would glue words together across chunk boundaries; the
+    # streaming branch must only strip the whole assembled message, like the
+    # blocking path does.
+    chunks: list[dict[str, Any]] = [
+        {"message": {"role": "assistant", "content": "Hello"}},
+        {"message": {"role": "assistant", "content": " world"}, "done": True},
+    ]
+    model = _streaming_model(chunks)
+    session = _session()
+    model.begin_turn(session, "hi")
+    resp = model.send(session, on_event=lambda _e: None)
+    assert resp.text == "Hello world"
+
+
+def test_chat_stream_collects_whole_tool_call_from_final_chunk() -> None:
+    chunks: list[dict[str, Any]] = [
+        {"message": {"role": "assistant", "content": ""}},
+        {
+            "message": {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [{"function": {"name": "get_time", "arguments": {}}}],
+            },
+            "done": True,
+        },
+    ]
+    model = _streaming_model(chunks)
+    session = _session()
+    model.begin_turn(session, "time?")
+    resp = model.send(session, on_event=lambda _e: None)
+    assert [c.name for c in resp.tool_calls] == ["get_time"]
+
+
+def test_chat_stream_not_used_when_on_event_is_none() -> None:
+    # Without on_event, _chat() must take the blocking path: no stream kwarg, and
+    # the client's chat() is called once (not iterated as a stream).
+    calls: list[dict[str, Any]] = []
+
+    class _BlockingClient:
+        def chat(self, **kwargs: Any) -> dict[str, Any]:
+            calls.append(kwargs)
+            return {"message": {"role": "assistant", "content": "hi", "tool_calls": []}}
+
+        def show(self, model: str) -> dict[str, Any]:
+            return {"modelinfo": {"qwen2.context_length": 4096}}
+
+    from autobot.llm.ollama_llm import OllamaLanguageModel
+
+    m = OllamaLanguageModel(Settings(), ToolRegistry(), client=_BlockingClient())
+    s = _session()
+    m.begin_turn(s, "hi")
+    resp = m.send(s)  # on_event defaults to None
+    assert resp.text == "hi"
+    assert "stream" not in calls[-1]

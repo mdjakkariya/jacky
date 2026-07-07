@@ -12,7 +12,7 @@ from collections.abc import Callable, Iterator
 from contextlib import AbstractContextManager
 from typing import Any
 
-from autobot.cli import client, commands, gitdiff, render, spinner
+from autobot.cli import client, commands, gitdiff, render, spinner, theme
 from autobot.cli.classify import classify
 from autobot.cli.prompt import Answer, parse_confirm_choice, parse_plan_choice
 from autobot.cli.theme import GLYPH_PROMPT
@@ -153,11 +153,22 @@ class Shell:
             return
 
     def _consume_until_phase(self, events: Any, verb: str) -> dict[str, Any] | None:
-        """Drain streaming (tool) events — rendering them live — and return the next phase event.
+        """Drain streaming (token/tool) events — rendering them live — and return the phase event.
+
+        Reply tokens accumulate into ``buffer`` and repaint a transient ``rich.Live`` region
+        as plain text (``⏺ <buffer>``); tool ``start`` events print as dim ``⎿`` lines above
+        it. Because the region is transient, it clears the instant a phase event arrives —
+        the caller then prints ``render.render_rich(seg)`` (the finalized markdown reply), so
+        the live preview and the finalized text never both linger in the scrollback.
 
         Returns the phase dict, or None if the stream ended without one.
         """
-        with self._spin(self._console, verb):
+        from rich.live import Live
+        from rich.text import Text
+
+        buffer = ""
+        live_region = Live(console=self._console, refresh_per_second=12, transient=True)
+        with self._spin(self._console, verb), live_region as live:
             for evt in events:
                 if isinstance(evt, dict) and evt.get("status") in (
                     "plan",
@@ -167,9 +178,11 @@ class Shell:
                 ):
                     return evt
                 seg = classify(evt)
-                if seg.kind == "tool" and evt.get("event") == "start":
+                if seg.kind == "token":
+                    buffer += seg.text
+                    live.update(Text(f"{theme.GLYPH_ASSISTANT} {buffer}", style="assistant"))
+                elif seg.kind == "tool" and evt.get("event") == "start":
                     self._console.print(render.render_tool(seg))
-                # token events are rendered live in Plan B; ignored here
         return None
 
     def _ask(self, kind: str) -> Answer:

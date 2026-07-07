@@ -625,8 +625,20 @@ class AnthropicLanguageModel:
             8_000, self._window - self._settings.anthropic_max_tokens - overhead - _CONTEXT_SAFETY
         )
 
-    def _send(self, session: Session, tools: list[dict[str, Any]], overhead: int) -> Any:
+    def _send(
+        self,
+        session: Session,
+        tools: list[dict[str, Any]],
+        overhead: int,
+        on_event: OnEvent | None = None,
+    ) -> Any:
         """Create one message, trimming to fit the (dynamic) window.
+
+        When ``on_event`` is given, streams the reply via ``messages.stream()``,
+        emitting a ``{"type": "token", "text": ...}`` event per text delta, and
+        returns ``get_final_message()`` — the same ``Message`` shape ``messages.create``
+        returns, so usage/content handling in :meth:`send` is unchanged either way.
+        ``on_event=None`` keeps the plain blocking ``messages.create`` call.
 
         Retries on a 'too long' rejection (learning the real window from it, so any
         model is handled). Raises for any other error, or if it can't be made to fit.
@@ -634,15 +646,22 @@ class AnthropicLanguageModel:
         truncated = False
         for _ in range(8):
             self._fit_to_budget(session, self._budget(overhead))
+            kwargs: dict[str, Any] = {
+                "model": self._settings.anthropic_model,
+                "max_tokens": self._settings.anthropic_max_tokens,
+                "temperature": self._settings.llm_temperature,
+                "system": self._system(session),
+                "messages": with_cache_breakpoint(session.history),
+                "tools": tools,
+            }
             try:
-                return self._client.messages.create(
-                    model=self._settings.anthropic_model,
-                    max_tokens=self._settings.anthropic_max_tokens,
-                    temperature=self._settings.llm_temperature,
-                    system=self._system(session),
-                    messages=with_cache_breakpoint(session.history),
-                    tools=tools,
-                )
+                if on_event is not None:
+                    with self._client.messages.stream(**kwargs) as stream:
+                        for text in stream.text_stream:
+                            if text:
+                                on_event({"type": "token", "text": text})
+                        return stream.get_final_message()
+                return self._client.messages.create(**kwargs)
             except Exception as exc:
                 if not is_too_long_error(exc):
                     raise
@@ -723,13 +742,16 @@ class AnthropicLanguageModel:
         and the stashed error reply is returned directly as the response text (with
         no tool calls), so the harness's round loop breaks and surfaces it as-is.
 
-        ``on_event`` is accepted for the streaming seam; token streaming lands in Plan B.
+        When ``on_event`` is given, the reply streams: each text delta is emitted as a
+        ``{"type": "token", "text": ...}`` event as it arrives, before this method
+        returns the same aggregated ``ChatResponse``. ``on_event=None`` keeps the plain
+        blocking call, unchanged.
         """
         problem = _first_pairing_problem(session.history)
         if problem:
             _log.error("history integrity broken before send: %s", problem)
         try:
-            resp = self._send(session, self._tools, self._overhead)
+            resp = self._send(session, self._tools, self._overhead, on_event)
         except Exception as exc:  # cloud rejected/unreachable — stay useful
             _log.warning("cloud request failed: %s", exc)
             del session.history[self._turn_start :]  # abandon this turn; keep history valid

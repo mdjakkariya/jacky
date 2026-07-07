@@ -8,11 +8,12 @@ from contextlib import AbstractContextManager
 from pathlib import Path
 from typing import Any
 
+import pytest
 from rich.console import Console
 
 from autobot.cli import shell
 from autobot.cli.prompt import Answer
-from autobot.cli.theme import jack_theme
+from autobot.cli.theme import GLYPH_ASSISTANT, jack_theme
 
 
 def _console() -> Console:
@@ -175,3 +176,70 @@ def test_stream_ends_without_phase_prints_nothing_and_does_not_crash(tmp_path: P
     sh, console = _make(["do it", None], {"start": []}, tmp_path)
     sh.run()
     assert console.export_text() is not None  # ran to completion without raising
+
+
+class _FakeLive:
+    """Stand-in for ``rich.live.Live`` that records each ``update`` instead of drawing.
+
+    Patched in for :func:`rich.live.Live` via monkeypatch, since ``_consume_until_phase``
+    imports ``Live`` locally on each call — the patched module attribute is what it binds.
+    """
+
+    def __init__(self, *_args: object, **_kwargs: object) -> None:
+        self.updates: list[str] = []
+
+    def __enter__(self) -> _FakeLive:
+        return self
+
+    def __exit__(self, *_exc: object) -> None:
+        return None
+
+    def update(self, renderable: object) -> None:
+        self.updates.append(str(renderable))
+
+
+def test_stream_tokens_render_live_then_markdown(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Token events repaint a live preview buffer; the ``done`` phase finalizes as markdown."""
+    fakes: list[_FakeLive] = []
+
+    def make_fake(*args: object, **kwargs: object) -> _FakeLive:
+        live = _FakeLive(*args, **kwargs)
+        fakes.append(live)
+        return live
+
+    monkeypatch.setattr("rich.live.Live", make_fake)
+
+    turns = {
+        "start": [
+            {"type": "token", "text": "Hel"},
+            {"type": "token", "text": "lo!"},
+            {"status": "done", "reply": "Hello!"},
+        ],
+    }
+
+    def stream_turn(_b: str, _t: str) -> Iterator[dict[str, Any]]:
+        return iter(turns["start"])
+
+    def stream_answer(_b: str, _v: str, _t: str = "") -> Iterator[dict[str, Any]]:
+        return iter([])
+
+    console = _console()
+    sh = shell.Shell(
+        "http://x",
+        str(tmp_path),
+        stream_turn=stream_turn,
+        stream_answer=stream_answer,
+        reader=_scripted_reader(["hi", None]),
+        console=console,
+        snapshot=lambda _c: None,
+        diff_since=lambda _c, _b: None,
+        spin=_noop_spin,
+    )
+    sh.run()
+
+    assert len(fakes) == 1  # one Live region for the one turn
+    assert fakes[0].updates == [f"{GLYPH_ASSISTANT} Hel", f"{GLYPH_ASSISTANT} Hello!"]
+    out = console.export_text()
+    assert "Hello!" in out  # the done phase's markdown reply is what persists

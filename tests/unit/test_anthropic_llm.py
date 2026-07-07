@@ -13,6 +13,7 @@ from typing import Any
 import pytest
 
 from autobot.agent.harness import AgentHarness
+from autobot.agent.session import Session
 from autobot.agent.session_store import SessionStore
 from autobot.config import Settings
 from autobot.core.types import Risk, ToolCall, ToolResult
@@ -85,6 +86,61 @@ class FakeMessages:
 class FakeClient:
     def __init__(self, responses: list[Any]) -> None:
         self.messages = FakeMessages(responses)
+
+
+class _FakeStream:
+    """Mimics ``anthropic``'s ``MessageStream``: yields text deltas, then a final message."""
+
+    def __init__(self, text_deltas: list[str], final_message: Any) -> None:
+        self.text_stream = iter(text_deltas)
+        self._final_message = final_message
+
+    def get_final_message(self) -> Any:
+        return self._final_message
+
+
+class _FakeStreamManager:
+    """Mimics ``anthropic``'s ``MessageStreamManager`` context manager returned by ``.stream()``."""
+
+    def __init__(self, text_deltas: list[str], final_message: Any) -> None:
+        self._text_deltas = text_deltas
+        self._final_message = final_message
+
+    def __enter__(self) -> _FakeStream:
+        return _FakeStream(self._text_deltas, self._final_message)
+
+    def __exit__(self, *_exc: Any) -> None:
+        return None
+
+
+class FakeStreamingMessages(FakeMessages):
+    """Extends :class:`FakeMessages` with a fake ``.stream(**kwargs)`` entry point."""
+
+    def __init__(self, responses: list[Any], text_deltas: list[str]) -> None:
+        super().__init__(responses)
+        self._text_deltas = text_deltas
+        self.stream_calls: list[dict[str, Any]] = []
+
+    def stream(self, **kwargs: Any) -> _FakeStreamManager:
+        self.stream_calls.append(kwargs)
+        final_message = self._responses.pop(0)
+        return _FakeStreamManager(self._text_deltas, final_message)
+
+
+def _make_model_with_streaming_fake(
+    *, text_deltas: list[str], final_text: str
+) -> AnthropicLanguageModel:
+    """A model whose fake client streams ``text_deltas`` then resolves to ``final_text``."""
+    final_message = SimpleNamespace(
+        content=[_block(type="text", text=final_text)],
+        usage=SimpleNamespace(input_tokens=5, output_tokens=2),
+    )
+    client = SimpleNamespace(messages=FakeStreamingMessages([final_message], text_deltas))
+    return AnthropicLanguageModel(Settings(llm_provider="anthropic"), _registry(), client=client)
+
+
+def _fresh_session() -> Session:
+    return Session(id="t", cwd=".", model="m")
 
 
 def _registry() -> ToolRegistry:
@@ -581,8 +637,6 @@ def test_run_turn_accumulates_token_usage(tmp_path: Path) -> None:
 
 
 def test_system_prompt_includes_memory_when_present() -> None:
-    from autobot.agent.session import Session
-
     class Mem:
         def context(self) -> str:
             return "What you know about the user: their name is MD."
@@ -898,3 +952,39 @@ def test_failed_cloud_send_does_not_clear_context_meter(tmp_path: Path) -> None:
 
     # The meter should still show the first turn's value, not be cleared
     assert usage_after_failed == usage_after_first
+
+
+def test_send_streams_tokens_when_on_event_given() -> None:
+    # With on_event given, send() must stream via messages.stream(), emitting a "token"
+    # event per text delta, and still return the same ChatResponse the blocking
+    # messages.create() path would (text joined, no tool calls).
+    model = _make_model_with_streaming_fake(text_deltas=["Hel", "lo"], final_text="Hello")
+    events: list[dict[str, Any]] = []
+    session = _fresh_session()
+    model.begin_turn(session, "hi")
+    resp = model.send(session, on_event=events.append)
+    assert [e["text"] for e in events if e.get("type") == "token"] == ["Hel", "lo"]
+    assert resp.text == "Hello"
+    assert resp.tool_calls == []
+    # The streaming entry point was used, not the blocking one.
+    messages = model._client.messages
+    assert isinstance(messages, FakeStreamingMessages)
+    assert len(messages.stream_calls) == 1
+    assert messages.calls == []
+
+
+def test_send_without_on_event_uses_blocking_create_not_stream() -> None:
+    # on_event=None (the default) must keep using the blocking messages.create() path —
+    # messages.stream() is never touched — so behavior for existing callers is unchanged.
+    resp = SimpleNamespace(
+        content=[_block(type="text", text="Hi there.")],
+        usage=SimpleNamespace(input_tokens=5, output_tokens=2),
+    )
+    model = AnthropicLanguageModel(
+        Settings(llm_provider="anthropic"), _registry(), client=FakeClient([resp])
+    )
+    session = _fresh_session()
+    model.begin_turn(session, "hi")
+    result = model.send(session)
+    assert result.text == "Hi there."
+    assert len(model._client.messages.calls) == 1

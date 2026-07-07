@@ -59,6 +59,75 @@ class _FakeOpenAI:
         self.chat = type("C", (), {"completions": _FakeCompletions(resp)})()
 
 
+class _Delta:
+    """Fake ``ChoiceDelta``: a streamed chunk's content/tool_call fragments."""
+
+    def __init__(self, content: str | None = None, tool_calls: list[Any] | None = None) -> None:
+        self.content = content
+        self.tool_calls = tool_calls
+
+
+class _ToolCallFrag:
+    """Fake ``ChoiceDeltaToolCall``: one fragment of a streamed tool call."""
+
+    def __init__(
+        self,
+        index: int,
+        call_id: str | None = None,
+        name: str | None = None,
+        args: str | None = None,
+    ) -> None:
+        self.index = index
+        self.id = call_id
+        self.function = type("Fn", (), {"name": name, "arguments": args})()
+
+
+class _StreamChunk:
+    def __init__(self, delta: _Delta | None, usage: _Usage | None = None) -> None:
+        self.choices = [type("Ch", (), {"delta": delta})()] if delta is not None else []
+        self.usage = usage
+
+
+class _FakeStreamingCompletions:
+    def __init__(self, chunks: list[_StreamChunk], resp: _Resp) -> None:
+        self._chunks = chunks
+        self._resp = resp
+        self.sent: list[dict[str, Any]] = []
+
+    def create(self, **kw: Any) -> Any:
+        self.sent.append(kw)
+        if kw.get("stream"):
+            return iter(self._chunks)
+        return self._resp
+
+
+class _FakeStreamingOpenAI:
+    def __init__(self, chunks: list[_StreamChunk], resp: _Resp) -> None:
+        self.chat = type("C", (), {"completions": _FakeStreamingCompletions(chunks, resp)})()
+
+
+def _make_openai_model_with_stream(
+    content_deltas: list[str], tool_frag: list[dict[str, Any]]
+) -> OpenAICompatibleModel:
+    """Build a model whose fake client streams ``content_deltas`` + fragmented tool calls."""
+    chunks: list[_StreamChunk] = [_StreamChunk(_Delta(content=piece)) for piece in content_deltas]
+    for frag in tool_frag:
+        tc = _ToolCallFrag(
+            index=frag["index"],
+            call_id=frag.get("id"),
+            name=frag.get("name"),
+            args=frag.get("args"),
+        )
+        chunks.append(_StreamChunk(_Delta(tool_calls=[tc])))
+    chunks.append(_StreamChunk(None, usage=_Usage(10, 4)))  # final usage-only chunk
+    client = _FakeStreamingOpenAI(chunks, _Resp(_Msg("unused")))
+    return OpenAICompatibleModel(
+        Settings(llm_provider="openai", openai_base_url="http://x/v1", llm_model="gpt-x"),
+        ToolRegistry(),
+        client=client,
+    )
+
+
 def _model(resp: _Resp) -> OpenAICompatibleModel:
     return OpenAICompatibleModel(
         Settings(llm_provider="openai", openai_base_url="http://x/v1", llm_model="gpt-x"),
@@ -146,3 +215,45 @@ def test_bad_json_arguments_degrade_to_empty_dict() -> None:
     m.begin_turn(s, "x")
     resp = m.send(s)
     assert resp.tool_calls[0].arguments == {}
+
+
+def test_create_streams_tokens_and_assembles_tool_calls() -> None:
+    # Fake completions.create(stream=True) yields content + fragmented tool_call deltas.
+    model = _make_openai_model_with_stream(
+        content_deltas=["Wo", "rld"],
+        tool_frag=[  # one tool call assembled from fragments (index 0)
+            {"index": 0, "id": "call_1", "name": "read_file", "args": '{"pa'},
+            {"index": 0, "args": 'th": "a.py"}'},
+        ],
+    )
+    events: list[dict[str, Any]] = []
+    s = _session()
+    model.begin_turn(s, "hi")
+    resp = model.send(s, on_event=events.append)
+    assert [e["text"] for e in events if e.get("type") == "token"] == ["Wo", "rld"]
+    assert resp.text == "World"
+    assert resp.tool_calls and resp.tool_calls[0].name == "read_file"
+    assert resp.tool_calls[0].arguments == {"path": "a.py"}
+
+
+def test_send_without_on_event_uses_blocking_path_unchanged() -> None:
+    # No on_event => the non-streaming client path (kwargs never carry stream=True).
+    m = _model(_Resp(_Msg("hello there", tool_calls=None)))
+    s = _session()
+    m.begin_turn(s, "hi")
+    resp = m.send(s, on_event=None)
+    assert resp.text == "hello there"
+
+
+def test_streaming_does_not_emit_events_for_tool_call_fragments() -> None:
+    # Only text deltas become "token" events; tool-call fragments are assembled silently.
+    model = _make_openai_model_with_stream(
+        content_deltas=[],
+        tool_frag=[{"index": 0, "id": "call_2", "name": "get_time", "args": "{}"}],
+    )
+    events: list[dict[str, Any]] = []
+    s = _session()
+    model.begin_turn(s, "time?")
+    resp = model.send(s, on_event=events.append)
+    assert events == []
+    assert resp.tool_calls and resp.tool_calls[0].name == "get_time"
