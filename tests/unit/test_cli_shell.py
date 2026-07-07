@@ -11,6 +11,7 @@ from typing import Any
 from rich.console import Console
 
 from autobot.cli import shell
+from autobot.cli.prompt import Answer
 from autobot.cli.theme import jack_theme
 
 
@@ -88,3 +89,27 @@ def test_help_command_renders_without_a_turn(tmp_path: Path) -> None:
     sh, console = _make(["/help", None], [], tmp_path)
     sh.run()
     assert "/help" in console.export_text()
+
+
+def test_ask_refine_followup_ctrl_c_cancels(tmp_path: Path) -> None:
+    """Ctrl-C at refine follow-up cancels the turn instead of crashing."""
+    calls = iter(["2"])  # "2" = edit/refine; next read raises
+
+    def reader(_prompt: str) -> str | None:
+        try:
+            return next(calls)
+        except StopIteration:
+            raise KeyboardInterrupt from None
+
+    console = _console()
+    sh = shell.Shell(
+        "http://x",
+        str(tmp_path),
+        post=lambda _url, _payload, _timeout: {},
+        reader=reader,
+        console=console,
+        snapshot=lambda _cwd: None,
+        diff_since=lambda _cwd, _b: None,
+        spin=_noop_spin,
+    )
+    assert sh._ask("plan") == Answer("reject")

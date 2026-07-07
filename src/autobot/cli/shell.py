@@ -157,7 +157,12 @@ class Shell:
             if ans is None:
                 continue
             if ans.value == "refine":  # plan edit: take the follow-up as the refinement
-                follow = self._reader("what should change? ") or ""
+                try:
+                    follow = self._reader("what should change? ")
+                except KeyboardInterrupt:
+                    return Answer("reject")
+                if follow is None:
+                    return Answer("reject")
                 return Answer("refine", follow.strip())
             return ans
 
