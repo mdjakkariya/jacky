@@ -461,10 +461,10 @@ class OllamaLanguageModel:
             response = self._chat(self._messages, with_tools=False)
         except Exception:
             _log.exception("forced final answer failed")
-            return "Sorry, that took too many steps."
+            return "I hit my step limit; partial changes are saved."
         message = _get(response, "message")
         self._messages.append(_to_message_dict(message))
-        return message_content(message) or "Sorry, that took too many steps."
+        return message_content(message) or "I hit my step limit; partial changes are saved."
 
     def complete(self, prompt: str, *, temperature: float = 0.0) -> str:
         """One-shot completion via Ollama chat (no tools advertised).

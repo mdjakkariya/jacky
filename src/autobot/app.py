@@ -290,11 +290,19 @@ def _summary_window_chars(settings: Settings) -> int:
 def _apply_profile_overrides(settings: Settings) -> Settings:
     """Return settings with profile-specific overrides applied.
 
-    The coder profile raises the LLM output budget so plans/replies don't truncate at
-    the assistant's small default. All other profiles are returned unchanged.
+    The coder profile raises the LLM output budget so plans/replies and file writes don't
+    truncate at the assistant's small default. Both the local (``llm_max_tokens``) and the
+    cloud (``anthropic_max_tokens``) budgets are raised — otherwise a cloud coder is silently
+    capped at the tiny assistant default and large edits fail with "too many steps". The
+    OpenAI-compatible provider sends no max-tokens cap, so it needs no override. All other
+    profiles are returned unchanged.
     """
     if settings.profile == "coder":
-        return replace(settings, llm_max_tokens=settings.coder_llm_max_tokens)
+        return replace(
+            settings,
+            llm_max_tokens=settings.coder_llm_max_tokens,
+            anthropic_max_tokens=settings.coder_llm_max_tokens,
+        )
     return settings
 
 
