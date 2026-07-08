@@ -22,11 +22,21 @@ class _ScriptedLLM:
     executor, then return the act reply.
     """
 
-    def __init__(self, plan_reply: str, act_reply: str, act_calls: list[ToolCall] | None = None):
+    def __init__(
+        self,
+        plan_reply: str,
+        act_reply: str,
+        act_calls: list[ToolCall] | None = None,
+        route: str = "PLAN",
+        route_error: bool = False,
+    ):
         self.plan_reply = plan_reply
         self.act_reply = act_reply
         self.act_calls = act_calls or []
         self.plans = 0
+        self.route = route  # what the auto-mode router classifier returns
+        self.route_error = route_error  # if True, complete() raises (router failure)
+        self.completes = 0
 
     def run_turn(self, user_text: str, execute, on_event=None) -> str:  # type: ignore[no-untyped-def]
         if "PLANNING" in user_text:
@@ -35,6 +45,13 @@ class _ScriptedLLM:
         for call in self.act_calls:
             execute(call)
         return self.act_reply
+
+    def complete(self, prompt: str, *, temperature: float = 0.0) -> str:
+        """Router classification stub: return the scripted route word (or raise)."""
+        self.completes += 1
+        if self.route_error:
+            raise RuntimeError("router unavailable")
+        return self.route
 
 
 def _coder_gate(confirmer: SuspendingConfirmer) -> PermissionGate:
@@ -126,17 +143,43 @@ def test_plan_mode_does_not_reconfirm_planned_command() -> None:
     assert final[-1] == {"status": "done", "reply": "Ran it."}
 
 
-def test_auto_mode_skips_plan_and_runs_command() -> None:
+def test_auto_routes_to_plan_mode() -> None:
+    # auto mode = auto-select: the router classifies this as PLAN, so it behaves like plan
+    # mode — propose a plan, gate on approval, then act.
+    llm = _ScriptedLLM("1. edit foo\n2. add test", "Edited and tested.", route="PLAN")
+    d = _driver(llm, autonomy="auto")
+    first = list(d.start_stream("do a multi-step refactor"))
+    assert first[-1]["status"] == "plan"
+    assert first[-1]["todo"] == ["edit foo", "add test"]
+    final = list(d.reply_stream("approve"))
+    assert final[-1] == {"status": "done", "reply": "Edited and tested."}
+    assert llm.completes == 1  # routed exactly once
+
+
+def test_auto_routes_to_confirm_mode() -> None:
+    # The router classifies this as CONFIRM, so it behaves like confirm mode — no plan
+    # gate, act directly, but suspend-to-ask before a non-allowlisted command.
     llm = _ScriptedLLM(
         "(unused)",
-        "Built.",
-        act_calls=[
-            ToolCall(name="run_command", arguments={"command": "npm run build"}),
-        ],
+        "Ran it.",
+        act_calls=[ToolCall(name="run_command", arguments={"command": "pytest -q"})],
+        route="CONFIRM",
     )
     d = _driver(llm, autonomy="auto")
-    final = list(d.start_stream("build it"))  # no plan phase, no ask (auto)
-    assert final[-1] == {"status": "done", "reply": "Built."}
+    pending = list(d.start_stream("run the tests"))
+    assert pending[-1]["status"] == "pending" and "pytest" in pending[-1]["prompt"]
+    assert llm.plans == 0  # confirm route never runs a planning turn
+    final = list(d.reply_stream("yes"))
+    assert final[-1] == {"status": "done", "reply": "Ran it."}
+
+
+def test_auto_route_failure_defaults_to_plan() -> None:
+    # If the router call fails, default to PLAN (safest — the user approves before changes).
+    llm = _ScriptedLLM("1. edit foo", "done", route_error=True)
+    d = _driver(llm, autonomy="auto")
+    first = list(d.start_stream("do something"))
+    assert first[-1]["status"] == "plan"
+    list(d.reply_stream("reject"))  # resolve the parked turn so its worker terminates
 
 
 def test_reply_without_active_turn_errors() -> None:

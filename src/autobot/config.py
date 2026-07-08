@@ -131,7 +131,9 @@ class Settings:
     #     approval for its commands);
     #   "confirm" — no plan phase; act directly but ask before each command not on the
     #     allowlist;
-    #   "auto" — no plan phase; act directly and run everything without prompting.
+    #   "auto" — auto-select: a lightweight router classifies each request and runs it as
+    #     "plan" (multi-step/risky work) or "confirm" (simple, low-risk change); on any
+    #     router failure it falls back to "plan" (approval before changes).
     # All three still refuse blocklisted commands and stay within the cwd jail + a
     # start-of-turn git checkpoint (undoable), so nothing is unrecoverable.
     coding_autonomy: str = "plan"

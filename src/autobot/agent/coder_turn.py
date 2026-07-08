@@ -200,6 +200,14 @@ _ACT_PROMPT = (
     "Your plan is approved. Carry it out now, step by step: make the edits and run the "
     "commands from your plan, then briefly report what you did."
 )
+_ROUTE_PROMPT = (
+    "You route a coding request to one of two execution modes. Reply with EXACTLY one "
+    "word — PLAN or CONFIRM — and nothing else.\n"
+    "- PLAN: the request is multi-step, spans multiple files, is risky or destructive, or "
+    "benefits from an upfront plan the user approves before any change is made.\n"
+    "- CONFIRM: the request is a simple, low-risk, single-step change; act on it directly "
+    "and confirm only before shell commands.\n\nRequest: "
+)
 _CANCELLED_REPLY = "Okay, I won't make any changes."
 _ERROR_REPLY = "Something went wrong on my end, so I stopped. Nothing was changed."
 
@@ -390,8 +398,10 @@ class CoderTurnDriver:
         """
         self._confirmer.set_channel(channel)
         try:
-            autonomy = self._settings().coding_autonomy
-            if autonomy == "plan":
+            mode = self._settings().coding_autonomy
+            if mode == "auto":  # auto-select: route this request to plan or confirm
+                mode = self._route(text)
+            if mode == "plan":
                 outcome, payload = self._plan_loop(channel, text)
                 if outcome == "cancel":
                     channel.done(_CANCELLED_REPLY)
@@ -399,9 +409,10 @@ class CoderTurnDriver:
                 if outcome == "reply":  # conversational / no actionable plan — just answer
                     channel.done(payload)
                     return
-                reply = self._act(channel)  # outcome == "act": session already holds the plan
-            else:
-                reply = self._act(channel, first_text=text)  # confirm/auto: act on the request
+                # outcome == "act": the plan was approved, so its commands run pre-authorized.
+                reply = self._act(channel, ask_on_confirm=False)
+            else:  # confirm: no plan gate; ask before each non-allowlisted command
+                reply = self._act(channel, first_text=text, ask_on_confirm=True)
             channel.done(reply)
         except Exception:  # a turn must always terminate with a reply for the CLI
             _log.exception("coder turn failed")
@@ -442,16 +453,17 @@ class CoderTurnDriver:
             request = answer.get("text") or text  # refine: re-plan with the feedback
             _log.info("plan refined")
 
-    def _act(self, channel: TurnChannel, *, first_text: str | None = None) -> str:
-        """Run the act phase with the executor tuned by the dial.
+    def _act(
+        self, channel: TurnChannel, *, first_text: str | None = None, ask_on_confirm: bool
+    ) -> str:
+        """Run the act phase; ``ask_on_confirm`` gates each non-allowlisted command.
 
-        Only ``confirm`` mode asks before each non-allowlisted command. In ``plan`` mode
-        the user already approved the whole plan, so its commands run without a second
-        prompt; ``auto`` runs everything. All three still refuse blocklisted commands and
-        stay within the cwd jail + start-of-turn checkpoint.
+        The *resolved* mode sets ``ask_on_confirm``: an approved ``plan`` runs its commands
+        pre-authorized (``False``); ``confirm`` asks before each non-allowlisted command
+        (``True``). Both still refuse blocklisted commands and stay within the cwd jail +
+        start-of-turn checkpoint.
         """
         settings = self._settings()
-        ask_on_confirm = settings.coding_autonomy == "confirm"
         executor = act_executor(
             self._gate,
             settings.command_allowlist,
@@ -462,3 +474,21 @@ class CoderTurnDriver:
         reply: str = self._llm.run_turn(prompt, executor, on_event=channel.emit)
         _log.info("turn done")
         return reply
+
+    def _route(self, text: str) -> str:
+        """Auto-select the execution mode for ``text``: ``"plan"`` or ``"confirm"``.
+
+        A lightweight one-shot classification (no tools, no history): multi-step, risky, or
+        multi-file work → ``"plan"`` (propose a plan the user approves first); a simple,
+        low-risk change → ``"confirm"`` (act directly, confirming shell commands). Any
+        failure or unparseable reply defaults to ``"plan"`` — the safest, since it puts an
+        approval checkpoint before any change.
+        """
+        try:
+            raw = self._llm.complete(_ROUTE_PROMPT + text)
+        except Exception:  # never let routing break a turn — fall back to the safe default
+            _log.exception("auto route failed; defaulting to plan")
+            return "plan"
+        decision = "confirm" if raw.strip().upper().startswith("CONFIRM") else "plan"
+        _log.info("auto routed mode=%s", decision)
+        return decision
