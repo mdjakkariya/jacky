@@ -175,12 +175,14 @@ def serve(settings: Settings | None = None) -> None:
     print(f"[daemon] serving on ws://{settings.daemon_host}:{settings.daemon_port}/ws")
     # Coder profile: the driver owns turn concurrency with its OWN lock over the shared
     # gate/confirmer/session, which is not safe to interleave with the assistant/drawer
-    # turn+session-mutating endpoints (they take the orchestrator's own _turn_lock and
-    # could route a /chat confirmation into a parked coder turn's channel). So the coder
-    # profile disables those callbacks entirely — /coder/turn and /coder/reply are the
-    # only turn entry point. `on_list_sessions` stays wired (read-only; it's the `jack`
-    # readiness probe hitting GET /sessions) as does `on_change`/`on_confirm_answer`/
-    # `mcp_provider`/`on_meeting`.
+    # turn-mutating endpoints (they take the orchestrator's own _turn_lock and could
+    # route a /chat confirmation into a parked coder turn's channel). So the coder
+    # profile disables `on_chat`/`on_action` — /coder/turn and /coder/reply are the only
+    # turn entry point. `on_new_session`/`on_resume_session` stay wired for both profiles:
+    # in the coder profile they route through the driver's own lock (`new_coder_session`/
+    # `resume_coder_session`), so they're safe to interleave with a parked coder turn.
+    # `on_list_sessions` stays wired (read-only; it's the `jack` readiness probe hitting
+    # GET /sessions) as does `on_change`/`on_confirm_answer`/`mcp_provider`/`on_meeting`.
     coder = settings.profile == "coder"
     # Live-apply settings/key changes from the Settings view (next turn, no restart).
     run_daemon(
@@ -190,14 +192,18 @@ def serve(settings: Settings | None = None) -> None:
         on_change=orchestrator.mark_settings_changed,
         on_confirm_answer=inbox.submit,
         on_chat=None if coder else orchestrator.run_text_turn,
-        on_new_session=None if coder else orchestrator.new_chat_session,
+        on_new_session=orchestrator.new_coder_session if coder else orchestrator.new_chat_session,
         on_action=None if coder else orchestrator.run_tool,
         mcp_provider=orchestrator.mcp_provider,
         on_meeting=on_meeting,
         on_list_sessions=orchestrator.list_sessions,
-        on_resume_session=None if coder else orchestrator.resume_session,
+        on_resume_session=(
+            orchestrator.resume_coder_session if coder else orchestrator.resume_session
+        ),
         on_coder_turn=orchestrator.start_coder_stream,
         on_coder_reply=orchestrator.reply_coder_stream,
+        on_coder_undo=orchestrator.undo_coder,
+        on_coder_checkpoints=orchestrator.list_coder_checkpoints,
     )
 
 

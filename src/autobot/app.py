@@ -751,8 +751,32 @@ def build(
     coder_driver: CoderTurnDriver | None = None
     if coder and suspending is not None:
         from autobot.agent.coder_turn import CoderTurnDriver
+        from autobot.orchestrator.checkpoint import list_checkpoints, restore_checkpoint
 
-        coder_driver = CoderTurnDriver(llm, gate, suspending, settings_provider=Settings.load)
+        # Same cwd the checkpoint snapshot hook closes over inside `_build_llm` (both
+        # read the same `active_policy()` singleton set up above), so `/undo` restores
+        # exactly what the per-turn checkpoint saved.
+        cwd = str(access_policy.cwd)
+
+        def _undo_latest() -> tuple[bool, str]:
+            """Restore the newest checkpoint for the coder's cwd (used by /undo)."""
+            cps = list_checkpoints(cwd)
+            if not cps:
+                return False, "Nothing to undo."
+            return restore_checkpoint(cwd, cps[0].ref)
+
+        def _checkpoint_dicts() -> list[dict[str, str]]:
+            """Checkpoints as plain dicts for the daemon/CLI (used by /undo list)."""
+            return [{"ref": c.ref, "sha": c.sha, "label": c.label} for c in list_checkpoints(cwd)]
+
+        coder_driver = CoderTurnDriver(
+            llm,
+            gate,
+            suspending,
+            settings_provider=Settings.load,
+            undo=_undo_latest,
+            checkpoints=_checkpoint_dicts,
+        )
         log.info("coder plan→approve→act driver ready")
 
     # Barge-in engages in voice mode when the user wants it AND the mic is

@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from autobot.cli.gitdiff import diff_since, snapshot
+from autobot.cli.gitdiff import diff_since, snapshot, working_diff
 
 
 def _git(cwd: Path, *args: str) -> None:
@@ -41,3 +41,29 @@ def test_no_change_diffs_to_none(repo: Path) -> None:
 def test_outside_git_repo_is_none(tmp_path: Path) -> None:
     assert snapshot(str(tmp_path)) is None
     assert diff_since(str(tmp_path), None) is None
+
+
+def test_working_diff_shows_tracked_edit(tmp_path: Path) -> None:
+    _git(tmp_path, "init")
+    _git(tmp_path, "config", "user.email", "t@t")
+    _git(tmp_path, "config", "user.name", "t")
+    (tmp_path / "a.txt").write_text("one\n")
+    _git(tmp_path, "add", "a.txt")
+    _git(tmp_path, "commit", "-m", "init")
+    (tmp_path / "a.txt").write_text("two\n")
+    out = working_diff(str(tmp_path))
+    assert out is not None and "-one" in out and "+two" in out
+
+
+def test_working_diff_none_when_clean(tmp_path: Path) -> None:
+    _git(tmp_path, "init")
+    _git(tmp_path, "config", "user.email", "t@t")
+    _git(tmp_path, "config", "user.name", "t")
+    (tmp_path / "a.txt").write_text("one\n")
+    _git(tmp_path, "add", "a.txt")
+    _git(tmp_path, "commit", "-m", "init")
+    assert working_diff(str(tmp_path)) is None
+
+
+def test_working_diff_none_outside_git(tmp_path: Path) -> None:
+    assert working_diff(str(tmp_path)) is None

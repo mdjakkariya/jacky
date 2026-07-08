@@ -105,6 +105,8 @@ def create_app(
     on_resume_session: Any | None = None,
     on_coder_turn: Any | None = None,
     on_coder_reply: Any | None = None,
+    on_coder_undo: Any | None = None,
+    on_coder_checkpoints: Any | None = None,
 ) -> Any:
     """Build the FastAPI app: the event stream plus the Settings-view API.
 
@@ -144,6 +146,14 @@ def create_app(
             that delivers the CLI's answer to a parked coder turn and streams the
             next phase's events; wired to the orchestrator's ``reply_coder_stream``.
             When ``None``, ``POST /coder/reply`` streams a single error status event.
+        on_coder_undo: Optional callback (() -> tuple[bool, str]) that restores the
+            most recent coder checkpoint; wired to the orchestrator's
+            ``undo_coder``. When ``None``, ``POST /coder/undo`` returns
+            ``{"ok": False, "message": "undo unavailable"}``.
+        on_coder_checkpoints: Optional callback (() -> list[dict[str, str]]) that
+            lists coder checkpoints newest-first; wired to the orchestrator's
+            ``list_coder_checkpoints``. When ``None``, ``GET /coder/checkpoints``
+            returns ``{"checkpoints": []}``.
 
     Returns:
         A FastAPI app: ``/healthz``, WebSocket ``/ws``, the settings API, and
@@ -360,6 +370,20 @@ def create_app(
         return StreamingResponse(
             _sse_frames(on_coder_reply(str(value), str(text))), media_type="text/event-stream"
         )
+
+    async def post_coder_undo() -> dict[str, Any]:
+        """Restore the most recent coder checkpoint. Runs off the loop (takes the driver lock)."""
+        if on_coder_undo is None:
+            return {"ok": False, "message": "undo unavailable"}
+        ok, message = await asyncio.to_thread(on_coder_undo)
+        return {"ok": bool(ok), "message": message}
+
+    async def get_coder_checkpoints() -> dict[str, Any]:
+        """List coder checkpoints (newest first)."""
+        if on_coder_checkpoints is None:
+            return {"checkpoints": []}
+        rows = await asyncio.to_thread(on_coder_checkpoints)
+        return {"checkpoints": rows if isinstance(rows, list) else []}
 
     async def post_new_session() -> dict[str, Any]:
         """Start a fresh chat session — discard the engine's conversation history.
@@ -691,6 +715,8 @@ def create_app(
     app.add_api_route("/chat", post_chat, methods=["POST"])
     app.add_api_route("/coder/turn", post_coder_turn, methods=["POST"])
     app.add_api_route("/coder/reply", post_coder_reply, methods=["POST"])
+    app.add_api_route("/coder/undo", post_coder_undo, methods=["POST"])
+    app.add_api_route("/coder/checkpoints", get_coder_checkpoints, methods=["GET"])
     app.add_api_route("/session/new", post_new_session, methods=["POST"])
     app.add_api_route("/sessions", get_sessions, methods=["GET"])
     app.add_api_route("/sessions/resume", post_sessions_resume, methods=["POST"])
@@ -752,6 +778,8 @@ def run_daemon(
     on_resume_session: Any | None = None,
     on_coder_turn: Any | None = None,
     on_coder_reply: Any | None = None,
+    on_coder_undo: Any | None = None,
+    on_coder_checkpoints: Any | None = None,
 ) -> None:
     """Run the daemon server (blocking) on ``host:port``.
 
@@ -762,7 +790,8 @@ def run_daemon(
     ``on_meeting`` dispatches /meeting/* HTTP actions to the MeetingRecorder.
     ``on_list_sessions``/``on_resume_session`` back the ``/sessions`` endpoints.
     ``on_coder_turn``/``on_coder_reply`` back the ``/coder/turn``/``/coder/reply``
-    endpoints.
+    endpoints. ``on_coder_undo``/``on_coder_checkpoints`` back the
+    ``/coder/undo``/``/coder/checkpoints`` endpoints.
     """
     if host not in {"127.0.0.1", "localhost", "::1"}:
         raise ValueError(f"daemon must bind loopback only, got host={host!r}")
@@ -785,6 +814,8 @@ def run_daemon(
         on_resume_session=on_resume_session,
         on_coder_turn=on_coder_turn,
         on_coder_reply=on_coder_reply,
+        on_coder_undo=on_coder_undo,
+        on_coder_checkpoints=on_coder_checkpoints,
     )
     try:
         with contextlib.suppress(KeyboardInterrupt):

@@ -117,6 +117,35 @@ def test_help_command_renders_without_a_turn(tmp_path: Path) -> None:
     assert "/help" in console.export_text()
 
 
+def test_command_routes_daemon_backed_to_handler(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from autobot.cli import coder_commands
+
+    calls: list[str] = []
+
+    def fake_handle(name: str, args: str, **kw: Any) -> str | None:
+        calls.append(name)
+        return "HANDLED" if name == "/diff" else None
+
+    monkeypatch.setattr(coder_commands, "handle", fake_handle)
+    sh, console = _make(["/diff", None], {"start": [], "answer": []}, tmp_path)
+    sh.run()
+    assert calls[0] == "/diff"
+    assert "HANDLED" in console.export_text()
+
+
+def test_command_falls_back_to_pure_dispatch(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from autobot.cli import coder_commands
+
+    monkeypatch.setattr(coder_commands, "handle", lambda *a, **k: None)
+    sh, console = _make(["/help", None], {"start": [], "answer": []}, tmp_path)
+    sh.run()
+    assert "/exit" in console.export_text()  # help text still renders
+
+
 def test_ask_refine_followup_ctrl_c_cancels(tmp_path: Path) -> None:
     """Ctrl-C at refine follow-up cancels the turn instead of crashing."""
     calls = iter(["2"])  # "2" = edit/refine; next read raises

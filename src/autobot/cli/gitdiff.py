@@ -40,3 +40,16 @@ def diff_since(cwd: str, base: str | None) -> str | None:
         return None
     rc, out = _git(cwd, "diff", base)
     return out if rc == 0 and out.strip() else None
+
+
+def working_diff(cwd: str) -> str | None:
+    """Unified diff of tracked changes (staged + unstaged) vs ``HEAD`` in ``cwd``.
+
+    Returns ``None`` outside a git work tree, when ``HEAD`` is unborn, or when there
+    is nothing to show. Untracked (never-added) files are not included.
+    """
+    rc, _ = _git(cwd, "rev-parse", "--is-inside-work-tree")
+    if rc != 0:
+        return None
+    rc, out = _git(cwd, "diff", "HEAD")
+    return out if rc == 0 and out.strip() else None

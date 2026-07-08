@@ -147,3 +147,62 @@ def render_diff_rich(diff: str, *, width: int = 80) -> RenderableType:
     from autobot.cli import diffview
 
     return diffview.render_diff(diff, width=width)
+
+
+def _fmt_mtime(mtime: object) -> str:
+    """Format an epoch-seconds mtime as ``YYYY-MM-DD HH:MM`` (empty on bad input)."""
+    from datetime import datetime
+
+    try:
+        return datetime.fromtimestamp(float(mtime)).strftime(  # type: ignore[arg-type]
+            "%Y-%m-%d %H:%M"
+        )
+    except (TypeError, ValueError, OSError, OverflowError):
+        return ""
+
+
+def _short_home(path: str) -> str:
+    """Replace the home prefix with ``~`` (mirrors the shell's cwd shortening)."""
+    from pathlib import Path
+
+    home = str(Path.home())
+    return path.replace(home, "~", 1) if path.startswith(home) else path
+
+
+def render_sessions(rows: list[dict[str, object]]) -> RenderableType:
+    """A table of stored sessions (id · model · cwd · modified), newest first."""
+    from rich.table import Table
+    from rich.text import Text
+
+    if not rows:
+        return Text("No sessions yet.", style="dim")
+    # Table.header_style is resolved eagerly (unlike Text's style=, resolved lazily), so a
+    # bare theme-name string raises MissingStyle on a themeless console (e.g. in tests);
+    # look the color up from the theme dict instead of hardcoding the hex here.
+    table = Table(show_header=True, header_style=theme.STYLES["teal"], box=None, padding=(0, 2))
+    for col in ("id", "model", "cwd", "modified"):
+        table.add_column(col)
+    for r in rows:
+        table.add_row(
+            str(r.get("id", ""))[:8],
+            str(r.get("model", "")),
+            _short_home(str(r.get("cwd", ""))),
+            _fmt_mtime(r.get("mtime")),
+        )
+    return table
+
+
+def render_checkpoints(rows: list[dict[str, str]]) -> RenderableType:
+    """A newest-first list of checkpoints as ``<n>  <label>`` lines."""
+    from rich.text import Text
+
+    if not rows:
+        return Text("No checkpoints.", style="dim")
+    out = Text()
+    for i, r in enumerate(rows):
+        n = r.get("ref", "").rsplit("/", 1)[-1]
+        out.append(f"{n}", style="teal")
+        out.append(f"  {r.get('label', '')}")
+        if i < len(rows) - 1:
+            out.append("\n")
+    return out

@@ -13,7 +13,7 @@ from collections.abc import Callable, Iterator
 from contextlib import AbstractContextManager
 from typing import Any
 
-from autobot.cli import client, commands, gitdiff, render, spinner, theme
+from autobot.cli import client, coder_commands, commands, gitdiff, render, spinner, theme
 from autobot.cli.classify import classify
 from autobot.cli.prompt import Answer, parse_confirm_choice, parse_plan_choice
 from autobot.cli.theme import GLYPH_PROMPT
@@ -113,8 +113,19 @@ class Shell:
             self._turn_no += 1
 
     def _command(self, name: str, args: str) -> bool:
-        """Run a client-side command; return True to exit the loop."""
+        """Run a command; return True to exit the loop.
+
+        Daemon-backed / cwd-touching commands go through ``coder_commands.handle``
+        first; if it doesn't own the command, fall back to the pure client-side
+        ``commands.dispatch`` (``/help /clear /exit``).
+        """
         _log.debug("command dispatch name=%s", name)
+        rendered = coder_commands.handle(
+            name, args, base_url=self._base_url, cwd=self._cwd, width=self._console.width
+        )
+        if rendered is not None:
+            self._console.print(rendered)
+            return False
         res = commands.dispatch(name, args)
         if res.action == "exit":
             return True

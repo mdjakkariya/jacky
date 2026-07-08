@@ -29,6 +29,81 @@ def _post(url: str, payload: dict[str, Any], timeout: float) -> dict[str, Any]: 
     return parsed
 
 
+def _get_json(url: str, timeout: float) -> Any:  # pragma: no cover - real network
+    """GET ``url`` and return the parsed JSON body."""
+    with urllib.request.urlopen(url, timeout=timeout) as resp:
+        return json.loads(resp.read().decode("utf-8"))
+
+
+def post_settings(
+    base_url: str, updates: dict[str, Any], *, post: Callable[..., dict[str, Any]] = _post
+) -> dict[str, Any]:
+    """Persist setting keys via ``POST /settings`` (sparse merge on the daemon)."""
+    try:
+        return post(f"{base_url}/settings", updates, 10.0)
+    except (OSError, urllib.error.URLError) as exc:
+        return {"ok": False, "error": str(exc)}
+
+
+def get_models(base_url: str, *, get: Callable[[str, float], Any] = _get_json) -> list[str]:
+    """Installed local models (``GET /models``); ``[]`` on any failure."""
+    try:
+        data = get(f"{base_url}/models", 10.0)
+    except (OSError, urllib.error.URLError):
+        return []
+    models = data.get("models") if isinstance(data, dict) else None
+    return models if isinstance(models, list) else []
+
+
+def coder_undo(base_url: str, *, post: Callable[..., dict[str, Any]] = _post) -> dict[str, Any]:
+    """Restore the most recent checkpoint (``POST /coder/undo``)."""
+    try:
+        return post(f"{base_url}/coder/undo", {}, 30.0)
+    except (OSError, urllib.error.URLError) as exc:
+        return {"ok": False, "message": f"couldn't reach the coder daemon: {exc}"}
+
+
+def coder_checkpoints(
+    base_url: str, *, get: Callable[[str, float], Any] = _get_json
+) -> list[dict[str, Any]]:
+    """List checkpoints newest-first (``GET /coder/checkpoints``); ``[]`` on failure."""
+    try:
+        data = get(f"{base_url}/coder/checkpoints", 10.0)
+    except (OSError, urllib.error.URLError):
+        return []
+    rows = data.get("checkpoints") if isinstance(data, dict) else None
+    return rows if isinstance(rows, list) else []
+
+
+def list_sessions(
+    base_url: str, *, get: Callable[[str, float], Any] = _get_json
+) -> list[dict[str, Any]]:
+    """Stored session summaries (``GET /sessions``); ``[]`` on failure."""
+    try:
+        data = get(f"{base_url}/sessions", 10.0)
+    except (OSError, urllib.error.URLError):
+        return []
+    return data if isinstance(data, list) else []
+
+
+def resume_session(
+    base_url: str, session_id: str, *, post: Callable[..., dict[str, Any]] = _post
+) -> dict[str, Any]:
+    """Resume a stored session (``POST /sessions/resume``)."""
+    try:
+        return post(f"{base_url}/sessions/resume", {"id": session_id}, 10.0)
+    except (OSError, urllib.error.URLError) as exc:
+        return {"ok": False, "error": str(exc)}
+
+
+def new_session(base_url: str, *, post: Callable[..., dict[str, Any]] = _post) -> dict[str, Any]:
+    """Start a fresh session (``POST /session/new``)."""
+    try:
+        return post(f"{base_url}/session/new", {}, 10.0)
+    except (OSError, urllib.error.URLError) as exc:
+        return {"ok": False, "error": str(exc)}
+
+
 def _probe(url: str, timeout: float) -> bool:  # pragma: no cover - real network probe
     with urllib.request.urlopen(url, timeout=timeout):
         return True

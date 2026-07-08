@@ -2,7 +2,9 @@
 
 Commands are pure — they return a :class:`CommandResult` the UI shell enacts (print a
 message, clear the transcript, or exit) — so they're testable without a UI and reused by
-any shell. v1 has only client-side commands; daemon-backed ones (``/undo``…) come later.
+any shell. This module only owns parsing plus the client-side trio (``/help``, ``/clear``,
+``/exit``); the daemon-backed commands (``/diff``, ``/undo``, ``/model``, ``/autonomy``,
+``/sessions``, ``/new``) are handled by the ``coder_commands`` handler layer.
 """
 
 from __future__ import annotations
@@ -12,6 +14,12 @@ from dataclasses import dataclass
 COMMANDS: dict[str, str] = {
     "/help": "show this help",
     "/clear": "clear the transcript",
+    "/diff": "show the working-tree diff",
+    "/undo": "revert the last change (or /undo list)",
+    "/model": "show or switch the model (/model <name>)",
+    "/autonomy": "show or set autonomy (plan|confirm|auto)",
+    "/sessions": "list sessions (or /sessions resume <id>)",
+    "/new": "start a fresh session",
     "/exit": "quit jack",
 }
 

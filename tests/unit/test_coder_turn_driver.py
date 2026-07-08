@@ -237,3 +237,52 @@ def test_reclaim_close_does_not_leak_a_parked_confirm() -> None:
 
     event = events.get(timeout=_JOIN_TIMEOUT_S)
     assert event["status"] == "pending"  # the fresh turn's own act confirm, not stale state
+
+
+def test_undo_delegates_when_idle() -> None:
+    d = _driver(_ScriptedLLM("1. x", "done"))
+    d._undo = lambda: (True, "Reverted to before edit")  # injected closure
+    ok, msg = d.undo()
+    assert ok is True and "Reverted" in msg
+
+
+def test_undo_refused_while_turn_running() -> None:
+    d = _driver(_ScriptedLLM("1. x", "done"))
+    d._undo = lambda: (True, "reverted")
+    # Simulate an actively-running (not parked) turn.
+    d._channel = TurnChannel()
+    d._awaiting = False
+    ok, msg = d.undo()
+    assert ok is False and "running" in msg.lower()
+
+
+def test_resume_reclaims_parked_turn_then_delegates() -> None:
+    llm = _ScriptedLLM("1. x", "done")
+    resumed: list[str] = []
+
+    def _fake_resume(sid: str) -> bool:
+        resumed.append(sid)
+        return True
+
+    llm.resume = _fake_resume  # type: ignore[attr-defined]
+    d = _driver(llm)
+    d._channel = TurnChannel()
+    d._awaiting = True  # parked
+    assert d.resume("sess-1") is True
+    assert resumed == ["sess-1"]
+    assert d._channel is None and d._awaiting is False
+
+
+def test_new_session_refused_while_running() -> None:
+    llm = _ScriptedLLM("1. x", "done")
+    llm.new_session = lambda: None  # type: ignore[attr-defined]
+    d = _driver(llm)
+    d._channel = TurnChannel()
+    d._awaiting = False
+    assert d.new_session() is False
+
+
+def test_list_checkpoints_delegates() -> None:
+    d = _driver(_ScriptedLLM("1. x", "done"))
+    d._checkpoints = lambda: [{"ref": "refs/jack/checkpoints/0", "sha": "a", "label": "x"}]
+    assert d.list_checkpoints()[0]["label"] == "x"

@@ -83,3 +83,43 @@ def test_render_tool_shows_connector_and_label() -> None:
     console.print(render_tool(Segment("tool", "Read a.py")))
     out = console.export_text()
     assert "Read a.py" in out and "⎿" in out
+
+
+def test_render_sessions_table_has_rows() -> None:
+    pytest.importorskip("rich")
+    from rich.console import Console
+
+    from autobot.cli.render import render_sessions
+
+    rows = [{"id": "abcdef123456", "model": "qwen3:8b", "cwd": "/x/proj", "mtime": 0.0}]
+    console = Console(record=True, width=100)
+    console.print(render_sessions(rows))
+    out = console.export_text()
+    assert "abcdef12" in out and "qwen3:8b" in out and "proj" in out
+
+
+def test_render_sessions_empty_is_noted() -> None:
+    pytest.importorskip("rich")
+    from rich.console import Console
+
+    from autobot.cli.render import render_sessions
+
+    console = Console(record=True, width=100)
+    console.print(render_sessions([]))
+    assert "No sessions" in console.export_text()
+
+
+def test_render_checkpoints_lists_labels() -> None:
+    pytest.importorskip("rich")
+    from rich.console import Console
+
+    from autobot.cli.render import render_checkpoints
+
+    rows = [
+        {"ref": "refs/jack/checkpoints/1", "sha": "aaa", "label": "before edit"},
+        {"ref": "refs/jack/checkpoints/0", "sha": "bbb", "label": "first"},
+    ]
+    console = Console(record=True, width=100)
+    console.print(render_checkpoints(rows))
+    out = console.export_text()
+    assert "before edit" in out and "first" in out

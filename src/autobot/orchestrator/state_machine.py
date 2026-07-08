@@ -974,6 +974,24 @@ class Orchestrator:
             return
         yield from self.coder_driver.reply_stream(value, text)
 
+    def undo_coder(self) -> tuple[bool, str]:
+        """Restore the most recent workspace checkpoint (coder profile only)."""
+        if self.coder_driver is None:
+            return False, "Undo isn't available here."
+        return self.coder_driver.undo()
+
+    def list_coder_checkpoints(self) -> list[dict[str, str]]:
+        """List workspace checkpoints newest-first (coder profile only)."""
+        return self.coder_driver.list_checkpoints() if self.coder_driver is not None else []
+
+    def resume_coder_session(self, session_id: str) -> bool:
+        """Resume a stored coder session through the driver's lock (coder profile only)."""
+        return self.coder_driver.resume(session_id) if self.coder_driver is not None else False
+
+    def new_coder_session(self) -> bool:
+        """Start a fresh coder session through the driver's lock (coder profile only)."""
+        return self.coder_driver.new_session() if self.coder_driver is not None else False
+
     def run(self) -> None:
         """Run the interaction loop until interrupted with Ctrl-C."""
         if self._settings.input_mode == "ptt":

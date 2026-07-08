@@ -117,22 +117,26 @@ def _serve_with_patched_deps(monkeypatch: pytest.MonkeyPatch, settings: Settings
     return captured
 
 
-def test_serve_disables_turn_and_session_callbacks_for_coder_profile(
+def test_serve_disables_chat_but_wires_coder_session_callbacks_for_coder_profile(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    # The coder daemon must have exactly one turn entry point (/coder/turn + /coder/reply).
-    # /chat, session-switching, and tool-run all mutate the same shared session/gate that
-    # the coder driver guards with its own lock, so they must be disabled — a concurrent
-    # /chat could otherwise route a confirmation into a parked coder turn's channel.
+    # The coder daemon keeps /coder/turn + /coder/reply as its only *turn* entry point:
+    # /chat and tool-run (/action) mutate the shared session/gate the coder driver guards
+    # with its own lock, so they stay disabled — a concurrent /chat could otherwise route a
+    # confirmation into a parked coder turn's channel. Session new/resume ARE wired for the
+    # coder profile, but through the coder-driver-backed methods (which take that same driver
+    # lock), so /new and /sessions resume are safe. /coder/undo + /coder/checkpoints are wired.
     settings = Settings(profile="coder")
     kwargs = _serve_with_patched_deps(monkeypatch, settings)
 
     assert kwargs["on_chat"] is None
     assert kwargs["on_action"] is None
-    assert kwargs["on_new_session"] is None
-    assert kwargs["on_resume_session"] is None
+    assert kwargs["on_new_session"] is not None  # coder-driver-backed (lock-safe)
+    assert kwargs["on_resume_session"] is not None  # coder-driver-backed (lock-safe)
     assert kwargs["on_coder_turn"] is not None
     assert kwargs["on_coder_reply"] is not None
+    assert kwargs["on_coder_undo"] is not None
+    assert kwargs["on_coder_checkpoints"] is not None
     assert kwargs["on_list_sessions"] is not None  # read-only; the jack readiness probe
     assert kwargs["on_change"] is not None
     assert kwargs["on_confirm_answer"] is not None

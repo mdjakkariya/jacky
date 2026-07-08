@@ -28,3 +28,10 @@ def test_clear_and_exit_actions() -> None:
 def test_unknown_command_hints() -> None:
     res = dispatch("/nope", "")
     assert res.action == "message" and "unknown" in res.text.lower()
+
+
+def test_new_command_names_registered() -> None:
+    from autobot.cli.commands import COMMANDS
+
+    for name in ("/diff", "/undo", "/model", "/autonomy", "/sessions", "/new"):
+        assert name in COMMANDS

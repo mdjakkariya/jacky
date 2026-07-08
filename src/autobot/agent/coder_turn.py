@@ -228,8 +228,15 @@ class CoderTurnDriver:
         gate: PermissionGate,
         confirmer: SuspendingConfirmer,
         settings_provider: Callable[[], Settings],
+        *,
+        undo: Callable[[], tuple[bool, str]] | None = None,
+        checkpoints: Callable[[], list[dict[str, str]]] | None = None,
     ) -> None:
-        """Wire the driver. ``llm`` must expose ``run_turn(text, execute, on_event=...)``."""
+        """Wire the driver. ``llm`` must expose ``run_turn(text, execute, on_event=...)``.
+
+        ``undo``/``checkpoints`` are optional closures (bound to the workspace cwd in
+        ``app.py``) backing the ``/undo`` command; ``None`` disables it.
+        """
         self._llm = llm
         self._gate = gate
         self._confirmer = confirmer
@@ -237,6 +244,8 @@ class CoderTurnDriver:
         self._lock = threading.Lock()
         self._channel: TurnChannel | None = None
         self._awaiting = False  # True when the worker is parked awaiting an answer
+        self._undo = undo
+        self._checkpoints = checkpoints
 
     @staticmethod
     def _is_phase_ender(evt: dict[str, Any]) -> bool:
@@ -276,6 +285,68 @@ class CoderTurnDriver:
             self._awaiting = False
         channel.answer(value, text)
         return channel
+
+    def _reclaim_or_refuse(self) -> bool:
+        """Return whether it's safe to mutate; the CALLER MUST HOLD ``self._lock``.
+
+        ``True`` when idle, or when a *parked* turn (CLI awaiting an answer that never
+        came) was reclaimed via ``close()`` + reset — mirrors ``_spawn``. ``False`` when a
+        turn is *actively running*: a mutation must not interleave with a live turn's
+        gate/confirmer/session. Callers keep the lock held through the mutation itself so a
+        concurrent ``_spawn``/mutator can't slip in between the check and the change.
+        """
+        if self._channel is not None and not self._awaiting:
+            return False
+        if self._channel is not None and self._awaiting:
+            self._channel.close()
+            self._channel = None
+            self._awaiting = False
+        return True
+
+    def undo(self) -> tuple[bool, str]:
+        """Restore the most recent checkpoint (idle only). Never raises."""
+        with self._lock:
+            if not self._reclaim_or_refuse():
+                return False, "A coding turn is running — finish or cancel it first."
+            if self._undo is None:
+                return False, "Undo isn't available here."
+            _log.info("undo requested")
+            try:
+                ok, msg = self._undo()
+            except Exception:  # a mutator must always return, never raise into the daemon
+                _log.exception("undo failed")
+                return False, "Undo failed unexpectedly."
+            _log.info("undo done ok=%s", ok)
+            return ok, msg
+
+    def list_checkpoints(self) -> list[dict[str, str]]:
+        """List checkpoints (read-only; no lock)."""
+        return self._checkpoints() if self._checkpoints is not None else []
+
+    def resume(self, session_id: str) -> bool:
+        """Resume a stored session (idle only). False if a turn is running."""
+        with self._lock:
+            if not self._reclaim_or_refuse():
+                return False
+            _log.info("resume session id=%s", session_id)
+            try:
+                return bool(self._llm.resume(session_id))
+            except Exception:  # a mutator must always return, never raise into the daemon
+                _log.exception("resume failed")
+                return False
+
+    def new_session(self) -> bool:
+        """Start a fresh session (idle only). False if a turn is running."""
+        with self._lock:
+            if not self._reclaim_or_refuse():
+                return False
+            _log.info("new session")
+            try:
+                self._llm.new_session()
+            except Exception:  # a mutator must always return, never raise into the daemon
+                _log.exception("new_session failed")
+                return False
+            return True
 
     def _drain(self, channel: TurnChannel) -> Iterator[dict[str, Any]]:
         """Yield events from the channel until (and including) a phase-ender."""
