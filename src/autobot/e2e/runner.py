@@ -50,6 +50,22 @@ def _approve(session: Any, log: list[dict[str, Any]]) -> None:
     log.append({"action": "approve"})
 
 
+def _await_rest(session: Any, timeout: float) -> None:
+    """Wait for the running turn to reach a resting state — a gate awaiting input, or idle.
+
+    Requires the turn to *visibly start* (spinner/tool/gate) before accepting a stable idle
+    frame as "done", so the ever-present ``❯`` prompt (which the TUI flickers back into view
+    between transient render regions) is never mistaken for turn completion. The edge wait is
+    best-effort and capped, so a turn that finishes faster than a poll still resolves via the
+    stable-idle wait below.
+    """
+    session.wait_for(markers.turn_started, min(timeout, 45.0))
+    if not session.wait_until_stable(
+        lambda s: markers.idle_prompt(s) or markers.any_gate(s), timeout
+    ):
+        raise TimeoutError("turn did not settle at idle or a gate")
+
+
 def drive_scripted(session: Any, sc: Scenario, *, log: list[dict[str, Any]]) -> None:
     """Run the scenario's explicit steps in order."""
     for step in sc.steps:
@@ -60,14 +76,21 @@ def drive_scripted(session: Any, sc: Scenario, *, log: list[dict[str, Any]]) -> 
             session.send_key(step.name)
             log.append({"action": "key", "name": step.name})
         elif isinstance(step, Expect):
-            ok = session.wait_for(markers.BY_NAME[step.marker], step.timeout)
+            marker = markers.BY_NAME[step.marker]
+            # "idle_prompt" means "the turn finished" — debounce it so a mid-turn flicker of
+            # the idle prompt can't satisfy the step before the turn actually completes.
+            ok = (
+                session.wait_until_stable(marker, step.timeout)
+                if step.marker == "idle_prompt"
+                else session.wait_for(marker, step.timeout)
+            )
             log.append({"action": "expect", "marker": step.marker, "ok": ok})
             if not ok:
                 raise TimeoutError(f"marker {step.marker!r} not seen in {step.timeout}s")
         elif isinstance(step, (ApprovePlan, Confirm)):
-            marker = "plan_card" if isinstance(step, ApprovePlan) else "permission_card"
-            if not session.wait_for(markers.BY_NAME[marker], 90.0):
-                raise TimeoutError(f"{marker} never appeared")
+            card = "plan_card" if isinstance(step, ApprovePlan) else "permission_card"
+            if not session.wait_for(markers.BY_NAME[card], 90.0):
+                raise TimeoutError(f"{card} never appeared")
             _approve(session, log)
 
 
@@ -77,16 +100,10 @@ def drive_unattended(
     """Send the task, auto-approve any gate that appears, wait until idle."""
     session.send(sc.task)
     log.append({"action": "send", "text": sc.task})
-    # Wait for the turn to actually start before treating idle as "done" (avoid matching
-    # the stale pre-send idle screen).
-    session.wait_for(lambda s: not markers.idle_prompt(s), turn_timeout)
     for _ in range(50):  # bounded: at most 50 gate approvals
-        if not session.wait_for(
-            lambda s: markers.idle_prompt(s) or markers.any_gate(s), turn_timeout
-        ):
-            raise TimeoutError("turn did not reach idle or a gate")
+        _await_rest(session, turn_timeout)
         if not markers.any_gate(session.screen_text()):
-            return  # idle → done
+            return  # settled idle → done
         _approve(session, log)
         # Let the just-approved gate clear before looping, so we don't re-approve it.
         session.wait_for(lambda s: not markers.any_gate(s), turn_timeout)

@@ -150,6 +150,31 @@ class PtySession:
             self._sleep(poll)
         return marker(self.screen_text())
 
+    def wait_until_stable(
+        self, marker: Marker, timeout: float, *, stable_for: float = 1.0, poll: float = 0.05
+    ) -> bool:
+        """Poll until ``marker`` holds *continuously* for ``stable_for`` seconds (debounced).
+
+        A single satisfying frame is not enough: the TUI paints replies and spinners in
+        transient ``rich.Live`` regions that briefly clear between phases, so the idle
+        ``❯`` prompt underneath flickers into view mid-turn. Requiring the marker to hold
+        across a settle window rejects those flickers and only fires on a real resting state.
+        """
+        deadline = self._now() + timeout
+        held_since: float | None = None
+        while True:
+            now = self._now()
+            if now >= deadline:
+                return False
+            if marker(self.screen_text()):
+                if held_since is None:
+                    held_since = now
+                elif now - held_since >= stable_for:
+                    return True
+            else:
+                held_since = None  # a flicker resets the settle window
+            self._sleep(poll)
+
     def close(self) -> None:
         """Stop the reader and terminate the process group."""
         self._alive = False

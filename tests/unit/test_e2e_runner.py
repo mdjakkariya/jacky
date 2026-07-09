@@ -25,6 +25,11 @@ class _FakeSession:
             self._i += 1
         return marker(self._screens[self._i])
 
+    def wait_until_stable(self, marker, timeout, *, stable_for=1.0, poll=0.05):  # type: ignore[no-untyped-def]
+        # The scripted screens are already discrete resting states, so "stable" reduces to
+        # "advance to the next screen that satisfies the marker" — same as wait_for.
+        return self.wait_for(marker, timeout, poll)  # type: ignore[no-untyped-call]
+
     def send(self, text: str) -> None:
         self.sent.append(text)
 

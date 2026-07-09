@@ -39,15 +39,34 @@ def any_gate(screen: str) -> bool:
     return plan_card(screen) or permission_card(screen)
 
 
+def working(screen: str) -> bool:
+    """A turn is actively running — the spinner byline (``esc to interrupt``) is up."""
+    return "esc to interrupt" in screen
+
+
+def turn_started(screen: str) -> bool:
+    """The turn has visibly begun: spinner, a tool line, or a gate is on screen."""
+    return working(screen) or tool_line(screen) or any_gate(screen)
+
+
 def error(screen: str) -> bool:
     """An error segment (``Error:``) is on screen."""
     return "Error:" in screen
 
 
 def idle_prompt(screen: str) -> bool:
-    """The main REPL prompt (``❯``) is the last non-empty line — ready for input."""
+    """The REPL prompt is the last line AND *empty* — a turn finished, ready for input.
+
+    Requires nothing after the prompt glyph. A prompt still showing un-submitted input
+    (``❯ do a thing``) is **not** idle — otherwise a just-typed command, sitting in the
+    input during the latency before its turn produces output, would be mistaken for a
+    completed turn and the harness would race ahead / tear down mid-turn.
+    """
     lines = [ln for ln in screen.splitlines() if ln.strip()]
-    return bool(lines) and lines[-1].lstrip().startswith(theme.GLYPH_PROMPT)
+    if not lines:
+        return False
+    last = lines[-1].lstrip()
+    return last.startswith(theme.GLYPH_PROMPT) and not last[len(theme.GLYPH_PROMPT) :].strip()
 
 
 BY_NAME: dict[str, Marker] = {
@@ -56,6 +75,8 @@ BY_NAME: dict[str, Marker] = {
     "plan_card": plan_card,
     "permission_card": permission_card,
     "any_gate": any_gate,
+    "working": working,
+    "turn_started": turn_started,
     "error": error,
     "idle_prompt": idle_prompt,
 }
