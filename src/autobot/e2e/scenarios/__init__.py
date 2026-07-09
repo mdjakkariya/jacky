@@ -13,6 +13,11 @@ from autobot.e2e.scenario import (
     Send,
 )
 
+# Real LLM turns (esp. local models doing read-only exploration + planning) can take a
+# couple of minutes; a slash command (/diff, /undo — daemon-backed, no LLM) is near-instant.
+_TURN = 240.0  # wait for a plan/permission card or a turn to reach idle
+_CMD = 30.0  # wait for a daemon-backed command to return to idle
+
 ALL: tuple[Scenario, ...] = (
     Scenario(
         name="create-file",
@@ -22,9 +27,9 @@ ALL: tuple[Scenario, ...] = (
         success_criteria="Created hello.py that prints a greeting, showed a diff, replied clearly.",
         steps=(
             Send("create hello.py that prints hi"),
-            Expect("plan_card", 90.0),
+            Expect("plan_card", _TURN),
             ApprovePlan(),
-            Expect("idle_prompt", 120.0),
+            Expect("idle_prompt", _TURN),
         ),
         checks=(FileExists("hello.py"), FileContains("hello.py", "print")),
     ),
@@ -36,9 +41,9 @@ ALL: tuple[Scenario, ...] = (
         success_criteria="Asked before running the command, then ran it and reported the output.",
         steps=(
             Send("run this shell command: echo e2e-ok"),
-            Expect("permission_card", 90.0),
+            Expect("permission_card", _TURN),
             Confirm(),
-            Expect("idle_prompt", 120.0),
+            Expect("idle_prompt", _TURN),
         ),
         checks=(ScreenContains("e2e-ok"),),
     ),
@@ -69,14 +74,14 @@ ALL: tuple[Scenario, ...] = (
         seed_files={"foo.py": "x = 1\n"},
         steps=(
             Send("append a comment '# touched' to foo.py"),
-            Expect("idle_prompt", 120.0),
+            Expect("idle_prompt", _TURN),
             Send("/diff"),
-            Expect("idle_prompt", 30.0),
+            Expect("idle_prompt", _CMD),
             Send("/undo"),
-            Expect("idle_prompt", 30.0),
+            Expect("idle_prompt", _CMD),
             Send("hi, what can you do?"),
-            Expect("reply_present", 60.0),
-            Expect("idle_prompt", 60.0),
+            Expect("reply_present", _TURN),
+            Expect("idle_prompt", _TURN),
         ),
         checks=(FileContains("foo.py", "x = 1"),),
     ),
