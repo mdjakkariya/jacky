@@ -50,6 +50,8 @@ ui/orb-shell/src-tauri/icons/
 # Superpowers SDD working docs (specs/plans/progress) — local-only, never committed
 docs/superpowers/
 .superpowers/
+docs/plans
+docs/testing
 
 # OS / editor
 .DS_Store
