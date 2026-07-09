@@ -93,6 +93,11 @@ tui = [
     "rich>=13",
     "prompt_toolkit>=3.0",
 ]
+# Dev-only E2E harness (real PTY + pyte terminal emulator). Never installed by CI;
+# invoked by hand via `make e2e` / `python -m autobot.e2e`. `uv sync --extra e2e`.
+e2e = [
+    "pyte>=0.8",
+]
 dev = [
     "ruff>=0.6",
     "mypy>=1.11",
@@ -163,6 +168,10 @@ convention = "google"
 "tests/**" = ["D101", "D102", "D103", "D105"]
 # Protocol contract + no-op stubs; the real impl (FileTranscript) is documented.
 "src/autobot/session_log.py" = ["D102"]
+# The E2E harness embeds the real TUI glyphs (❯ ⏺ ⎿) in docstrings + canned screens,
+# so the ambiguous-unicode lints don't apply (same reason cli/theme.py noqa's them).
+"src/autobot/e2e/*.py" = ["RUF002"]
+"tests/unit/test_e2e_*.py" = ["RUF001", "RUF002"]
 
 [tool.ruff.format]
 docstring-code-format = true
@@ -197,6 +206,7 @@ module = [
     "tree_sitter_language_pack.*",
     "rich.*",
     "prompt_toolkit.*",
+    "pyte.*",
     "objc.*",
     "AVFoundation.*",
     "ApplicationServices.*",
