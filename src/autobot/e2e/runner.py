@@ -8,6 +8,7 @@ real run is dogfooded via ``make e2e``.
 
 from __future__ import annotations
 
+import tempfile
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -109,7 +110,11 @@ def run_scenario(
     provider = f"{settings.llm_provider}:{settings.llm_model}"
     log: list[dict[str, Any]] = []
     screen, raw = "", b""
-    with settings_scope({"coding_autonomy": sc.autonomy}):  # noqa: SIM117 (wraps the workspace)
+    # Fresh, empty access_store so the coder jails to its launch cwd (the throwaway repo)
+    # instead of restoring a persisted active folder (e.g. the user's real workspace).
+    access_store = str(Path(tempfile.gettempdir()) / f"jack-e2e-access-{stamp}.json")
+    scope: dict[str, object] = {"coding_autonomy": sc.autonomy, "access_store": access_store}
+    with settings_scope(scope):  # noqa: SIM117 (wraps the workspace)
         with workspace(sc.seed_files, keep=keep) as ws:
             session = session_factory(jack_argv(port), str(ws))
             try:

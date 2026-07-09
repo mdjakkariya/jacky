@@ -22,7 +22,8 @@ _JUDGE_PREAMBLE = (
     "You are grading an automated end-to-end test of a terminal coding assistant. Given the "
     "task, the success criteria, the final rendered terminal screen, and the deterministic "
     "check results, decide whether the run PASSED and critique the terminal UX.\n"
-    "Reply with ONLY a JSON object: "
+    "Reply with ONLY a raw JSON object and nothing else — no prose, no markdown fences, "
+    "no leading or trailing text. The object must be exactly: "
     '{"pass": bool, "confidence": 0..1, "reasoning": str, "ux_notes": [str, ...]}.\n\n'
 )
 
@@ -56,19 +57,33 @@ def build_judge_prompt(
 
 
 def parse_verdict(text: str) -> dict[str, Any]:
-    """Parse a verdict JSON object from the model reply; safe fallback on failure."""
-    m = re.search(r"\{.*\}", text, re.DOTALL)
-    if m:
+    """Parse a verdict JSON object from the model reply; safe fallback on failure.
+
+    Robust to a strong model wrapping the JSON in prose or markdown fences: tries the
+    whole (fence-stripped) reply first, then each ``{...}`` region, returning the first
+    candidate that parses to a dict with a ``pass`` key.
+    """
+    candidates: list[str] = []
+    stripped = text.strip()
+    if stripped.startswith("```"):  # strip a ```json … ``` fence
+        stripped = stripped.strip("`")
+        stripped = stripped[4:] if stripped.lower().startswith("json") else stripped
+    candidates.append(stripped.strip())
+    candidates.extend(re.findall(r"\{.*?\}", text, re.DOTALL))  # each smallest {...}
+    greedy = re.search(r"\{.*\}", text, re.DOTALL)  # first { … last }
+    if greedy:
+        candidates.append(greedy.group(0))
+    for candidate in candidates:
         try:
-            obj = json.loads(m.group(0))
-            if isinstance(obj, dict) and "pass" in obj:
-                obj.setdefault("confidence", 0.0)
-                obj.setdefault("reasoning", "")
-                obj.setdefault("ux_notes", [])
-                obj["pass"] = bool(obj["pass"])
-                return obj
+            obj = json.loads(candidate)
         except ValueError:
-            pass
+            continue
+        if isinstance(obj, dict) and "pass" in obj:
+            obj.setdefault("confidence", 0.0)
+            obj.setdefault("reasoning", "")
+            obj.setdefault("ux_notes", [])
+            obj["pass"] = bool(obj["pass"])
+            return obj
     return {
         "pass": False,
         "confidence": 0.0,
@@ -101,8 +116,11 @@ def judge_auto(
             s = replace(s, anthropic_model=judge_model)
         else:
             s = replace(s, llm_model=judge_model)
+    # Give the judge ample output room: the default assistant budget (512) truncates the
+    # verdict JSON, and on adaptive-thinking models thinking also draws from max_tokens.
+    s = replace(s, profile="assistant", anthropic_max_tokens=8192, llm_max_tokens=8192)
     try:
-        model = _build_llm(replace(s, profile="assistant"), ToolRegistry(), NullTranscript(), None)
+        model = _build_llm(s, ToolRegistry(), NullTranscript(), None)
         raw = model.complete(build_judge_prompt(name, task, criteria, screen, checks))
     except Exception as exc:  # never let judging crash a run — record it as a failed verdict
         _log.exception("judge_auto failed")
