@@ -16,44 +16,68 @@ identical across surfaces.
 # 1. Install deps (cloud extra brings the Anthropic SDK)
 uv sync --extra cloud
 
-# 2. Store your API key in the OS keyring (service "autobot", account "anthropic_api_key")
-keyring set autobot anthropic_api_key           # cross-platform; paste the key when prompted
-# macOS one-liner alternative:
-# security add-generic-password -U -s autobot -a anthropic_api_key -w 'sk-ant-…'
+# 2. Configure the coder from the CLI (see "Managing config" below)
+jack config set-key anthropic          # paste the key at the hidden prompt → OS keyring
+jack config set provider anthropic
+jack config set model claude-sonnet-5
 
-# 3. Point Jack at the cloud provider (settings.json defaults to local Ollama)
-#    Edit ~/.autobot/settings.json:
-#    { "llm_provider": "anthropic", "anthropic_model": "claude-sonnet-5" }
-
-# 4. Run jack inside the project you want to work on
+# 3. Run jack inside the project you want to work on
 cd ~/code/my-project
 jack                      # opens the interactive TUI
 jack "add a docstring to foo.py"   # or run one request and print the reply
 ```
 
-A new key takes effect on the **next turn** — no daemon restart. `jack` auto-spawns the
-coder daemon on port **8766** the first time and reuses it afterward.
+A new key or setting takes effect on the **next turn** — no daemon restart. `jack`
+auto-spawns the coder daemon on port **8766** the first time and reuses it afterward.
 
 > The coder jails to the directory you launch it from (its cwd). Run `jack` from the
 > repo you want it to edit.
 
-## Providers & API keys
+## Managing config from the CLI
 
-Jack is provider-agnostic. Pick one with `llm_provider` in `settings.json`; the key (if
-any) is read from the keyring under a fixed account name. Only these secret names are
-accepted: `anthropic_api_key`, `openai_api_key`, `web_api_key`.
-
-| Provider | `settings.json` | Keyring account | Notes |
-|---|---|---|---|
-| **Anthropic** (cloud) | `"llm_provider": "anthropic"`, `"anthropic_model": "claude-sonnet-5"` | `anthropic_api_key` | Sends conversation + tool schemas/results to Anthropic; actions still run locally. |
-| **OpenAI-compatible** | `"llm_provider": "openai"`, `"llm_model": "<model-id>"`, `"openai_base_url": "<endpoint>"` | `openai_api_key` | Any `chat.completions` endpoint (OpenAI, Groq, Together, Gemini's compat URL, local vLLM/LM Studio). Blank `openai_base_url` = OpenAI default. Local servers ignore the key. |
-| **Ollama** (local, default) | `"llm_provider": "ollama"`, `"llm_model": "qwen3:8b"` | — | Fully on-device; Ollama must be running. |
-
-Set a key from the keyring CLI:
+`jack config` reads and updates `~/.autobot/settings.json` with validation, and stores API
+keys in the OS keyring. Changes persist even with no daemon running; if one is running, it
+picks them up on the next turn.
 
 ```bash
-keyring set autobot anthropic_api_key      # or openai_api_key
-keyring get autobot anthropic_api_key      # verify
+jack config                       # show current settings (secrets shown as set/unset)
+jack config get provider
+jack config set provider anthropic
+jack config set model claude-sonnet-5     # provider-aware: writes anthropic_model here
+jack config set autonomy auto
+jack config set-key anthropic             # hidden prompt → OS keyring (blank input clears)
+jack config edit                          # open settings.json in $EDITOR
+jack config path                          # print the settings.json path
+```
+
+**Aliases:** `provider`→`llm_provider`, `autonomy`→`coding_autonomy`, and `model`→
+`anthropic_model` (when the provider is anthropic) or `llm_model`. Raw dataclass keys
+(e.g. `coder_llm_max_tokens`) work too.
+
+**Validation:** unknown keys are rejected with the full valid-key list; values are
+type-checked (bool/int/list) and enum-checked (`provider`, `autonomy`); token budgets must
+be positive. `jack config set` refuses to run if `settings.json` is malformed (so it can't
+silently clobber your file — fix it or use `jack config edit`), and `jack config edit`
+won't apply changes if you save invalid JSON.
+
+## Providers & API keys
+
+Jack is provider-agnostic. Pick one with `jack config set provider …`; the key (if any) is
+read from the keyring under a fixed account name. Only these secret names are accepted:
+`anthropic_api_key`, `openai_api_key`, `web_api_key`.
+
+| Provider | Set it with | Keyring account | Notes |
+|---|---|---|---|
+| **Anthropic** (cloud) | `jack config set provider anthropic` + `jack config set model claude-sonnet-5` | `anthropic_api_key` | Sends conversation + tool schemas/results to Anthropic; actions still run locally. |
+| **OpenAI-compatible** | `jack config set provider openai` + `jack config set openai_base_url <url>` + `jack config set model <id>` | `openai_api_key` | Any `chat.completions` endpoint (OpenAI, Groq, Together, Gemini's compat URL, local vLLM/LM Studio). Blank `openai_base_url` = OpenAI default. Local servers ignore the key. |
+| **Ollama** (local, default) | `jack config set provider ollama` + `jack config set model qwen3:8b` | — | Fully on-device; Ollama must be running. |
+
+Set a key with `jack config set-key <provider>`, or directly via the keyring:
+
+```bash
+keyring set autobot anthropic_api_key      # cross-platform (needs the venv active)
+# macOS one-liner:
+security add-generic-password -U -s autobot -a anthropic_api_key -w 'sk-ant-…'
 ```
 
 The GUI Settings view can also store keys (it posts to the daemon's `/secret`
@@ -68,9 +92,9 @@ endpoint) — same keyring, same effect.
 
 ## Autonomy modes
 
-The `coding_autonomy` setting (or `/autonomy <value>` in-session) is a progressive-trust
-dial. **All three** refuse blocklisted commands, stay within the cwd jail, and take a
-git checkpoint at the start of every turn (so nothing is unrecoverable).
+The `coding_autonomy` setting (`jack config set autonomy <value>`, or `/autonomy` in-session)
+is a progressive-trust dial. **All three** refuse blocklisted commands, stay within the cwd
+jail, and take a git checkpoint at the start of every turn (so nothing is unrecoverable).
 
 | Mode | Behaviour |
 |---|---|
@@ -120,7 +144,7 @@ Use `/sessions` to list, `/sessions resume <id>` to continue, and `/new` to star
 
 ## Configuration reference (coder-relevant)
 
-Edit `~/.autobot/settings.json` (defaults come from `config.py`):
+Set these with `jack config set <key> <value>` (defaults come from `config.py`):
 
 | Key | Default | Purpose |
 |---|---|---|

@@ -340,12 +340,19 @@ def _read_settings(path: str | Path) -> dict[str, Any]:
 
 
 def write_settings(data: dict[str, Any], path: str | Path = DEFAULT_SETTINGS_PATH) -> None:
-    """Persist ``data`` to the settings file (0600), creating parents as needed."""
+    """Persist ``data`` to the settings file (0600) atomically (temp write + ``os.replace``).
+
+    Writing to a sibling temp file and renaming means an interrupted or crashing write can
+    never leave a half-written ``settings.json`` behind — readers see either the old file
+    or the complete new one.
+    """
     p = Path(path).expanduser()
     p.parent.mkdir(parents=True, exist_ok=True)
-    p.write_text(json.dumps(data, indent=2, sort_keys=True), encoding="utf-8")
+    tmp = p.with_name(p.name + ".tmp")
+    tmp.write_text(json.dumps(data, indent=2, sort_keys=True), encoding="utf-8")
     with contextlib.suppress(OSError):  # best effort on exotic filesystems
-        p.chmod(0o600)
+        tmp.chmod(0o600)
+    tmp.replace(p)  # atomic rename on POSIX and Windows
 
 
 def _coerce(value: Any, default: Any) -> Any:

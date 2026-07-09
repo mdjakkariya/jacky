@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from autobot.config import Settings, write_settings
+from autobot.config import Settings, read_settings, write_settings
 
 
 def test_defaults_are_english_only_and_sensible() -> None:
@@ -138,3 +138,11 @@ def test_embedding_model_overlays_from_file(tmp_path: Path) -> None:
     path = tmp_path / "settings.json"
     write_settings({"embedding_model": "mxbai-embed-large"}, path)
     assert Settings.load(path).embedding_model == "mxbai-embed-large"
+
+
+def test_write_settings_roundtrips_and_leaves_no_temp(tmp_path: Path) -> None:
+    p = tmp_path / "settings.json"
+    write_settings({"llm_provider": "anthropic"}, p)
+    assert read_settings(p) == {"llm_provider": "anthropic"}
+    # atomic write must not leave a stray temp file behind
+    assert [f.name for f in tmp_path.iterdir()] == ["settings.json"]

@@ -45,6 +45,25 @@ def post_settings(
         return {"ok": False, "error": str(exc)}
 
 
+def get_settings(base_url: str, *, get: Callable[[str, float], Any] = _get_json) -> dict[str, Any]:
+    """Fetch the daemon's effective settings (``GET /settings``); ``{}`` on any failure."""
+    try:
+        data = get(f"{base_url}/settings", 10.0)
+    except (OSError, urllib.error.URLError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def post_secret(
+    base_url: str, name: str, value: str, *, post: Callable[..., dict[str, Any]] = _post
+) -> dict[str, Any]:
+    """Store/clear an API key via ``POST /secret`` (daemon writes the keyring + reloads)."""
+    try:
+        return post(f"{base_url}/secret", {"name": name, "value": value}, 10.0)
+    except (OSError, urllib.error.URLError) as exc:
+        return {"ok": False, "error": str(exc)}
+
+
 def get_models(base_url: str, *, get: Callable[[str, float], Any] = _get_json) -> list[str]:
     """Installed local models (``GET /models``); ``[]`` on any failure."""
     try:
