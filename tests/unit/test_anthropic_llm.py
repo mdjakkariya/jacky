@@ -1006,6 +1006,28 @@ def test_send_omits_temperature() -> None:
     assert "temperature" not in model._client.messages.calls[0]
 
 
+def test_empty_text_block_dropped_from_recorded_assistant_turn() -> None:
+    # Sonnet 5 / Opus 4.7+ can emit an empty leading text block alongside tool_use;
+    # replaying it 400s ("text content blocks must be non-empty"), so it must be filtered.
+    resp = SimpleNamespace(
+        content=[
+            _block(type="text", text=""),
+            _block(type="tool_use", id="t1", name="read_file", input={"path": "x"}),
+        ],
+        usage=SimpleNamespace(input_tokens=5, output_tokens=2),
+    )
+    model = AnthropicLanguageModel(
+        Settings(llm_provider="anthropic"), _registry(), client=FakeClient([resp])
+    )
+    session = _fresh_session()
+    model.begin_turn(session, "hi")
+    model.send(session)
+    blocks = session.history[-1]["content"]
+    assert session.history[-1]["role"] == "assistant"
+    assert all(not (b["type"] == "text" and b["text"] == "") for b in blocks)
+    assert any(b["type"] == "tool_use" for b in blocks)  # tool_use preserved
+
+
 def test_complete_omits_temperature() -> None:
     resp = SimpleNamespace(
         content=[_block(type="text", text="done")],

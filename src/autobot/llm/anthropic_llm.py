@@ -320,6 +320,22 @@ def _block_to_dict(block: Any) -> dict[str, Any]:
     return {"type": "text", "text": _get(block, "text") or ""}
 
 
+def _assistant_blocks(content: Any) -> list[dict[str, Any]]:
+    """Convert response content blocks to history dicts, dropping empty text blocks.
+
+    Sonnet 5 / Opus 4.7+ can emit an empty leading ``text`` block alongside ``tool_use``.
+    Replaying an empty text block 400s (``text content blocks must be non-empty``), so
+    filter them out; ``tool_use`` and non-empty ``text`` blocks are kept.
+    """
+    out: list[dict[str, Any]] = []
+    for b in content:
+        d = _block_to_dict(b)
+        if d["type"] == "text" and not d["text"].strip():
+            continue
+        out.append(d)
+    return out
+
+
 def with_cache_breakpoint(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Copy ``messages`` with an ephemeral cache breakpoint on the very last block.
 
@@ -772,9 +788,7 @@ class AnthropicLanguageModel:
         self._cache_write += cw
         self._prompt_total = in_tok + cr + cw
         content = _get(resp, "content") or []
-        session.history.append(
-            {"role": "assistant", "content": [_block_to_dict(b) for b in content]}
-        )
+        session.history.append({"role": "assistant", "content": _assistant_blocks(content)})
         self._last_content = content  # kept so record_results can pair by block id
         calls = parse_tool_uses(content)
         return ChatResponse(text=text_from_content(content), tool_calls=calls)
@@ -815,9 +829,7 @@ class AnthropicLanguageModel:
             _log.warning("cloud forced final answer failed")
             return "I hit my step limit; partial changes are saved."
         content = _get(resp, "content") or []
-        session.history.append(
-            {"role": "assistant", "content": [_block_to_dict(b) for b in content]}
-        )
+        session.history.append({"role": "assistant", "content": _assistant_blocks(content)})
         return text_from_content(content) or "I hit my step limit; partial changes are saved."
 
     def finalize_turn(self, session: Session) -> list[dict[str, Any]]:
