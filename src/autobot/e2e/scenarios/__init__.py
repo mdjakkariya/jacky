@@ -8,6 +8,7 @@ from autobot.e2e.scenario import (
     Expect,
     FileContains,
     FileExists,
+    FileLacks,
     Scenario,
     ScreenContains,
     Send,
@@ -63,6 +64,23 @@ ALL: tuple[Scenario, ...] = (
         task="create calc.py with add(a, b) and a test test_calc.py, then run the test",
         success_criteria="Created calc.py and a passing test; the run reported the test passing.",
         checks=(FileExists("calc.py"), FileExists("test_calc.py")),
+    ),
+    Scenario(
+        name="undo-edit",
+        autonomy="auto",
+        strategy="scripted",
+        task="edit a file then undo it",
+        success_criteria="Edited foo.py to add a marker line, then /undo restored the "
+        "original content (the marker is gone).",
+        seed_files={"foo.py": "ORIGINAL = 1\n"},
+        steps=(
+            Send("add a line '# marker' to the end of foo.py"),
+            Expect("idle_prompt", _TURN),
+            Send("/undo"),
+            Expect("idle_prompt", _CMD),
+        ),
+        # After undo the file must be back to its seed: still has ORIGINAL, marker removed.
+        checks=(FileContains("foo.py", "ORIGINAL"), FileLacks("foo.py", "# marker")),
     ),
     Scenario(
         name="slash-and-chat",

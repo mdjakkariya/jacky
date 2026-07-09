@@ -13,7 +13,7 @@ import re
 from pathlib import Path
 from typing import Any
 
-from autobot.e2e.scenario import Check, FileContains, FileExists, ScreenContains
+from autobot.e2e.scenario import Check, FileContains, FileExists, FileLacks, ScreenContains
 from autobot.logging_setup import get_logger
 
 _log = get_logger("e2e")
@@ -39,6 +39,10 @@ def run_checks(checks: list[Check], workspace: Path, screen: str) -> list[dict[s
             p = workspace / c.path
             ok = p.exists() and c.needle in p.read_text(encoding="utf-8", errors="replace")
             out.append({"check": "FileContains", "path": c.path, "needle": c.needle, "ok": ok})
+        elif isinstance(c, FileLacks):
+            p = workspace / c.path
+            ok = p.exists() and c.needle not in p.read_text(encoding="utf-8", errors="replace")
+            out.append({"check": "FileLacks", "path": c.path, "needle": c.needle, "ok": ok})
         elif isinstance(c, ScreenContains):
             out.append({"check": "ScreenContains", "needle": c.needle, "ok": c.needle in screen})
     return out

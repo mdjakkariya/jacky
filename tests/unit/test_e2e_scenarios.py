@@ -9,13 +9,14 @@ pytest.importorskip("pyte")
 from autobot.e2e import scenarios
 
 
-def test_five_seed_scenarios_valid() -> None:
+def test_seed_scenarios_valid() -> None:
     names = {s.name for s in scenarios.all_scenarios()}
     assert {
         "create-file",
         "run-command",
         "edit-file",
         "build-small-thing",
+        "undo-edit",
         "slash-and-chat",
     } <= names
     for s in scenarios.all_scenarios():

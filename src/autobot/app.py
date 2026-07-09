@@ -325,11 +325,18 @@ def _build_llm(
 
     from autobot.tools.access import active_policy
 
-    _pol = active_policy()
-    cwd = str(_pol.cwd) if _pol is not None else str(Path.cwd())
+    def _coder_cwd() -> str:
+        # Read the coder's active folder LIVE: it is set/changed after the client connects,
+        # so a value captured now would be stale. Checkpoints must be created in the same
+        # live cwd that `/undo` restores from (see the undo wiring below), or the ref won't
+        # resolve. Falls back to the launch cwd before any policy is active.
+        pol = active_policy()
+        return str(pol.cwd) if pol is not None else str(Path.cwd())
+
+    cwd = _coder_cwd()  # initial cwd for the harness (session/display); checkpoints read live
 
     def _snapshot(label: str) -> None:
-        create_checkpoint(cwd, label)
+        create_checkpoint(_coder_cwd(), label)
 
     checkpoint = _snapshot if settings.checkpoints else None
     if settings.llm_provider == "anthropic":
@@ -753,13 +760,14 @@ def build(
         from autobot.agent.coder_turn import CoderTurnDriver
         from autobot.orchestrator.checkpoint import list_checkpoints, restore_checkpoint
 
-        # Same cwd the checkpoint snapshot hook closes over inside `_build_llm` (both
-        # read the same `active_policy()` singleton set up above), so `/undo` restores
-        # exactly what the per-turn checkpoint saved.
-        cwd = str(access_policy.cwd)
-
+        # Read `access_policy.cwd` LIVE inside each call — it is the same policy object the
+        # checkpoint snapshot hook reads via `active_policy()`, but the coder's cwd is set
+        # after the client connects, so capturing it here (at build time) would point `/undo`
+        # at the pre-connect cwd while checkpoints land in the live one — the ref would not
+        # resolve. Reading live keeps create and restore on the same repo.
         def _undo_latest() -> tuple[bool, str]:
             """Restore the newest checkpoint for the coder's cwd (used by /undo)."""
+            cwd = str(access_policy.cwd)
             cps = list_checkpoints(cwd)
             if not cps:
                 return False, "Nothing to undo."
@@ -767,7 +775,8 @@ def build(
 
         def _checkpoint_dicts() -> list[dict[str, str]]:
             """Checkpoints as plain dicts for the daemon/CLI (used by /undo list)."""
-            return [{"ref": c.ref, "sha": c.sha, "label": c.label} for c in list_checkpoints(cwd)]
+            cps = list_checkpoints(str(access_policy.cwd))
+            return [{"ref": c.ref, "sha": c.sha, "label": c.label} for c in cps]
 
         coder_driver = CoderTurnDriver(
             llm,

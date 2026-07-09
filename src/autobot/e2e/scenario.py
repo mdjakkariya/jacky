@@ -66,13 +66,25 @@ class FileContains:
 
 
 @dataclass(frozen=True, slots=True)
+class FileLacks:
+    """Deterministic check: a workspace file exists but does NOT contain ``needle``.
+
+    The anchor for reversions (e.g. ``/undo``): a missing file is *not* a pass, since that
+    proves nothing about whether the edit was rolled back.
+    """
+
+    path: str
+    needle: str
+
+
+@dataclass(frozen=True, slots=True)
 class ScreenContains:
     """Deterministic check: the final rendered screen contains ``needle``."""
 
     needle: str
 
 
-Check = FileExists | FileContains | ScreenContains
+Check = FileExists | FileContains | FileLacks | ScreenContains
 
 
 @dataclass(frozen=True, slots=True)

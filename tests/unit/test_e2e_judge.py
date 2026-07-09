@@ -9,7 +9,7 @@ import pytest
 pytest.importorskip("pyte")
 
 from autobot.e2e.judge import build_judge_prompt, parse_verdict, run_checks
-from autobot.e2e.scenario import Check, FileContains, FileExists, ScreenContains
+from autobot.e2e.scenario import Check, FileContains, FileExists, FileLacks, ScreenContains
 
 
 def test_run_checks_reports_each(tmp_path: Path) -> None:
@@ -18,11 +18,14 @@ def test_run_checks_reports_each(tmp_path: Path) -> None:
         FileExists("a.py"),
         FileExists("missing.py"),
         FileContains("a.py", "print"),
+        FileLacks("a.py", "TODO"),  # present file, needle absent → pass
+        FileLacks("a.py", "print"),  # present file, needle present → fail
+        FileLacks("missing.py", "x"),  # missing file → fail (proves nothing about a revert)
         ScreenContains("done"),
     ]
     res = run_checks(checks, tmp_path, "⏺ done")
     oks = [r["ok"] for r in res]
-    assert oks == [True, False, True, True]
+    assert oks == [True, False, True, True, False, False, True]
 
 
 def test_parse_verdict_handles_fenced_json() -> None:
