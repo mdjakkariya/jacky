@@ -545,7 +545,8 @@ class AnthropicLanguageModel:
             resp = self._client.messages.create(
                 model=self._settings.anthropic_model,
                 max_tokens=self._settings.anthropic_max_tokens,
-                temperature=self._settings.llm_temperature,
+                # temperature intentionally omitted: newer Claude models (Sonnet 5 /
+                # Opus 4.7+ / Fable 5) reject it with a 400. Steer via prompt/effort.
                 system=_SUMMARIZE_INSTRUCTION,
                 messages=[{"role": "user", "content": body}],
             )
@@ -649,7 +650,8 @@ class AnthropicLanguageModel:
             kwargs: dict[str, Any] = {
                 "model": self._settings.anthropic_model,
                 "max_tokens": self._settings.anthropic_max_tokens,
-                "temperature": self._settings.llm_temperature,
+                # temperature intentionally omitted: newer Claude models (Sonnet 5 /
+                # Opus 4.7+ / Fable 5) reject it with a 400. Steer via prompt/effort.
                 "system": self._system(session),
                 "messages": with_cache_breakpoint(session.history),
                 "tools": tools,
@@ -804,7 +806,8 @@ class AnthropicLanguageModel:
             resp = self._client.messages.create(
                 model=self._settings.anthropic_model,
                 max_tokens=self._settings.anthropic_max_tokens,
-                temperature=self._settings.llm_temperature,
+                # temperature intentionally omitted: newer Claude models (Sonnet 5 /
+                # Opus 4.7+ / Fable 5) reject it with a 400. Steer via prompt/effort.
                 system=self._system(session),
                 messages=with_cache_breakpoint(session.history),
             )
@@ -884,15 +887,16 @@ class AnthropicLanguageModel:
 
         Args:
             prompt: The full prompt to send.
-            temperature: Sampling temperature; 0.0 for deterministic output.
+            temperature: Accepted for interface compatibility but NOT sent — newer Claude
+                models (Sonnet 5 / Opus 4.7+ / Fable 5) reject ``temperature`` with a 400.
 
         Returns:
             The model's reply text, stripped of leading/trailing whitespace.
         """
+        _ = temperature  # accepted for the LanguageModel interface; not sent (see above)
         resp = self._client.messages.create(
             model=self._settings.anthropic_model,
             max_tokens=self._settings.anthropic_max_tokens,
-            temperature=temperature,
             messages=[{"role": "user", "content": prompt}],
         )
         return "".join(

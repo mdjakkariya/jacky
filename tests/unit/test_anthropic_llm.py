@@ -988,3 +988,31 @@ def test_send_without_on_event_uses_blocking_create_not_stream() -> None:
     result = model.send(session)
     assert result.text == "Hi there."
     assert len(model._client.messages.calls) == 1
+
+
+def test_send_omits_temperature() -> None:
+    # Sonnet 5 / Opus 4.7+ / Fable 5 reject `temperature` with a 400, so the adapter must
+    # not send it (steer via prompt/effort instead).
+    resp = SimpleNamespace(
+        content=[_block(type="text", text="ok")],
+        usage=SimpleNamespace(input_tokens=5, output_tokens=1),
+    )
+    model = AnthropicLanguageModel(
+        Settings(llm_provider="anthropic"), _registry(), client=FakeClient([resp])
+    )
+    session = _fresh_session()
+    model.begin_turn(session, "hi")
+    model.send(session)
+    assert "temperature" not in model._client.messages.calls[0]
+
+
+def test_complete_omits_temperature() -> None:
+    resp = SimpleNamespace(
+        content=[_block(type="text", text="done")],
+        usage=SimpleNamespace(input_tokens=3, output_tokens=1),
+    )
+    model = AnthropicLanguageModel(
+        Settings(llm_provider="anthropic"), _registry(), client=FakeClient([resp])
+    )
+    assert model.complete("hi") == "done"
+    assert "temperature" not in model._client.messages.calls[0]
