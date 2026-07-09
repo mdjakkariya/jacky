@@ -160,6 +160,9 @@ dev = [
     { name = "pytest-cov" },
     { name = "ruff" },
 ]
+e2e = [
+    { name = "pyte" },
+]
 freeze = [
     { name = "pyinstaller" },
 ]
@@ -206,6 +209,7 @@ requires-dist = [
     { name = "pyobjc-framework-applicationservices", marker = "sys_platform == 'darwin' and extra == 'aec'", specifier = ">=10.0" },
     { name = "pyobjc-framework-avfoundation", marker = "sys_platform == 'darwin' and extra == 'aec'", specifier = ">=10.0" },
     { name = "pyobjc-framework-coreservices", marker = "sys_platform == 'darwin' and extra == 'aec'", specifier = ">=10.0" },
+    { name = "pyte", marker = "extra == 'e2e'", specifier = ">=0.8" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.0" },
     { name = "pytest-asyncio", marker = "extra == 'dev'", specifier = ">=0.24" },
     { name = "pytest-cov", marker = "extra == 'dev'", specifier = ">=5.0" },
@@ -216,7 +220,7 @@ requires-dist = [
     { name = "tree-sitter-language-pack", marker = "extra == 'code'", specifier = ">=0.1" },
     { name = "uvicorn", extras = ["standard"], marker = "extra == 'daemon'", specifier = ">=0.29" },
 ]
-provides-extras = ["wake", "tts", "all", "web", "daemon", "cloud", "whispercpp", "mcp", "aec", "freeze", "code", "tui", "dev"]
+provides-extras = ["wake", "tts", "all", "web", "daemon", "cloud", "whispercpp", "mcp", "aec", "freeze", "code", "tui", "e2e", "dev"]
 
 [[package]]
 name = "av"
@@ -2286,6 +2290,18 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/e2/d6/b917e4b63d72ea84a27121076f3033f23f6497c0e6ce8d304766c899897f/pyobjc_framework_quartz-12.2.1-cp314-cp314t-macosx_10_15_universal2.whl", hash = "sha256:8105c98b798f2bf81c05c54bddeeadbf62f0b5dfec13bd6e719dd2cdf7e1cddf", size = 224717, upload-time = "2026-06-19T16:16:10.215Z" },
     { url = "https://files.pythonhosted.org/packages/04/e2/f3c1ed3228f7430ef5ade23db6f1fcbae99290f177ce5653348fd9e05f4d/pyobjc_framework_quartz-12.2.1-cp315-cp315-macosx_10_15_universal2.whl", hash = "sha256:bbc214f1a216b5d3651bc832d0ac4589f029f3f37cd6cbb370aac12a7c77942c", size = 219825, upload-time = "2026-06-19T16:16:11.433Z" },
     { url = "https://files.pythonhosted.org/packages/66/2a/2c99a5ad2fe0a11600ea123b8e9a08ff138fcb2ad1e13e376f4bd4aa1d96/pyobjc_framework_quartz-12.2.1-cp315-cp315t-macosx_10_15_universal2.whl", hash = "sha256:ca61624a0b0e6286d8a0f97f47eb9011e4e81e9a339db436d48af527e7065bb1", size = 224770, upload-time = "2026-06-19T16:16:13.035Z" },
+]
+
+[[package]]
+name = "pyte"
+version = "0.8.2"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "wcwidth" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/ab/ab/b599762933eba04de7dc5b31ae083112a6c9a9db15b01d3109ad797559d9/pyte-0.8.2.tar.gz", hash = "sha256:5af970e843fa96a97149d64e170c984721f20e52227a2f57f0a54207f08f083f", size = 92301, upload-time = "2023-11-12T09:33:43.217Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/59/d0/bb522283b90853afbf506cd5b71c650cf708829914efd0003d615cf426cd/pyte-0.8.2-py3-none-any.whl", hash = "sha256:85db42a35798a5aafa96ac4d8da78b090b2c933248819157fc0e6f78876a0135", size = 31627, upload-time = "2023-11-12T09:33:41.096Z" },
 ]
 
 [[package]]
