@@ -101,6 +101,19 @@ The coder operates in **the directory you launch `jack` in** (its workspace), an
 `workspace: <path>` at startup so it's always clear where changes land. All file tools are
 jailed to that directory. Pass `--workspace <path>` to point elsewhere.
 
+### Workspace trust
+
+The first time you use a folder, Jack asks **"Trust this folder? Jack can read, write, and
+run commands in it."** — you only get read/write/run access after you say yes, and the
+decision is remembered (in `~/.autobot/trust.json`). This mirrors VS Code / Claude Code
+workspace trust. Non-interactively (piped/CI), an untrusted folder is refused with a hint to
+run `jack trust`. Trust a folder up front (or in a script) with:
+
+```bash
+jack trust            # trust the current directory
+jack trust <path>     # trust a specific directory
+```
+
 Today there is **one active coder workspace at a time**: launching `jack` from a different
 directory stops the running daemon and restarts it bound to the new one (you'll see it
 re-spawn). Per-workspace parallel daemons — running two projects at once without

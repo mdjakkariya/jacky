@@ -47,6 +47,40 @@ def resolve_workspace(cwd: Path, arg: str | None) -> Path:
     return (Path(arg).expanduser() if arg else cwd).resolve()
 
 
+def _trust_workspace(ws: Path) -> None:
+    """Mark ``ws`` trusted and create its ``.jack/`` home."""
+    from autobot.trust import add_trust
+
+    add_trust(ws)
+    (ws / ".jack").mkdir(parents=True, exist_ok=True)
+
+
+def _ensure_trusted(ws: Path) -> bool:
+    """Prompt once to trust ``ws`` (persisting on yes). Return True if it's OK to proceed.
+
+    An untrusted folder is never acted in: interactively we ask; non-interactively we refuse
+    with a hint to run ``jack trust`` (so a piped/CI run can't silently act in an untrusted
+    directory).
+    """
+    from autobot.trust import is_trusted
+
+    if is_trusted(ws):
+        return True
+    if not sys.stdin.isatty():
+        print(
+            f"{ws} is not a trusted workspace. Run `jack trust` here to let Jack read, "
+            "write, and run commands in it.",
+            file=sys.stderr,
+        )
+        return False
+    answer = input(f"Trust this folder? Jack can read, write, and run commands in\n  {ws}\n[y/N] ")
+    if answer.strip().lower().startswith("y"):
+        _trust_workspace(ws)
+        return True
+    print("Not trusted — aborting.", file=sys.stderr)
+    return False
+
+
 def _launch_editor(path: str) -> int:
     """Open ``path`` in ``$EDITOR`` (fallback: ``open -t`` on macOS)."""
     editor = os.environ.get("EDITOR")
@@ -87,6 +121,11 @@ def main(argv: list[str] | None = None) -> int:
         stopped = stop_daemon(port=_CODER_PORT)
         print("coder daemon stopped." if stopped else "no coder daemon was running.")
         return 0
+    if argv and argv[0] == "trust":
+        target = resolve_workspace(Path.cwd(), argv[1] if len(argv) > 1 else None)
+        _trust_workspace(target)
+        print(f"trusted: {target}")
+        return 0
     parser = argparse.ArgumentParser(prog="jack", description="Jack coding agent (terminal).")
     parser.add_argument("text", nargs="*", help="a coding request; omit to open the TUI")
     parser.add_argument("--port", type=int, default=_CODER_PORT, help="coder daemon port")
@@ -94,6 +133,8 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     base_url = f"http://127.0.0.1:{args.port}"
     ws = resolve_workspace(Path.cwd(), args.workspace)
+    if not _ensure_trusted(ws):
+        return 1
     try:
         ensure_daemon(base_url, args.port, workspace=str(ws))
         print(f"workspace: {ws}", file=sys.stderr)

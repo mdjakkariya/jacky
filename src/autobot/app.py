@@ -524,8 +524,17 @@ def build(
         if on_workspace is not None:
             on_workspace(str(p), p.name)
 
+    # The coder acts only in a trusted workspace (an untrusted one denies all file ops until
+    # the user trusts it — see autobot.trust). The assistant's sandbox is always writable.
+    from autobot.trust import is_trusted
+
+    workspace_trusted = is_trusted(workspace_root) if coder else True
     access_policy = AccessPolicy(
-        settings.access_store, workspace_root, on_cwd_change=_cwd_changed, restore_cwd=not coder
+        settings.access_store,
+        workspace_root,
+        on_cwd_change=_cwd_changed,
+        restore_cwd=not coder,
+        workspace_trusted=workspace_trusted,
     )
     set_active_policy(access_policy)  # so the Settings access endpoints can manage grants
 

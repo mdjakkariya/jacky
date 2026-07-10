@@ -9,6 +9,12 @@ import pytest
 import autobot.cli as cli
 
 
+@pytest.fixture(autouse=True)
+def _auto_trust(monkeypatch: pytest.MonkeyPatch) -> None:
+    """These tests exercise CLI plumbing, not the trust gate — treat the workspace trusted."""
+    monkeypatch.setattr(cli, "_ensure_trusted", lambda ws: True)
+
+
 def test_daemon_up_probe() -> None:
     # is_daemon_up returns True when the readiness probe succeeds, False on connection error.
     assert cli.is_daemon_up("http://x", probe=lambda url, timeout: True) is True

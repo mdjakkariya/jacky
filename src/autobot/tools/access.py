@@ -127,13 +127,16 @@ class AccessPolicy:
         on_cwd_change: Callable[[Path], None] | None = None,
         *,
         restore_cwd: bool = True,
+        workspace_trusted: bool = True,
     ) -> None:
         self._store = Path(store_path).expanduser()
-        # The workspace is always available read-write and is the default cwd.
+        # The workspace is the default cwd; it is read-write only when trusted (an
+        # untrusted workspace is not a root, so every file op raises NeedsAccessError).
         self._workspace = Path(workspace_root).expanduser().resolve()
         self._workspace.mkdir(parents=True, exist_ok=True)  # was the Sandbox's job
         self._on_cwd_change = on_cwd_change
         self._restore_cwd = restore_cwd
+        self._workspace_trusted = workspace_trusted
         self._lock = threading.RLock()
         self._grants: dict[Path, Mode] = {}
         self._cwd = self._workspace
@@ -173,9 +176,10 @@ class AccessPolicy:
 
     # --- queries / mutations ---------------------------------------------
     def _roots(self) -> dict[Path, Mode]:
-        """All effective roots, including the always-on workspace (read-write)."""
+        """All effective roots, plus the workspace (read-write) when it is trusted."""
         roots = dict(self._grants)
-        roots[self._workspace] = Mode.WRITE
+        if self._workspace_trusted:
+            roots[self._workspace] = Mode.WRITE
         return roots
 
     @staticmethod
