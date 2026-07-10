@@ -6,7 +6,10 @@ so it runs the same on Linux, macOS, and Windows.
 
 from __future__ import annotations
 
+import contextlib
 import json
+import os
+import signal
 import subprocess
 import sys
 import time
@@ -15,6 +18,8 @@ import urllib.request
 from collections.abc import Callable, Iterable, Iterator
 from pathlib import Path
 from typing import Any
+
+from autobot.daemon import pidfile
 
 _CODER_PORT = 8766  # coder daemon port (kept off the assistant daemon's 8765)
 _SPAWN_TIMEOUT_S = 30.0
@@ -237,19 +242,82 @@ def _log_tail(path: Path, limit: int = 2000) -> str:  # pragma: no cover - trivi
         return "(no output captured)"
 
 
-def ensure_daemon(base_url: str, port: int = _CODER_PORT) -> None:  # pragma: no cover
-    """Start a coder-profile daemon on ``port`` if one isn't already answering (spawns it).
+def workspace_mismatch(running: str, requested: str) -> bool:
+    """True if two workspace paths resolve to different directories."""
+    return Path(running).expanduser().resolve() != Path(requested).expanduser().resolve()
 
-    Raises ``RuntimeError`` (with the log tail) if the daemon exits before it answers, or
-    ``TimeoutError`` if it never answers.
+
+def _pid_on_port(port: int) -> int | None:  # pragma: no cover - POSIX process lookup
+    """The PID listening on ``port`` via ``lsof`` (POSIX only), or None."""
+    if sys.platform == "win32":
+        return None
+    try:
+        out = subprocess.run(["lsof", "-ti", f":{port}"], capture_output=True, text=True, timeout=5)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    pids = [int(x) for x in out.stdout.split() if x.strip().isdigit()]
+    return pids[0] if pids else None
+
+
+def stop_daemon(
+    *,
+    port: int | None = None,
+    pidfile_path: Path = pidfile.DEFAULT_PIDFILE,
+    kill: Callable[[int, int], None] = os.kill,
+    pid_on_port: Callable[[int], int | None] = _pid_on_port,
+) -> bool:
+    """SIGTERM the coder daemon and clear its pid file. False if none could be found.
+
+    Prefers the pid recorded in the pid file; falls back to the process listening on
+    ``port`` (so a daemon from before this version — which wrote no pid file — can still
+    be stopped, e.g. after upgrading Jack).
     """
-    if is_daemon_up(base_url):
-        return
+    info = pidfile.read_pidfile(path=pidfile_path)
+    pid = info.get("pid") if isinstance(info, dict) else None
+    if not isinstance(pid, int) and port is not None:
+        pid = pid_on_port(port)
+    if not isinstance(pid, int):
+        return False
+    with contextlib.suppress(ProcessLookupError, PermissionError):
+        kill(pid, signal.SIGTERM)
+    pidfile.remove_pidfile(path=pidfile_path)
+    return True
+
+
+def _running_workspace(base_url: str) -> str | None:  # pragma: no cover - real network
+    """The workspace the live daemon reports (via GET /workspace), or None."""
+    try:
+        data = _get_json(f"{base_url}/workspace", 5.0)
+    except (OSError, urllib.error.URLError):
+        return None
+    path = data.get("path") if isinstance(data, dict) else None
+    return path if isinstance(path, str) and path else None
+
+
+def _await_down(base_url: str, timeout: float = 5.0) -> None:  # pragma: no cover
+    """Wait until the daemon stops answering (after a stop), or ``timeout`` elapses."""
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline and is_daemon_up(base_url):
+        time.sleep(0.2)
+
+
+def _spawn_daemon(base_url: str, port: int, workspace: str) -> None:  # pragma: no cover
+    """Spawn a coder daemon bound to ``workspace`` and wait for it to answer."""
     log_path = Path.home() / ".autobot" / "logs" / "jack-coder-daemon.log"
     log_path.parent.mkdir(parents=True, exist_ok=True)
     with log_path.open("a", encoding="utf-8") as log:
         proc = subprocess.Popen(  # fixed argv, our own module
-            [sys.executable, "-m", "autobot.daemon", "--profile", "coder", "--port", str(port)],
+            [
+                sys.executable,
+                "-m",
+                "autobot.daemon",
+                "--profile",
+                "coder",
+                "--port",
+                str(port),
+                "--workspace",
+                workspace,
+            ],
             stdout=log,
             stderr=subprocess.STDOUT,
         )
@@ -267,3 +335,22 @@ def ensure_daemon(base_url: str, port: int = _CODER_PORT) -> None:  # pragma: no
         f"the coder daemon didn't answer on {base_url} within {_SPAWN_TIMEOUT_S:.0f}s "
         f"(see {log_path})"
     )
+
+
+def ensure_daemon(  # pragma: no cover - spawns a real process
+    base_url: str, port: int = _CODER_PORT, *, workspace: str | None = None
+) -> None:
+    """Start (or re-point) a coder daemon bound to ``workspace`` on ``port``.
+
+    If a daemon is already answering but is bound to a *different* workspace, it is stopped
+    and a fresh one is spawned for the requested workspace (Phase 1: one active coder
+    workspace at a time). Raises ``RuntimeError``/``TimeoutError`` if the daemon can't start.
+    """
+    ws = str(Path(workspace).expanduser().resolve() if workspace else Path.cwd().resolve())
+    if is_daemon_up(base_url):
+        running = _running_workspace(base_url)
+        if running is not None and not workspace_mismatch(running, ws):
+            return  # already serving this workspace
+        stop_daemon(port=port)
+        _await_down(base_url)
+    _spawn_daemon(base_url, port, ws)

@@ -410,6 +410,18 @@ def _build_llm(
     )
 
 
+def resolve_workspace_root(coder: bool, workspace: str | None, sandbox_dir: str) -> Path:
+    """The directory the engine is jailed to: the coder's workspace, else the sandbox.
+
+    For the coder, an explicit ``workspace`` wins; otherwise the launch cwd. For the
+    assistant, always the configured sandbox.
+    """
+    if coder:
+        base = Path(workspace).expanduser() if workspace else Path.cwd()
+        return base.resolve()
+    return Path(sandbox_dir).expanduser().resolve()
+
+
 def build(
     settings: Settings | None = None,
     on_state: StateListener | None = None,
@@ -425,6 +437,7 @@ def build(
     on_workspace: Callable[[str, str], None] | None = None,
     on_mcp_event: Callable[[dict[str, object]], None] | None = None,
     on_meeting_event: Callable[[dict[str, object]], None] | None = None,
+    workspace: str | None = None,
 ) -> Orchestrator:
     """Compose a fully wired :class:`Orchestrator`.
 
@@ -468,6 +481,8 @@ def build(
         on_meeting_event: Optional callback invoked with the recorder's ``status()``
             dict at each meeting lifecycle transition; the daemon passes the bus's
             ``publish_meeting`` so connected clients receive live recording state.
+        workspace: Coder workspace directory to jail to (an explicit ``--workspace``,
+            else the launch cwd). Ignored for the assistant, which uses the sandbox.
 
     Returns:
         A ready-to-run orchestrator. Constructing it loads the STT model, opens
@@ -499,19 +514,19 @@ def build(
     # relative paths from the filesystem tools land in the right place.
     from pathlib import Path as _Path
 
-    if coder:
-        # A coder operates in — and is jailed to — the directory it was launched from
-        # (the daemon inherits the jack CLI's cwd), so `jack "…"` edits the current
-        # project, not the assistant's private scratch sandbox.
-        workspace_root = _Path.cwd().resolve()
-    else:
-        workspace_root = _Path(settings.sandbox_dir).expanduser().resolve()
+    # A coder operates in — and is jailed to — its workspace (an explicit --workspace, else
+    # the launch cwd), so `jack "…"` edits the current project, not a scratch sandbox. The
+    # coder pins its cwd to that workspace (restore_cwd=False) so a stale persisted folder
+    # can't override it; the assistant uses the sandbox and keeps restoring its cwd.
+    workspace_root = resolve_workspace_root(coder, workspace, settings.sandbox_dir)
 
     def _cwd_changed(p: _Path) -> None:
         if on_workspace is not None:
             on_workspace(str(p), p.name)
 
-    access_policy = AccessPolicy(settings.access_store, workspace_root, on_cwd_change=_cwd_changed)
+    access_policy = AccessPolicy(
+        settings.access_store, workspace_root, on_cwd_change=_cwd_changed, restore_cwd=not coder
+    )
     set_active_policy(access_policy)  # so the Settings access endpoints can manage grants
 
     # Phase 4: persistent personalization. The store is read into the prompt each

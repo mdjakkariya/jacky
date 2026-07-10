@@ -125,12 +125,15 @@ class AccessPolicy:
         store_path: str | Path,
         workspace_root: str | Path,
         on_cwd_change: Callable[[Path], None] | None = None,
+        *,
+        restore_cwd: bool = True,
     ) -> None:
         self._store = Path(store_path).expanduser()
         # The workspace is always available read-write and is the default cwd.
         self._workspace = Path(workspace_root).expanduser().resolve()
         self._workspace.mkdir(parents=True, exist_ok=True)  # was the Sandbox's job
         self._on_cwd_change = on_cwd_change
+        self._restore_cwd = restore_cwd
         self._lock = threading.RLock()
         self._grants: dict[Path, Mode] = {}
         self._cwd = self._workspace
@@ -150,7 +153,7 @@ class AccessPolicy:
                 continue
             self._grants[path] = mode
         saved = data.get("cwd")
-        if isinstance(saved, str):
+        if self._restore_cwd and isinstance(saved, str):
             cand = Path(saved).expanduser().resolve()
             # Only restore a cwd that still exists and is covered by a write grant
             # (the workspace always is); otherwise keep the default workspace.

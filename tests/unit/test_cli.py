@@ -145,7 +145,7 @@ def test_run_coder_turn_over_stream_plan_approve_done() -> None:
 
 def test_main_one_shot(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     seen_port: list[int] = []
-    monkeypatch.setattr(cli, "ensure_daemon", lambda base, port: seen_port.append(port))
+    monkeypatch.setattr(cli, "ensure_daemon", lambda base, port, **_k: seen_port.append(port))
     monkeypatch.setattr(cli, "run_coder_turn", lambda base, text, **k: "the reply")
     rc = cli.main(["--port", "9001", "do a thing"])
     assert rc == 0
@@ -156,7 +156,7 @@ def test_main_one_shot(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFi
 def test_main_returns_1_when_daemon_cannot_start(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    def boom(base: str, port: int) -> None:
+    def boom(base: str, port: int, **_k: object) -> None:
         raise TimeoutError("coder daemon did not start")
 
     monkeypatch.setattr(cli, "ensure_daemon", boom)
@@ -170,7 +170,7 @@ def test_main_surfaces_daemon_startup_error(
 ) -> None:
     # When the spawned daemon dies (e.g. missing extra), ensure_daemon raises RuntimeError
     # with the reason — main() must print it and exit 1, not hang or dump a traceback.
-    def boom(base: str, port: int) -> None:
+    def boom(base: str, port: int, **_k: object) -> None:
         raise RuntimeError("the coder daemon couldn't start (exit 1). ... needs the daemon extra")
 
     monkeypatch.setattr(cli, "ensure_daemon", boom)
@@ -183,7 +183,7 @@ def test_main_handles_ctrl_c_cleanly(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
     # Ctrl-C during startup/turn must exit cleanly (130), not raise KeyboardInterrupt.
-    def interrupted(base: str, port: int) -> None:
+    def interrupted(base: str, port: int, **_k: object) -> None:
         raise KeyboardInterrupt
 
     monkeypatch.setattr(cli, "ensure_daemon", interrupted)
@@ -196,7 +196,7 @@ def test_main_ctrl_c_sends_best_effort_reject(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
     # Ctrl-C best-effort unblocks a worker parked awaiting a reply by POSTing a reject.
-    def interrupted(base: str, port: int) -> None:
+    def interrupted(base: str, port: int, **_k: object) -> None:
         raise KeyboardInterrupt
 
     calls: list[tuple[str, dict[str, object]]] = []
@@ -217,7 +217,7 @@ def test_main_ctrl_c_swallows_post_failure(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
     # The best-effort reject must never change the exit path if it fails.
-    def interrupted(base: str, port: int) -> None:
+    def interrupted(base: str, port: int, **_k: object) -> None:
         raise KeyboardInterrupt
 
     def boom_post(url: str, payload: dict[str, object], timeout: float) -> dict[str, object]:
@@ -268,7 +268,7 @@ def test_stream_turn_maps_connection_error_to_error_event() -> None:
 
 def test_main_no_args_launches_tui(monkeypatch: pytest.MonkeyPatch) -> None:
     launched: list[tuple[str, str]] = []
-    monkeypatch.setattr(cli, "ensure_daemon", lambda base, port: None)
+    monkeypatch.setattr(cli, "ensure_daemon", lambda base, port, **_k: None)
     import autobot.cli.tui as tui
 
     monkeypatch.setattr(tui, "run", lambda base_url, cwd: launched.append((base_url, cwd)))
@@ -279,7 +279,7 @@ def test_main_no_args_launches_tui(monkeypatch: pytest.MonkeyPatch) -> None:
 def test_main_no_args_without_textual_prints_hint(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    monkeypatch.setattr(cli, "ensure_daemon", lambda base, port: None)
+    monkeypatch.setattr(cli, "ensure_daemon", lambda base, port, **_k: None)
 
     def raise_import(base_url: str, cwd: str) -> None:
         raise ImportError("No module named 'textual'")
@@ -294,7 +294,7 @@ def test_main_no_args_without_textual_prints_hint(
 def test_main_with_text_still_one_shot(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    monkeypatch.setattr(cli, "ensure_daemon", lambda base, port: None)
+    monkeypatch.setattr(cli, "ensure_daemon", lambda base, port, **_k: None)
     monkeypatch.setattr(cli, "run_coder_turn", lambda base, text, **k: "the reply")
     rc = cli.main(["do a thing"])
     assert rc == 0 and "the reply" in capsys.readouterr().out

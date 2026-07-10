@@ -35,6 +35,11 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="daemon WebSocket port (default: from settings.json/8765)",
     )
     parser.add_argument(
+        "--workspace",
+        default=None,
+        help="coder workspace directory to jail to (default: the launch cwd)",
+    )
+    parser.add_argument(
         "--demo",
         action="store_true",
         help="cycle orb states without the engine (no mic/model)",
@@ -69,7 +74,7 @@ def main() -> None:
     if args.demo:
         serve_demo(settings)
     else:
-        serve(settings)
+        serve(settings, workspace=args.workspace)
 
 
 if __name__ == "__main__":

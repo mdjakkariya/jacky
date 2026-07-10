@@ -89,6 +89,22 @@ endpoint) — same keyring, same effect.
   activity, plan/permission cards, and a working-tree diff after each change).
 - `jack "<request>"` — one-shot: run a single coding turn, print the reply, exit.
 - `jack --port <N>` — target a daemon on a non-default port.
+- `jack --workspace <path>` — work in `<path>` instead of the launch directory.
+- `jack restart` — stop the coder daemon (use it after upgrading Jack, or to switch it to
+  a different workspace). It stops the daemon by its recorded PID, falling back to whatever
+  process is listening on the coder port, so a daemon left over from an older version stops
+  too.
+
+### Workspace
+
+The coder operates in **the directory you launch `jack` in** (its workspace), and prints
+`workspace: <path>` at startup so it's always clear where changes land. All file tools are
+jailed to that directory. Pass `--workspace <path>` to point elsewhere.
+
+Today there is **one active coder workspace at a time**: launching `jack` from a different
+directory stops the running daemon and restarts it bound to the new one (you'll see it
+re-spawn). Per-workspace parallel daemons — running two projects at once without
+restarts — come in a later phase.
 
 ## Autonomy modes
 
