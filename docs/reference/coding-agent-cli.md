@@ -174,9 +174,11 @@ Type `/` in the TUI for completion. Client-side commands are instant; daemon-bac
 
 ## Sessions
 
-Sessions are workspace-scoped and persisted as JSONL transcripts under
-`~/.autobot/agent_sessions/` (see `agent_session_dir`), with per-session cost tracking.
-Use `/sessions` to list, `/sessions resume <id>` to continue, and `/new` to start fresh.
+Sessions are **per-workspace**: the coder stores JSONL transcripts under
+`<workspace>/.jack/sessions/`, so `/sessions`, resume, and history are scoped to the project
+you're in (git-ignored by the seeded `.jack/.gitignore`). Use `/sessions` to list,
+`/sessions resume <id>` to continue, and `/new` to start fresh. Checkpoints live in the
+workspace's own git repo, so they're isolated per project too.
 
 ## Configuration reference (coder-relevant)
 

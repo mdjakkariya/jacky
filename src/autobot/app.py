@@ -321,7 +321,6 @@ def _build_llm(
     """
     settings = _apply_profile_overrides(settings)
     log = get_logger("app")
-    store = SessionStore(settings.agent_session_dir)
 
     from autobot.tools.access import active_policy
 
@@ -334,6 +333,14 @@ def _build_llm(
         return str(pol.cwd) if pol is not None else str(Path.cwd())
 
     cwd = _coder_cwd()  # initial cwd for the harness (session/display); checkpoints read live
+    # Coder sessions live in the workspace (<cwd>/.jack/sessions) so history is per-project;
+    # the assistant uses the shared global directory.
+    _is_coder = settings.profile == "coder"
+    store = SessionStore(
+        resolve_session_dir(
+            _is_coder, cwd if _is_coder else None, settings.sandbox_dir, settings.agent_session_dir
+        )
+    )
 
     def _snapshot(label: str) -> None:
         create_checkpoint(_coder_cwd(), label)
@@ -420,6 +427,19 @@ def resolve_workspace_root(coder: bool, workspace: str | None, sandbox_dir: str)
         base = Path(workspace).expanduser() if workspace else Path.cwd()
         return base.resolve()
     return Path(sandbox_dir).expanduser().resolve()
+
+
+def resolve_session_dir(
+    coder: bool, workspace: str | None, sandbox_dir: str, agent_session_dir: str
+) -> str:
+    """Where session transcripts live: per-workspace (``.jack/sessions``) for the coder.
+
+    The coder scopes sessions to its workspace so ``/sessions`` and history are isolated
+    per project; the assistant uses the shared global directory.
+    """
+    if coder:
+        return str(resolve_workspace_root(True, workspace, sandbox_dir) / ".jack" / "sessions")
+    return agent_session_dir
 
 
 def build(
