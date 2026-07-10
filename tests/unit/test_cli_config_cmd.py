@@ -22,6 +22,7 @@ def _deps(tmp: Path, *, up: bool = False, notified: list[dict[str, Any]] | None 
 
     return Deps(
         settings_path=tmp / "settings.json",
+        global_path=tmp / "settings.json",  # reads merge from here (same file as the write target)
         base_url="http://x",
         is_up=lambda _b: up,
         notify_settings=notify_settings,
@@ -164,3 +165,29 @@ def test_jack_config_path_routes(capsys: pytest.CaptureFixture[str]) -> None:
     rc = cli_main(["config", "path"])
     out = capsys.readouterr().out
     assert rc == 0 and "settings.json" in out
+
+
+def test_set_writes_workspace_by_default_and_seeds_jack_gitignore(tmp_path: Path) -> None:
+    ws_settings = tmp_path / ".jack" / "settings.json"
+    d = _deps(tmp_path)
+    d.settings_path = ws_settings  # the CLI default write target is the workspace file
+    assert run("set", ["autonomy", "auto"], d) == 0
+    assert read_settings(ws_settings) == {"coding_autonomy": "auto"}
+    assert (tmp_path / ".jack" / ".gitignore").read_text(encoding="utf-8") == "sessions/\n"
+
+
+def test_show_merges_workspace_over_global(tmp_path: Path) -> None:
+    from autobot.config import write_settings
+
+    global_file = tmp_path / "settings.json"
+    ws_settings = tmp_path / ".jack" / "settings.json"
+    write_settings({"coding_autonomy": "plan", "llm_provider": "ollama"}, global_file)
+    write_settings({"coding_autonomy": "auto"}, ws_settings)
+    d = _deps(tmp_path)
+    d.global_path = global_file
+    d.workspace_settings = ws_settings
+    assert run("show", [], d) == 0
+    out = _out(d)
+    assert "coding_autonomy = auto" in out  # workspace wins
+    assert "llm_provider = ollama" in out  # global shows through
+    assert "workspace overrides" in out and "coding_autonomy" in out

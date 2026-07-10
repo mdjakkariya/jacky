@@ -94,13 +94,25 @@ def _launch_editor(path: str) -> int:
 
 
 def _run_config(action: str, rest: list[str], base_url: str) -> int:
-    """Build real dependencies and dispatch a ``jack config`` action."""
+    """Build real dependencies and dispatch a ``jack config`` action.
+
+    Writes target the current workspace's ``.jack/settings.json`` by default; ``--global``
+    targets ``~/.autobot/settings.json``. Reads show the merged (workspace-over-global) view.
+    """
     from getpass import getpass
 
     from autobot.cli.config_cmd import Deps, run
+    from autobot.config import DEFAULT_SETTINGS_PATH
     from autobot.secrets import delete_secret, get_secret, set_secret
 
+    use_global = "--global" in rest
+    rest = [a for a in rest if a != "--global"]
+    workspace_settings = resolve_workspace(Path.cwd(), None) / ".jack" / "settings.json"
+    global_path = Path(DEFAULT_SETTINGS_PATH).expanduser()
     deps = Deps(
+        settings_path=global_path if use_global else workspace_settings,
+        global_path=global_path,
+        workspace_settings=workspace_settings,
         base_url=base_url,
         set_secret=set_secret,
         delete_secret=delete_secret,

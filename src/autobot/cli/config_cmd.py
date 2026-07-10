@@ -33,7 +33,9 @@ def _no_editor(path: str) -> int:  # overridden by the CLI with a real $EDITOR l
 class Deps:
     """Injectable I/O for the config commands (defaults wire the real helpers)."""
 
-    settings_path: str | Path = DEFAULT_SETTINGS_PATH
+    settings_path: str | Path = DEFAULT_SETTINGS_PATH  # the write target (workspace or global)
+    global_path: str | Path = DEFAULT_SETTINGS_PATH
+    workspace_settings: str | Path | None = None  # <workspace>/.jack/settings.json, if any
     base_url: str = ""
     is_up: Callable[[str], bool] = client.is_daemon_up
     notify_settings: Callable[[str, dict[str, Any]], dict[str, Any]] = client.post_settings
@@ -59,13 +61,22 @@ def _daemon_up(deps: Deps) -> bool:
     return bool(deps.base_url) and deps.is_up(deps.base_url)
 
 
+def _ensure_jack_gitignore(path: Path) -> None:
+    """When writing into a workspace ``.jack/``, seed a ``.gitignore`` that ignores sessions/."""
+    if path.parent.name == ".jack":
+        path.parent.mkdir(parents=True, exist_ok=True)
+        gi = path.parent / ".gitignore"
+        if not gi.exists():
+            gi.write_text("sessions/\n", encoding="utf-8")
+
+
 def _current(deps: Deps) -> dict[str, Any]:
-    """Effective settings for reads: the live daemon view if up, else the local file."""
+    """Effective (merged) settings for reads: the live daemon view if up, else global+workspace."""
     if _daemon_up(deps):
         data = client.get_settings(deps.base_url)
         if data:
             return data
-    return Settings.load(deps.settings_path).to_dict()
+    return Settings.load(deps.global_path, workspace_settings=deps.workspace_settings).to_dict()
 
 
 def _cmd_set(args: list[str], deps: Deps) -> int:
@@ -83,6 +94,7 @@ def _cmd_set(args: list[str], deps: Deps) -> int:
     except config_ops.ConfigError as exc:
         print(str(exc), file=deps.err)
         return 1
+    _ensure_jack_gitignore(path)
     write_settings({**on_disk, key: value}, path)
     if _daemon_up(deps):
         res = deps.notify_settings(deps.base_url, {key: value})
@@ -120,11 +132,23 @@ def _cmd_show(deps: Deps) -> int:
             name: deps.get_secret(name) is not None for name in config_ops.KEY_SECRETS.values()
         }
     print(config_ops.format_settings(eff, secret_status), file=deps.out)
+    # Note which keys the workspace file overrides, so it's clear where a value comes from.
+    if deps.workspace_settings is not None:
+        ws_keys = sorted(read_settings(Path(deps.workspace_settings).expanduser()))
+        if ws_keys:
+            print(
+                f"\nworkspace overrides ({deps.workspace_settings}): {', '.join(ws_keys)}",
+                file=deps.out,
+            )
     return 0
 
 
 def _cmd_path(deps: Deps) -> int:
-    print(str(Path(deps.settings_path).expanduser()), file=deps.out)
+    target = Path(deps.settings_path).expanduser()
+    print(f"write target: {target}", file=deps.out)
+    print(f"global:       {Path(deps.global_path).expanduser()}", file=deps.out)
+    if deps.workspace_settings is not None:
+        print(f"workspace:    {Path(deps.workspace_settings).expanduser()}", file=deps.out)
     return 0
 
 
@@ -147,8 +171,9 @@ def _cmd_set_key(args: list[str], deps: Deps) -> int:
 
 def _cmd_edit(deps: Deps) -> int:
     path = Path(deps.settings_path).expanduser()
+    _ensure_jack_gitignore(path)
     if not path.exists():
-        write_settings(Settings.load(path).to_dict(), path)  # seed with current effective settings
+        write_settings({}, path)  # start from an empty overlay — add only what you want to set
     code = deps.launch_editor(str(path))
     if code != 0:
         print(f"editor exited with status {code}; no changes applied.", file=deps.err)

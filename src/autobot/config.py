@@ -23,6 +23,23 @@ from typing import Any
 
 DEFAULT_SETTINGS_PATH = "~/.autobot/settings.json"
 
+# Process-wide workspace-settings overlay: a coder daemon sets this once at startup (to its
+# `<workspace>/.jack/settings.json`) so every `Settings.load()` — including live reloads —
+# layers the workspace's config over the global file. None means "global only".
+_WORKSPACE_OVERLAY: Path | None = None
+
+
+def set_workspace_overlay(path: str | Path | None) -> None:
+    """Set (or clear) the process-wide ``.jack/settings.json`` overlay for ``Settings.load``."""
+    global _WORKSPACE_OVERLAY
+    _WORKSPACE_OVERLAY = Path(path).expanduser() if path else None
+
+
+def _workspace_overlay() -> Path | None:
+    """The active process-wide workspace overlay path (or None)."""
+    return _WORKSPACE_OVERLAY
+
+
 # --- Defaults -------------------------------------------------------------
 # qwen3:8b is the most reliable small tool-caller (it actually emits tool calls
 # instead of narrating them). Drop to "qwen2.5:3b"/":1.5b" for snappier replies
@@ -294,13 +311,24 @@ class Settings:
     channels: int = CHANNELS
 
     @classmethod
-    def load(cls, path: str | Path = DEFAULT_SETTINGS_PATH) -> Settings:
-        """Build settings from ``settings.json``, overlaying it on the defaults.
+    def load(
+        cls,
+        path: str | Path = DEFAULT_SETTINGS_PATH,
+        *,
+        workspace_settings: str | Path | None = None,
+    ) -> Settings:
+        """Build settings by overlaying, low→high: defaults < global file < workspace file.
 
-        Unknown keys are ignored and badly-typed values fall back to the default,
-        so a hand-edited or partial file can never crash startup.
+        ``path`` is the global ``settings.json``; ``workspace_settings`` (a workspace's
+        ``.jack/settings.json``) overrides it when given, else the process-wide overlay set
+        via :func:`set_workspace_overlay` (so every reload in a coder daemon keeps the
+        workspace layer). Unknown keys are ignored and badly-typed values fall back to the
+        default, so a hand-edited or partial file can never crash startup.
         """
         data = _read_settings(path)
+        overlay = workspace_settings if workspace_settings is not None else _workspace_overlay()
+        if overlay is not None:
+            data = {**data, **_read_settings(overlay)}  # workspace wins over global
         defaults = cls()
         overrides: dict[str, Any] = {}
         for f in fields(cls):

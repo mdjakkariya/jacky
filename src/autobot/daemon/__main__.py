@@ -70,6 +70,14 @@ def main() -> None:
         raise SystemExit(
             "The daemon needs the 'daemon' extra: run `uv sync --extra daemon`."
         ) from exc
+    # Set the workspace config overlay before loading, so this daemon's settings (and every
+    # later reload) layer `<workspace>/.jack/settings.json` over the global file.
+    if args.workspace:
+        from pathlib import Path
+
+        from autobot.config import set_workspace_overlay
+
+        set_workspace_overlay(Path(args.workspace) / ".jack" / "settings.json")
     settings = _settings_from_args(Settings.load(), args)
     if args.demo:
         serve_demo(settings)

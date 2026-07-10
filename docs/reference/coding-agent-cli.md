@@ -54,6 +54,13 @@ jack config path                          # print the settings.json path
 `anthropic_model` (when the provider is anthropic) or `llm_model`. Raw dataclass keys
 (e.g. `coder_llm_max_tokens`) work too.
 
+**Where it's written (precedence).** Config layers low→high: **defaults → global
+(`~/.autobot/settings.json`) → workspace (`<workspace>/.jack/settings.json`)**. `jack config
+set …` writes the **workspace** file by default (so a setting applies to just this project);
+`jack config set --global …` writes the global file. `jack config` shows the merged effective
+values and notes which keys the workspace overrides; `jack config path` prints both targets.
+API keys are always global (keyring), never per-workspace.
+
 **Validation:** unknown keys are rejected with the full valid-key list; values are
 type-checked (bool/int/list) and enum-checked (`provider`, `autonomy`); token budgets must
 be positive. `jack config set` refuses to run if `settings.json` is malformed (so it can't
