@@ -24,6 +24,7 @@ from autobot.e2e.scenario import ApprovePlan, Confirm, Expect, Key, Scenario, Se
 from autobot.e2e.settings_scope import settings_scope
 from autobot.e2e.workspace import workspace
 from autobot.logging_setup import get_logger
+from autobot.trust import add_trust, remove_trust
 
 _log = get_logger("e2e")
 
@@ -133,42 +134,53 @@ def run_scenario(
     scope: dict[str, object] = {"coding_autonomy": sc.autonomy, "access_store": access_store}
     with settings_scope(scope):  # noqa: SIM117 (wraps the workspace)
         with workspace(sc.seed_files, keep=keep) as ws:
-            session = session_factory(jack_argv(port), str(ws))
+            # Pre-trust the throwaway workspace so the coder acts without a trust prompt
+            # (the trust gate refuses untrusted folders); dropped again after the run.
+            add_trust(ws)
             try:
-                session.wait_for(markers.idle_prompt, _STARTUP_TIMEOUT)
-                if sc.strategy == "scripted":
-                    drive_scripted(session, sc, log=log)
-                else:
-                    drive_unattended(session, sc, log=log)
-            except TimeoutError as exc:
-                log.append({"action": "timeout", "error": str(exc)})
-                _log.warning("scenario timed out name=%s: %s", sc.name, exc)
-            finally:
-                screen, raw = session.screen_text(), session.raw_bytes()
-                session.close()
-            checks = run_checks(list(sc.checks), ws, screen)
-            checks_pass = all(c["ok"] for c in checks)
-            verdict: dict[str, Any] | None = None
-            if judge_mode == "auto":
-                verdict = judge_fn(
-                    sc.name, sc.task, sc.success_criteria, screen, checks, judge_model=judge_model
+                session = session_factory(jack_argv(port), str(ws))
+                try:
+                    session.wait_for(markers.idle_prompt, _STARTUP_TIMEOUT)
+                    if sc.strategy == "scripted":
+                        drive_scripted(session, sc, log=log)
+                    else:
+                        drive_unattended(session, sc, log=log)
+                except TimeoutError as exc:
+                    log.append({"action": "timeout", "error": str(exc)})
+                    _log.warning("scenario timed out name=%s: %s", sc.name, exc)
+                finally:
+                    screen, raw = session.screen_text(), session.raw_bytes()
+                    session.close()
+                checks = run_checks(list(sc.checks), ws, screen)
+                checks_pass = all(c["ok"] for c in checks)
+                verdict: dict[str, Any] | None = None
+                if judge_mode == "auto":
+                    verdict = judge_fn(
+                        sc.name,
+                        sc.task,
+                        sc.success_criteria,
+                        screen,
+                        checks,
+                        judge_model=judge_model,
+                    )
+                record = RunRecord(
+                    name=sc.name,
+                    task=sc.task,
+                    criteria=sc.success_criteria,
+                    autonomy=sc.autonomy,
+                    strategy=sc.strategy,
+                    provider=provider,
+                    screen=screen,
+                    raw=raw,
+                    steps_log=log,
+                    checks=checks,
+                    verdict=verdict,
+                    settings_snapshot="",
                 )
-            record = RunRecord(
-                name=sc.name,
-                task=sc.task,
-                criteria=sc.success_criteria,
-                autonomy=sc.autonomy,
-                strategy=sc.strategy,
-                provider=provider,
-                screen=screen,
-                raw=raw,
-                steps_log=log,
-                checks=checks,
-                verdict=verdict,
-                settings_snapshot="",
-            )
-            root = Path(_E2E_ROOT).expanduser() / f"{stamp}-{sc.name}"
-            bundle = write_bundle(record, root=str(root))
+                root = Path(_E2E_ROOT).expanduser() / f"{stamp}-{sc.name}"
+                bundle = write_bundle(record, root=str(root))
+            finally:
+                remove_trust(ws)
     judged_ok = True if verdict is None else bool(verdict.get("pass"))
     passed = checks_pass and judged_ok
     _log.info("scenario done name=%s passed=%s bundle=%s", sc.name, passed, bundle)

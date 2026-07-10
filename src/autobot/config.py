@@ -171,6 +171,9 @@ class Settings:
     # is far too small for code — a coder plan or reply would truncate — so the coder build
     # raises it via _apply_profile_overrides. The assistant's budget is left untouched.
     coder_llm_max_tokens: int = 4096
+    # A per-workspace coder daemon shuts itself down after this many seconds with no
+    # requests, so daemons for projects you've stopped using don't pile up. 0 disables it.
+    coder_idle_timeout_s: int = 1200
     # --- listening (Phase 2) ---
     input_mode: str = _DEFAULT_INPUT_MODE
     wake_detector: str = _DEFAULT_WAKE_DETECTOR

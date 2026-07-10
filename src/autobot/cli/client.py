@@ -19,9 +19,9 @@ from collections.abc import Callable, Iterable, Iterator
 from pathlib import Path
 from typing import Any
 
-from autobot.daemon import pidfile
+from autobot.daemon import pidfile, registry
 
-_CODER_PORT = 8766  # coder daemon port (kept off the assistant daemon's 8765)
+_CODER_PORT = 8766  # legacy default coder port; per-workspace ports come from the registry
 _SPAWN_TIMEOUT_S = 30.0
 
 
@@ -354,3 +354,51 @@ def ensure_daemon(  # pragma: no cover - spawns a real process
         stop_daemon(port=port)
         _await_down(base_url)
     _spawn_daemon(base_url, port, ws)
+
+
+def workspace_port(workspace: str, *, default_port: int = _CODER_PORT) -> int:
+    """The port for ``workspace``'s daemon: its registry entry, else a freshly hashed port.
+
+    Each workspace gets its own port so daemons for different projects run side by side.
+    """
+    ws = str(Path(workspace).expanduser().resolve())
+    entry = registry.entry(ws)
+    if isinstance(entry, dict) and isinstance(entry.get("port"), int):
+        return int(entry["port"])
+    taken = {
+        int(v["port"])
+        for v in registry.read().values()
+        if isinstance(v, dict) and isinstance(v.get("port"), int)
+    }
+    return registry.port_for(ws, taken)
+
+
+def stop_workspace(workspace: str, *, host: str = "127.0.0.1") -> bool:
+    """Stop the coder daemon serving ``workspace`` (via its registry entry). False if none."""
+    ws = str(Path(workspace).expanduser().resolve())
+    entry = registry.entry(ws)
+    if not (isinstance(entry, dict) and isinstance(entry.get("port"), int)):
+        return False
+    stop_daemon(port=int(entry["port"]))  # kills by the port listener (registry has no pid file)
+    registry.remove(ws)
+    return True
+
+
+def stop_all_daemons() -> int:
+    """Stop every registered coder daemon; return how many were stopped."""
+    stopped = 0
+    for ws in list(registry.read()):
+        if stop_workspace(ws):
+            stopped += 1
+    return stopped
+
+
+def list_daemons(*, host: str = "127.0.0.1") -> list[dict[str, Any]]:
+    """Registered coder daemons with a live/stale health flag, for ``jack daemons``."""
+    rows: list[dict[str, Any]] = []
+    for ws, info in registry.read().items():
+        if not isinstance(info, dict) or not isinstance(info.get("port"), int):
+            continue
+        port = int(info["port"])
+        rows.append({"workspace": ws, "port": port, "up": is_daemon_up(f"http://{host}:{port}")})
+    return rows

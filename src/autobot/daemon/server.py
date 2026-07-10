@@ -763,6 +763,42 @@ def create_app(
     return app
 
 
+def _install_idle_shutdown(app: Any, idle_timeout: float) -> None:
+    """Self-terminate the daemon after ``idle_timeout`` seconds with no HTTP requests.
+
+    A per-workspace coder daemon should not linger forever: a middleware stamps the last
+    request time and a background thread SIGTERMs the process (uvicorn shuts down cleanly)
+    once it's been idle too long, so daemons for projects you've stopped using go away.
+    """
+    import os
+    import signal
+    import threading
+    import time
+    from collections.abc import Awaitable, Callable
+
+    last = {"t": time.monotonic()}
+
+    async def _stamp(request: Request, call_next: Callable[[Request], Awaitable[Any]]) -> Any:
+        last["t"] = time.monotonic()
+        return await call_next(request)
+
+    # Register via a call rather than decorating the def: ``app`` is Any, so decorating the
+    # definition would make _stamp itself untyped (a mypy-strict error). A plain call keeps
+    # _stamp typed and discards the Any return.
+    app.middleware("http")(_stamp)
+
+    def _reaper() -> None:
+        interval = max(5.0, min(60.0, idle_timeout / 4))
+        while True:
+            time.sleep(interval)
+            if time.monotonic() - last["t"] > idle_timeout:
+                _log.info("coder daemon idle for %.0fs — shutting down", idle_timeout)
+                os.kill(os.getpid(), signal.SIGTERM)
+                return
+
+    threading.Thread(target=_reaper, name="idle-reaper", daemon=True).start()
+
+
 def run_daemon(
     bus: EventBus,
     host: str,
@@ -780,6 +816,7 @@ def run_daemon(
     on_coder_reply: Any | None = None,
     on_coder_undo: Any | None = None,
     on_coder_checkpoints: Any | None = None,
+    idle_timeout: float | None = None,
 ) -> None:
     """Run the daemon server (blocking) on ``host:port``.
 
@@ -817,6 +854,8 @@ def run_daemon(
         on_coder_undo=on_coder_undo,
         on_coder_checkpoints=on_coder_checkpoints,
     )
+    if idle_timeout and idle_timeout > 0:
+        _install_idle_shutdown(app, idle_timeout)
     try:
         with contextlib.suppress(KeyboardInterrupt):
             uvicorn.run(app, host=host, port=port, log_level="warning", lifespan="off")

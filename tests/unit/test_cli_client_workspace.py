@@ -4,7 +4,10 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from autobot.cli.client import stop_daemon, workspace_mismatch
+import pytest
+
+from autobot.cli.client import stop_daemon, workspace_mismatch, workspace_port
+from autobot.daemon import registry
 from autobot.daemon.pidfile import write_pidfile
 
 
@@ -27,6 +30,17 @@ def test_stop_daemon_signals_recorded_pid(tmp_path: Path) -> None:
 def test_stop_daemon_no_pidfile_is_false(tmp_path: Path) -> None:
     ok = stop_daemon(pidfile_path=tmp_path / "missing.pid", kill=lambda pid, sig: None)
     assert ok is False
+
+
+def test_workspace_port_uses_registry_entry(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    ws = str((tmp_path / "proj").resolve())
+    monkeypatch.setattr(registry, "entry", lambda w, **k: {"port": 8888, "pid": 1})
+    assert workspace_port(ws) == 8888  # a recorded entry wins
+    monkeypatch.setattr(registry, "entry", lambda w, **k: None)
+    monkeypatch.setattr(registry, "read", lambda **k: {})
+    assert 8770 <= workspace_port(ws) <= 8899  # else a hashed free port in range
 
 
 def test_stop_daemon_falls_back_to_port_when_no_pidfile(tmp_path: Path) -> None:

@@ -186,20 +186,18 @@ def serve(settings: Settings | None = None, *, workspace: str | None = None) -> 
     # `on_list_sessions` stays wired (read-only; it's the `jack` readiness probe hitting
     # GET /sessions) as does `on_change`/`on_confirm_answer`/`mcp_provider`/`on_meeting`.
     coder = settings.profile == "coder"
-    # Record which workspace/port this coder daemon serves so the `jack` CLI can find it,
-    # learn its workspace, and stop it (for a restart or a workspace switch).
-    from autobot.daemon import pidfile as _pidfile
+    # Register which workspace/port this coder daemon serves, so the `jack` CLI can find it,
+    # run it alongside daemons for other workspaces, and stop it. Removed again on shutdown.
+    from autobot.daemon import registry as _registry
 
+    coder_ws: str | None = None
     if coder:
         import os
 
         from autobot.app import resolve_workspace_root
 
-        _pidfile.write_pidfile(
-            os.getpid(),
-            str(resolve_workspace_root(True, workspace, settings.sandbox_dir)),
-            settings.daemon_port,
-        )
+        coder_ws = str(resolve_workspace_root(True, workspace, settings.sandbox_dir))
+        _registry.record(coder_ws, settings.daemon_port, os.getpid())
     # Live-apply settings/key changes from the Settings view (next turn, no restart).
     try:
         run_daemon(
@@ -223,10 +221,11 @@ def serve(settings: Settings | None = None, *, workspace: str | None = None) -> 
             on_coder_reply=orchestrator.reply_coder_stream,
             on_coder_undo=orchestrator.undo_coder,
             on_coder_checkpoints=orchestrator.list_coder_checkpoints,
+            idle_timeout=float(settings.coder_idle_timeout_s) if coder else None,
         )
     finally:
-        if coder:
-            _pidfile.remove_pidfile()
+        if coder_ws is not None:
+            _registry.remove(coder_ws)
 
 
 def serve_demo(settings: Settings | None = None) -> None:

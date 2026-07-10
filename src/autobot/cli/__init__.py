@@ -18,10 +18,13 @@ from autobot.cli.client import (
     _prompt_user,
     ensure_daemon,
     is_daemon_up,
+    list_daemons,
     run_coder_turn,
-    stop_daemon,
+    stop_all_daemons,
+    stop_workspace,
     stream_answer,
     stream_turn,
+    workspace_port,
 )
 
 __all__ = [
@@ -33,12 +36,15 @@ __all__ = [
     "_prompt_user",
     "ensure_daemon",
     "is_daemon_up",
+    "list_daemons",
     "main",
     "resolve_workspace",
     "run_coder_turn",
-    "stop_daemon",
+    "stop_all_daemons",
+    "stop_workspace",
     "stream_answer",
     "stream_turn",
+    "workspace_port",
 ]
 
 
@@ -130,8 +136,24 @@ def main(argv: list[str] | None = None) -> int:
         action = argv[1] if len(argv) > 1 else "show"
         return _run_config(action, argv[2:], f"http://127.0.0.1:{_CODER_PORT}")
     if argv and argv[0] == "restart":
-        stopped = stop_daemon(port=_CODER_PORT)
-        print("coder daemon stopped." if stopped else "no coder daemon was running.")
+        ws = resolve_workspace(Path.cwd(), None)
+        stopped = stop_workspace(str(ws))
+        print(f"coder daemon stopped for {ws}." if stopped else "no coder daemon was running here.")
+        return 0
+    if argv and argv[0] == "daemons":
+        rows = list_daemons()
+        if not rows:
+            print("no coder daemons running.")
+        for r in rows:
+            print(f"{'up  ' if r['up'] else 'dead'}  :{r['port']}  {r['workspace']}")
+        return 0
+    if argv and argv[0] == "stop":
+        if "--all" in argv[1:]:
+            print(f"stopped {stop_all_daemons()} coder daemon(s).")
+        else:
+            ws = resolve_workspace(Path.cwd(), None)
+            stopped = stop_workspace(str(ws))
+            print(f"stopped the coder daemon for {ws}." if stopped else "none running here.")
         return 0
     if argv and argv[0] == "trust":
         target = resolve_workspace(Path.cwd(), argv[1] if len(argv) > 1 else None)
@@ -140,15 +162,18 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     parser = argparse.ArgumentParser(prog="jack", description="Jack coding agent (terminal).")
     parser.add_argument("text", nargs="*", help="a coding request; omit to open the TUI")
-    parser.add_argument("--port", type=int, default=_CODER_PORT, help="coder daemon port")
+    parser.add_argument(
+        "--port", type=int, default=None, help="coder daemon port (default: per-workspace)"
+    )
     parser.add_argument("--workspace", default=None, help="workspace dir (default: cwd)")
     args = parser.parse_args(argv)
-    base_url = f"http://127.0.0.1:{args.port}"
     ws = resolve_workspace(Path.cwd(), args.workspace)
     if not _ensure_trusted(ws):
         return 1
+    port = args.port if args.port is not None else workspace_port(str(ws))
+    base_url = f"http://127.0.0.1:{port}"
     try:
-        ensure_daemon(base_url, args.port, workspace=str(ws))
+        ensure_daemon(base_url, port, workspace=str(ws))
         print(f"workspace: {ws}", file=sys.stderr)
         if args.text:
             print(run_coder_turn(base_url, " ".join(args.text)))

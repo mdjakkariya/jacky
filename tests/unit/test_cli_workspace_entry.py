@@ -21,11 +21,11 @@ def test_jack_restart_calls_stop(
 ) -> None:
     called = {"stopped": False}
 
-    def fake_stop(**_k: object) -> bool:
+    def fake_stop(ws: str, **_k: object) -> bool:
         called["stopped"] = True
         return True
 
-    monkeypatch.setattr("autobot.cli.stop_daemon", fake_stop)
+    monkeypatch.setattr("autobot.cli.stop_workspace", fake_stop)
     rc = cli_main(["restart"])
     assert rc == 0 and called["stopped"] is True
     assert "stopped" in capsys.readouterr().out.lower()

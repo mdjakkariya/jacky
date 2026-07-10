@@ -39,6 +39,18 @@ def add_trust(folder: str | Path, *, path: Path = DEFAULT_TRUST_FILE) -> None:
     path.write_text(json.dumps({"trusted": trusted}, indent=2), encoding="utf-8")
 
 
+def remove_trust(folder: str | Path, *, path: Path = DEFAULT_TRUST_FILE) -> None:
+    """Drop ``folder`` (resolved) from the trust store (best effort; used for cleanup)."""
+    target = str(Path(folder).expanduser().resolve())
+    trusted = _load(path)
+    if target in trusted:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(
+            json.dumps({"trusted": [t for t in trusted if t != target]}, indent=2),
+            encoding="utf-8",
+        )
+
+
 def trusted_folders(*, path: Path = DEFAULT_TRUST_FILE) -> list[str]:
     """All trusted folders (resolved paths)."""
     return _load(path)
