@@ -249,32 +249,3 @@ def test_redactor_scrubs_secrets_from_tool_results_before_model_sees_them(
     recorded_content = model.recorded[0][0][1].content
     assert "«redacted»" in recorded_content
     assert "AKIAIOSFODNN7EXAMPLE" not in recorded_content  # gitleaks:allow — synthetic fixture
-
-
-def test_checkpoint_hook_called_once_per_turn_with_user_text(store: SessionStore) -> None:
-    """With a checkpoint callable injected, it fires exactly once at the start of the turn."""
-    model = FakeChatModel([ChatResponse(text="hello", tool_calls=[])])
-    calls: list[str] = []
-
-    harness = AgentHarness(model, store, checkpoint=calls.append)
-    assert harness.run_turn("hi there", _ok_executor) == "hello"
-    assert calls == ["hi there"]
-
-
-def test_no_checkpoint_leaves_existing_behavior_unchanged(store: SessionStore) -> None:
-    """Default behavior (no checkpoint callable) is preserved: nothing extra happens."""
-    model = FakeChatModel([ChatResponse(text="hello", tool_calls=[])])
-    harness = AgentHarness(model, store)  # checkpoint defaults to None
-    assert harness.run_turn("hi", _ok_executor) == "hello"
-
-
-def test_checkpoint_hook_that_raises_does_not_break_the_turn(store: SessionStore) -> None:
-    """A checkpoint failure must never break or abort the turn — it's swallowed."""
-    model = FakeChatModel([ChatResponse(text="hello", tool_calls=[])])
-
-    def boom(label: str) -> None:
-        raise RuntimeError("checkpoint blew up")
-
-    harness = AgentHarness(model, store, checkpoint=boom)
-    assert harness.run_turn("hi", _ok_executor) == "hello"
-    assert model.finalized == 1

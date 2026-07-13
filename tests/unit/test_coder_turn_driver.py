@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import queue
 import threading
+from collections.abc import Callable
 
 from autobot.agent.coder_turn import CoderTurnDriver, SuspendingConfirmer, TurnChannel
 from autobot.config import Settings
@@ -65,14 +66,42 @@ def _coder_gate(confirmer: SuspendingConfirmer) -> PermissionGate:
             risk=Risk.DESTRUCTIVE,
         )
     )
+    reg.register(
+        ToolSpec(
+            name="read_file",
+            description="",
+            parameters={},
+            handler=lambda **_k: "file contents",
+            risk=Risk.READ_ONLY,
+        )
+    )
+    reg.register(
+        ToolSpec(
+            name="write_file",
+            description="",
+            parameters={},
+            handler=lambda **_k: "wrote",
+            risk=Risk.WRITE,
+        )
+    )
     return PermissionGate(reg, AuditLog(":memory:"), confirmer)
 
 
-def _driver(llm: _ScriptedLLM, autonomy: str = "plan") -> CoderTurnDriver:
+def _driver(
+    llm: _ScriptedLLM,
+    autonomy: str = "plan",
+    checkpoint: Callable[[str], None] | None = None,
+) -> CoderTurnDriver:
     sc = SuspendingConfirmer()
     gate = _coder_gate(sc)
     settings = Settings(profile="coder", coding_autonomy=autonomy)
-    return CoderTurnDriver(llm, gate, sc, settings_provider=lambda: settings)
+    return CoderTurnDriver(
+        llm,
+        gate,
+        sc,
+        settings_provider=lambda: settings,
+        checkpoint=checkpoint,
+    )
 
 
 def test_plan_then_approve_then_done() -> None:
@@ -329,3 +358,53 @@ def test_list_checkpoints_delegates() -> None:
     d = _driver(_ScriptedLLM("1. x", "done"))
     d._checkpoints = lambda: [{"ref": "refs/jack/checkpoints/0", "sha": "a", "label": "x"}]
     assert d.list_checkpoints()[0]["label"] == "x"
+
+
+def test_checkpoint_taken_once_before_first_act_mutation() -> None:
+    # A checkpoint is snapshotted exactly once, labelled with the user's ORIGINAL request,
+    # just before the act phase's first workspace-changing tool — reads before it don't
+    # trigger it, and a later edit doesn't snapshot again.
+    labels: list[str] = []
+    llm = _ScriptedLLM(
+        "1. edit foo",
+        "Edited foo.",
+        act_calls=[
+            ToolCall(name="read_file", arguments={"path": "foo.py"}),  # read → no snapshot
+            ToolCall(name="write_file", arguments={"path": "foo.py"}),  # first change → snapshot
+            ToolCall(name="write_file", arguments={"path": "bar.py"}),  # later change → no re-snap
+        ],
+    )
+    d = _driver(llm, checkpoint=labels.append)
+    assert list(d.start_stream("add a test for foo"))[-1]["status"] == "plan"
+    assert list(d.reply_stream("approve"))[-1]["status"] == "done"
+    assert labels == ["add a test for foo"]
+
+
+def test_no_checkpoint_for_conversational_turn() -> None:
+    # A greeting/question never reaches the act phase, so nothing is snapshotted.
+    labels: list[str] = []
+    d = _driver(_ScriptedLLM("Hi! What can I help with?", "unused"), checkpoint=labels.append)
+    list(d.start_stream("hey"))
+    assert labels == []
+
+
+def test_no_checkpoint_when_act_only_reads() -> None:
+    # An approved plan whose act phase only reads changes nothing → no checkpoint.
+    llm = _ScriptedLLM(
+        "1. look at foo",
+        "foo does X.",
+        act_calls=[ToolCall(name="read_file", arguments={"path": "foo.py"})],
+    )
+    labels: list[str] = []
+    d = _driver(llm, checkpoint=labels.append)
+    list(d.start_stream("what does foo do"))
+    list(d.reply_stream("approve"))
+    assert labels == []
+
+
+def test_no_checkpoint_when_plan_rejected() -> None:
+    labels: list[str] = []
+    d = _driver(_ScriptedLLM("1. edit foo", "unused"), checkpoint=labels.append)
+    list(d.start_stream("do it"))
+    list(d.reply_stream("reject"))
+    assert labels == []
