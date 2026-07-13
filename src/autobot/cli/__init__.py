@@ -173,6 +173,15 @@ def main(argv: list[str] | None = None) -> int:
     if argv and argv[0] == "update":
         from autobot import __version__, update
 
+        if not getattr(sys, "frozen", False):
+            # sys.executable is the frozen `jack` binary only in a packaged install; from a
+            # source checkout it's the venv Python, which self-replace must never overwrite.
+            print(
+                "jack update replaces the installed binary; from a source checkout, "
+                "update with git/uv instead.",
+                file=sys.stderr,
+            )
+            return 1
         try:
             print(update.run_update(__version__, Path(sys.executable)))
             return 0

@@ -211,15 +211,11 @@ def redact(text: str) -> str:
 
 
 def _app_version() -> str:
-    try:
-        from importlib.metadata import PackageNotFoundError, version
+    # The packaged constant, not importlib.metadata: dist metadata isn't bundled into the
+    # frozen `jack` binary, so metadata lookup there returns "unknown" — this stays correct.
+    from autobot import __version__
 
-        try:
-            return version("autobot")
-        except PackageNotFoundError:
-            return "unknown"
-    except Exception:  # version is best-effort metadata
-        return "unknown"
+    return __version__
 
 
 def _config_lines(settings: Settings) -> list[str]:

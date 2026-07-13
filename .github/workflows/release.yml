@@ -86,7 +86,9 @@ jobs:
   # including the macOS and Linux-ARM64 legs — so this costs nothing and needs no
   # secret beyond the default GITHUB_TOKEN (see `permissions:` above).
   binaries:
-    needs: gate
+    # After `release` (not just `gate`): both attach to the same tag's Release, so
+    # serialize to avoid a first-tag race where both try to create it.
+    needs: [gate, release]
     strategy:
       # One OS breaking (e.g. a PyInstaller hook missing a platform-specific dylib)
       # must not cancel the other four builds.
