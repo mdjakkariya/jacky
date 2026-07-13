@@ -170,14 +170,19 @@ def run_update(  # pragma: no cover - network + archive extraction (smoke-tested
         return f"jack is already up to date ({current})."
     name = asset_name(latest, platform.system(), platform.machine())
     base = f"https://github.com/{repo}/releases/download/v{latest}/{name}"
-    with tempfile.TemporaryDirectory() as tmp:
-        tmpd = Path(tmp)
-        archive = _download(base, tmpd / name)
-        want = _download(base + ".sha256", tmpd / (name + ".sha256")).read_text().split()[0]
-        if sha256_of(archive) != want:
-            raise RuntimeError("downloaded asset failed its checksum — aborting.")
-        binary = _extract_jack(archive, tmpd)
-        self_replace(binary, target)
+    try:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmpd = Path(tmp)
+            archive = _download(base, tmpd / name)
+            want = _download(base + ".sha256", tmpd / (name + ".sha256")).read_text().split()[0]
+            if sha256_of(archive) != want:
+                raise RuntimeError("downloaded asset failed its checksum — aborting.")
+            binary = _extract_jack(archive, tmpd)
+            self_replace(binary, target)
+    except (RuntimeError, ValueError):
+        raise  # already a clean, intended failure — keep the message
+    except Exception as exc:  # network/archive/parse failures → a friendly RuntimeError
+        raise RuntimeError(f"update failed: {exc}") from exc
     return f"updated to jack {latest} — restart any running daemon with 'jack restart'."
 
 
