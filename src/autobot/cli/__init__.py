@@ -132,6 +132,16 @@ def _run_config(action: str, rest: list[str], base_url: str) -> int:
 def main(argv: list[str] | None = None) -> int:
     """`jack` opens the TUI; `jack "…"` runs a request; `jack config …` manages settings."""
     argv = list(sys.argv[1:] if argv is None else argv)
+    if argv and argv[0] in ("--version", "-V", "version"):
+        from autobot import __version__
+
+        print(f"jack {__version__}")
+        return 0
+    if argv and argv[0] == "serve":
+        from autobot.daemon.__main__ import main as daemon_main
+
+        daemon_main(argv[1:])  # run the headless daemon (used by the frozen re-exec)
+        return 0
     if argv and argv[0] == "config":
         action = argv[1] if len(argv) > 1 else "show"
         return _run_config(action, argv[2:], f"http://127.0.0.1:{_CODER_PORT}")
@@ -160,6 +170,24 @@ def main(argv: list[str] | None = None) -> int:
         _trust_workspace(target)
         print(f"trusted: {target}")
         return 0
+    if argv and argv[0] == "update":
+        from autobot import __version__, update
+
+        if not getattr(sys, "frozen", False):
+            # sys.executable is the frozen `jack` binary only in a packaged install; from a
+            # source checkout it's the venv Python, which self-replace must never overwrite.
+            print(
+                "jack update replaces the installed binary; from a source checkout, "
+                "update with git/uv instead.",
+                file=sys.stderr,
+            )
+            return 1
+        try:
+            print(update.run_update(__version__, Path(sys.executable)))
+            return 0
+        except (RuntimeError, ValueError) as exc:
+            print(str(exc), file=sys.stderr)
+            return 1
     parser = argparse.ArgumentParser(prog="jack", description="Jack coding agent (terminal).")
     parser.add_argument("text", nargs="*", help="a coding request; omit to open the TUI")
     parser.add_argument(
@@ -175,6 +203,7 @@ def main(argv: list[str] | None = None) -> int:
     try:
         ensure_daemon(base_url, port, workspace=str(ws))
         print(f"workspace: {ws}", file=sys.stderr)
+        _maybe_backend_hint()
         if args.text:
             print(run_coder_turn(base_url, " ".join(args.text)))
         else:
@@ -196,4 +225,42 @@ def main(argv: list[str] | None = None) -> int:
         with contextlib.suppress(Exception):
             _post(f"{base_url}/coder/reply", {"value": "reject"}, 1.0)
         return 130
+    _print_update_notice()
     return 0
+
+
+def _maybe_backend_hint() -> None:
+    """Best-effort first-run nudge when no LLM backend is set up (never raises).
+
+    A failed reachability probe means "not reachable", not "abort the whole hint" —
+    so it's caught locally rather than by the outer ``suppress``.
+    """
+    with contextlib.suppress(Exception):
+        from autobot import update
+        from autobot.config import Settings
+        from autobot.secrets import get_secret
+
+        s = Settings.load()
+        has_key = bool(get_secret("anthropic_api_key") or get_secret("openai_api_key"))
+        try:
+            ollama_up = _probe("http://127.0.0.1:11434", 0.3)
+        except Exception:
+            ollama_up = False
+        hint = update.backend_hint(s.llm_provider, has_key, ollama_up)
+        if hint:
+            print(hint, file=sys.stderr)
+
+
+def _print_update_notice() -> None:
+    """Best-effort: one dim line if a newer release exists (throttled to once/day)."""
+    import time
+
+    from autobot import __version__, update
+
+    with contextlib.suppress(Exception):
+        latest = update.check_for_update(
+            __version__, time.time(), update.cache_path(), update.fetch_latest_version
+        )
+        notice = update.update_notice(latest)
+        if notice:
+            print(notice, file=sys.stderr)

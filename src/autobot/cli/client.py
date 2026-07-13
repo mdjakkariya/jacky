@@ -301,23 +301,27 @@ def _await_down(base_url: str, timeout: float = 5.0) -> None:  # pragma: no cove
         time.sleep(0.2)
 
 
+def _daemon_argv(port: int, workspace: str) -> list[str]:
+    """Argv to spawn the coder daemon.
+
+    A frozen (PyInstaller) build has no system Python and no importable ``-m``
+    target, so it re-execs the SAME binary as ``jack serve``; a source/dev install
+    runs ``python -m autobot.daemon``. ``sys.executable`` is the frozen binary in the
+    first case and the Python interpreter in the second.
+    """
+    common = ["--profile", "coder", "--port", str(port), "--workspace", workspace]
+    if getattr(sys, "frozen", False):
+        return [sys.executable, "serve", *common]
+    return [sys.executable, "-m", "autobot.daemon", *common]
+
+
 def _spawn_daemon(base_url: str, port: int, workspace: str) -> None:  # pragma: no cover
     """Spawn a coder daemon bound to ``workspace`` and wait for it to answer."""
     log_path = Path.home() / ".autobot" / "logs" / "jack-coder-daemon.log"
     log_path.parent.mkdir(parents=True, exist_ok=True)
     with log_path.open("a", encoding="utf-8") as log:
-        proc = subprocess.Popen(  # fixed argv, our own module
-            [
-                sys.executable,
-                "-m",
-                "autobot.daemon",
-                "--profile",
-                "coder",
-                "--port",
-                str(port),
-                "--workspace",
-                workspace,
-            ],
+        proc = subprocess.Popen(  # argv chosen by _daemon_argv (frozen vs source)
+            _daemon_argv(port, workspace),
             stdout=log,
             stderr=subprocess.STDOUT,
         )

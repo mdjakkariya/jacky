@@ -2,7 +2,7 @@
 # First time:  make setup
 
 .DEFAULT_GOAL := help
-.PHONY: help setup install lint format typecheck test ui-test check run hooks clean release release-check changelog changelog-preview package-orb publish-orb freeze bundle voice
+.PHONY: help setup install lint format typecheck test ui-test check run hooks clean release release-check changelog changelog-preview package-orb publish-orb freeze freeze-cli bundle voice
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) \
@@ -79,6 +79,11 @@ freeze: ## Freeze the engine into dist/autobot-daemon (bundles the daemon/cloud/
 	uv sync $(EXTRA_FLAGS) --extra freeze
 	uv run pyinstaller --noconfirm --clean packaging/autobot-daemon.spec
 	@echo "Built: dist/autobot-daemon"
+
+freeze-cli: ## Freeze the coder CLI into dist/jack (lean: coder stack only, no voice)
+	uv sync --inexact --extra tui --extra daemon --extra cloud --extra freeze
+	uv run pyinstaller --noconfirm --clean packaging/jack.spec
+	@echo "Built: dist/jack"
 
 ORB_BUNDLE := ui/orb-shell/src-tauri/target/release/bundle
 TARGET_TRIPLE := $(shell rustc -Vv 2>/dev/null | sed -n 's/host: //p')

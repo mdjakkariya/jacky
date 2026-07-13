@@ -79,3 +79,86 @@ jobs:
       # No bump-back: branch protection blocks direct pushes to the default branch
       # (the bot included), so the manifest bump lands via the release PR instead.
       # See docs/RELEASING.md.
+
+  # Build, smoke-test, and attach the frozen `jack` CLI binary for each platform we
+  # publish (see `autobot.update.asset_name` for the os/arch strings this must match).
+  # Every leg is a free, unlimited-minutes GitHub-hosted runner on a public repo —
+  # including the macOS and Linux-ARM64 legs — so this costs nothing and needs no
+  # secret beyond the default GITHUB_TOKEN (see `permissions:` above).
+  binaries:
+    # After `release` (not just `gate`): both attach to the same tag's Release, so
+    # serialize to avoid a first-tag race where both try to create it.
+    needs: [gate, release]
+    strategy:
+      # One OS breaking (e.g. a PyInstaller hook missing a platform-specific dylib)
+      # must not cancel the other four builds.
+      fail-fast: false
+      matrix:
+        include:
+          # macOS runner labels are time-sensitive (GitHub retires old images): macos-13
+          # is already retired and macos-14 is deprecating, so target macos-15. Re-verify
+          # against GitHub's hosted-runner list before a release; a wrong label fails one
+          # leg silently (fail-fast:false), so confirm all five assets attach on the first tag.
+          - { runner: macos-15,         os: macos,   arch: arm64 }
+          - { runner: macos-15-intel,   os: macos,   arch: x64 }
+          - { runner: ubuntu-latest,    os: linux,   arch: x64 }
+          - { runner: ubuntu-24.04-arm, os: linux,   arch: arm64 }
+          - { runner: windows-latest,   os: windows, arch: x64 }
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v3
+        with:
+          enable-cache: true
+      - run: uv python install 3.11
+
+      - name: Set version from the tag
+        shell: bash
+        run: uv run python scripts/bump_version.py "${GITHUB_REF_NAME#v}"
+
+      # Inlined `make freeze-cli`'s two commands (see the Makefile target) rather
+      # than invoking `make` itself, so this doesn't depend on `make` being present
+      # on windows-latest — every other step here already talks to uv/pyinstaller
+      # directly, same as the `release` job above calling `uv build` rather than a
+      # Makefile target.
+      - name: Freeze the jack binary
+        shell: bash
+        run: |
+          uv sync --inexact --extra tui --extra daemon --extra cloud --extra freeze
+          uv run pyinstaller --noconfirm --clean packaging/jack.spec
+
+      - name: Smoke — the frozen binary reports its version
+        shell: bash
+        run: |
+          BIN="dist/jack"
+          [ "${{ matrix.os }}" = "windows" ] && BIN="dist/jack.exe"
+          "$BIN" --version
+
+      # The .sha256 file must contain ONLY the bare hex digest (no filename, no
+      # trailing spaces/CR) — install.sh/install.ps1 and `jack update` compare it
+      # verbatim against a locally-computed hexdigest.
+      - name: Package + checksum
+        shell: bash
+        run: |
+          VER="${GITHUB_REF_NAME#v}"
+          NAME="jack-${VER}-${{ matrix.os }}-${{ matrix.arch }}"
+          cd dist
+          if [ "${{ matrix.os }}" = "windows" ]; then
+            7z a "${NAME}.zip" jack.exe >/dev/null
+            # certutil's 2nd output line is the digest; strip the CRLF/space
+            # padding and force lowercase so it compares equal to Python's
+            # (always-lowercase) hashlib.sha256().hexdigest() on the client side.
+            certutil -hashfile "${NAME}.zip" SHA256 \
+              | sed -n 2p | tr -d ' \r' | tr '[:upper:]' '[:lower:]' > "${NAME}.zip.sha256"
+          else
+            tar -czf "${NAME}.tar.gz" jack
+            shasum -a 256 "${NAME}.tar.gz" | awk '{print $1}' > "${NAME}.tar.gz.sha256"
+          fi
+
+      - name: Attach binaries to the GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/jack-*.tar.gz
+            dist/jack-*.zip
+            dist/*.sha256
