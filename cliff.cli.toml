@@ -1,9 +1,9 @@
-# git-cliff configuration — generates CHANGELOG.md and release notes from
-# Conventional Commits. See https://git-cliff.org. Run via `make changelog` /
-# `make notes` (and automatically from `make publish-orb`).
+# git-cliff configuration — generates CHANGELOG-cli.md and release notes for the
+# CLI/engine track from Conventional Commits. See https://git-cliff.org. Run via
+# `make changelog-cli` (and automatically from `make publish-orb` for the orb config).
 
 [changelog]
-# Rendered once at the top of CHANGELOG.md.
+# Rendered once at the top of CHANGELOG-cli.md.
 header = """
 # Changelog
 
@@ -44,6 +44,8 @@ split_commits = false
 # Map commit type -> changelog section. The `<!-- N -->` prefixes only set the
 # section order (the template strips them with `striptags`).
 commit_parsers = [
+  # Orb-only work belongs to CHANGELOG-orb.md — drop it from the CLI/engine changelog.
+  { message = "^[a-z]+\\((orb|ui)\\)", skip = true },
   { message = "^feat", group = "<!-- 0 -->🚀 Features" },
   { message = "^fix", group = "<!-- 1 -->🐛 Bug Fixes" },
   { message = "^perf", group = "<!-- 2 -->⚡ Performance & Stability" },
@@ -59,7 +61,7 @@ commit_parsers = [
 # Skip release/version-bump commits and merge commits from the changelog.
 filter_commits = false
 protect_breaking_commits = false
-tag_pattern = "v[0-9]*"
+tag_pattern = "^v[0-9]"
 skip_tags = "^v0\\.0\\."
 ignore_tags = ""
 topo_order = false
