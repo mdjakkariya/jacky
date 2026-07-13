@@ -132,6 +132,23 @@ def _write_cache(path: Path, now: float, latest: str) -> None:
         pass
 
 
+def backend_hint(provider: str, has_cloud_key: bool, ollama_reachable: bool) -> str | None:
+    """A one-time 'pick a backend' hint, or ``None`` when a usable backend is configured.
+
+    Usable = a cloud provider with a key, or Ollama reachable. Anything else (cloud
+    selected but no key, or Ollama selected/defaulted but not running) returns the hint.
+    """
+    if provider in ("anthropic", "openai") and has_cloud_key:
+        return None
+    if ollama_reachable:
+        return None
+    return (
+        "No LLM backend is ready yet. Either:\n"
+        "  • set a cloud key:   jack config   (then pick anthropic/openai + paste your key)\n"
+        "  • or install Ollama: https://ollama.com   and pull a model (e.g. `ollama pull qwen3:8b`)"
+    )
+
+
 def update_notice(latest: str | None) -> str | None:
     """The one-line 'update available' banner, or ``None`` when up to date."""
     if not latest:

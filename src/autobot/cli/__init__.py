@@ -194,6 +194,7 @@ def main(argv: list[str] | None = None) -> int:
     try:
         ensure_daemon(base_url, port, workspace=str(ws))
         print(f"workspace: {ws}", file=sys.stderr)
+        _maybe_backend_hint()
         if args.text:
             print(run_coder_turn(base_url, " ".join(args.text)))
         else:
@@ -217,6 +218,28 @@ def main(argv: list[str] | None = None) -> int:
         return 130
     _print_update_notice()
     return 0
+
+
+def _maybe_backend_hint() -> None:
+    """Best-effort first-run nudge when no LLM backend is set up (never raises).
+
+    A failed reachability probe means "not reachable", not "abort the whole hint" —
+    so it's caught locally rather than by the outer ``suppress``.
+    """
+    with contextlib.suppress(Exception):
+        from autobot import update
+        from autobot.config import Settings
+        from autobot.secrets import get_secret
+
+        s = Settings.load()
+        has_key = bool(get_secret("anthropic_api_key") or get_secret("openai_api_key"))
+        try:
+            ollama_up = _probe("http://127.0.0.1:11434", 0.3)
+        except Exception:
+            ollama_up = False
+        hint = update.backend_hint(s.llm_provider, has_key, ollama_up)
+        if hint:
+            print(hint, file=sys.stderr)
 
 
 def _print_update_notice() -> None:

@@ -59,6 +59,27 @@ make run                                # the engine/daemon
 Then build the orb from `ui/orb-shell` (`cargo tauri dev`). Full setup, configuration,
 permissions, and troubleshooting live in **[Getting started](https://mdjakkariya.github.io/jacky/getting-started.html)**.
 
+## Install the coding CLI
+
+No Python needed — one command downloads a self-contained `jack` binary.
+
+**macOS / Linux**
+```sh
+curl -fsSL https://raw.githubusercontent.com/mdjakkariya/jacky/main/install.sh | sh
+```
+
+**Windows (PowerShell)**
+```powershell
+irm https://raw.githubusercontent.com/mdjakkariya/jacky/main/install.ps1 | iex
+```
+
+Then run `jack` inside a project. You'll need an LLM backend: set a cloud key with
+`jack config` (Anthropic/OpenAI — you pay the provider), or install
+[Ollama](https://ollama.com) and pull a model to run fully local.
+
+**Update:** `jack` checks once a day and prints a notice when a new version ships —
+run `jack update` to upgrade in place. `jack --version` shows the current version.
+
 ## Architecture
 
 A headless Python engine + a macOS **orb / chat** client (Tauri) that talks to it over
