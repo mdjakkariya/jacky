@@ -22,9 +22,11 @@ permissions:
   contents: write # create the GitHub Release and upload assets
 
 jobs:
-  # Gate: the same quality checks as CI. The manifest-vs-tag check is non-blocking
-  # (a warning) — the release job builds with the tag's version regardless, and the
-  # bump itself lands via the release PR, so a mismatch must never abort the release.
+  # Gate: the same quality checks as CI — so sync the SAME extras CI does
+  # (ci.yml's `check` job). Without `tui`, mypy strict has no `prompt_toolkit`, so
+  # `cli/prompt.py`'s `Completer` subclass reads as `Any` and fails the gate even
+  # though CI is green. The manifest-vs-tag check is non-blocking (a warning) — the
+  # release job builds with the tag's version regardless.
   gate:
     runs-on: ubuntu-latest
     steps:
@@ -33,7 +35,7 @@ jobs:
         with:
           enable-cache: true
       - run: uv python install 3.11
-      - run: uv sync --extra dev
+      - run: uv sync --extra dev --extra daemon --extra tui --extra e2e
       - run: uv run ruff check .
       - run: uv run ruff format --check .
       - run: uv run mypy
