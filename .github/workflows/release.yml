@@ -75,7 +75,11 @@ jobs:
             **Install (no Python needed):**
             `curl -fsSL https://raw.githubusercontent.com/mdjakkariya/jacky/main/install.sh | sh`
             (Windows: `irm https://raw.githubusercontent.com/mdjakkariya/jacky/main/install.ps1 | iex`).
-            Per-OS `jack` binaries + checksums are attached below; `jack update` self-updates.
+            Binaries + checksums for macOS (Apple Silicon), Linux (x64/arm64), and Windows
+            are attached below; `jack update` self-updates.
+
+            > **Intel Mac (macOS x64) is not published yet** — pending a dependency change.
+            > On an Intel Mac, install via the wheel: `uv tool install ./autobot-*.whl`.
 
             **Engine (library):** install the attached wheel —
             `uv tool install ./autobot-*.whl` (or `pipx install ./autobot-*.whl`).
@@ -102,11 +106,15 @@ jobs:
       matrix:
         include:
           # macOS runner labels are time-sensitive (GitHub retires old images): macos-13
-          # is already retired and macos-14 is deprecating, so target macos-15. Re-verify
-          # against GitHub's hosted-runner list before a release; a wrong label fails one
-          # leg silently (fail-fast:false), so confirm all five assets attach on the first tag.
+          # is retired and macos-14 is deprecating, so target macos-15. Re-verify against
+          # GitHub's hosted-runner list before a release; a wrong label fails one leg
+          # silently (fail-fast:false), so confirm every asset attaches on the first tag.
           - { runner: macos-15,         os: macos,   arch: arm64 }
-          - { runner: macos-15-intel,   os: macos,   arch: x64 }
+          # macOS x64 (Intel) is DEFERRED: a base voice dep (faster-whisper → onnxruntime)
+          # has no macos-x86_64 wheel, so `uv sync` can't resolve on Intel Mac. Restore this
+          # leg once the voice deps move out of base into an optional extra (see #83). Intel
+          # Mac users install via `uv tool install ./autobot-*.whl` from the wheel meanwhile.
+          # - { runner: macos-15-intel, os: macos,   arch: x64 }
           - { runner: ubuntu-latest,    os: linux,   arch: x64 }
           - { runner: ubuntu-24.04-arm, os: linux,   arch: arm64 }
           - { runner: windows-latest,   os: windows, arch: x64 }
