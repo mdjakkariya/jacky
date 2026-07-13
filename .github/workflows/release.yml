@@ -93,8 +93,12 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { runner: macos-14,         os: macos,   arch: arm64 }
-          - { runner: macos-13,         os: macos,   arch: x64 }
+          # macOS runner labels are time-sensitive (GitHub retires old images): macos-13
+          # is already retired and macos-14 is deprecating, so target macos-15. Re-verify
+          # against GitHub's hosted-runner list before a release; a wrong label fails one
+          # leg silently (fail-fast:false), so confirm all five assets attach on the first tag.
+          - { runner: macos-15,         os: macos,   arch: arm64 }
+          - { runner: macos-15-intel,   os: macos,   arch: x64 }
           - { runner: ubuntu-latest,    os: linux,   arch: x64 }
           - { runner: ubuntu-24.04-arm, os: linux,   arch: arm64 }
           - { runner: windows-latest,   os: windows, arch: x64 }
