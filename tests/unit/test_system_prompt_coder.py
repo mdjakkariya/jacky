@@ -21,3 +21,11 @@ def test_coder_prompt_mentions_the_tools_workflow() -> None:
     p = system_prompt("chat", coder=True)
     low = p.lower()
     assert "read" in low and "edit" in low  # tells the model to read before editing
+
+
+def test_coder_prompt_handles_unactionable_input_with_a_capability_hint() -> None:
+    # On unclear/unactionable input, the coder should give a concise capability hint, not a
+    # bare "what do you mean?" (the U7 UX principle) — kept general, no incident-specific text.
+    low = system_prompt("chat", coder=True).lower()
+    assert "vague" in low or "unclear" in low
+    assert "help with" in low
