@@ -115,6 +115,35 @@ def test_unattended_does_not_reapprove_a_stale_gate_card(tmp_path: Path) -> None
     assert sess.sent.count("<enter>") == 1
 
 
+def test_bundle_captures_observability_files(tmp_path: Path) -> None:
+    # The bundle must be self-contained: effective settings + the coder's session
+    # transcript are captured, not left as the empty placeholders they used to be.
+    sc = Scenario(
+        name="obs",
+        autonomy="auto",
+        strategy="unattended",
+        task="do X",
+        success_criteria="did X",
+        checks=(FileExists("hello.py"),),
+    )
+    sess = _FakeSession(["❯ ", "⏺ done\n❯ "])
+
+    def factory(argv, cwd):  # type: ignore[no-untyped-def]
+        p = Path(cwd)
+        (p / "hello.py").write_text("hi")
+        sdir = p / ".jack" / "sessions"
+        sdir.mkdir(parents=True)
+        (sdir / "s1.jsonl").write_text('{"role": "user", "content": "do X"}\n')
+        return sess
+
+    res = runner.run_scenario(
+        sc, port=8999, judge_mode="manual", session_factory=factory, judge_fn=lambda *a, **k: None
+    )
+    bundle = Path(res.report_path).parent
+    assert (bundle / "settings.json").read_text().strip()  # populated, not the old ""
+    assert '"content": "do X"' in (bundle / "session.jsonl").read_text()
+
+
 def test_failed_check_fails_the_result(tmp_path: Path) -> None:
     sc = Scenario(
         name="t",

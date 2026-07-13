@@ -17,7 +17,7 @@ from pathlib import Path
 from typing import Any
 
 from autobot.config import Settings
-from autobot.e2e import markers
+from autobot.e2e import markers, observe
 from autobot.e2e.artifact import RunRecord, write_bundle
 from autobot.e2e.judge import judge_auto, run_checks
 from autobot.e2e.pty_session import PtySession, jack_argv
@@ -153,6 +153,10 @@ def run_scenario(
     # instead of restoring a persisted active folder (e.g. the user's real workspace).
     access_store = str(Path(tempfile.gettempdir()) / f"jack-e2e-access-{stamp}.json")
     scope: dict[str, object] = {"coding_autonomy": sc.autonomy, "access_store": access_store}
+    # Read only the daemon log written from here on — the run's own slice, not history.
+    log_path = Path(settings.log_dir).expanduser() / "autobot.log"
+    log_start = observe.log_offset(log_path)
+    daemon_log, session_jsonl, settings_snapshot = "", "", ""
     with settings_scope(scope):  # noqa: SIM117 (wraps the workspace)
         with workspace(sc.seed_files, keep=keep) as ws:
             # Pre-trust the throwaway workspace so the coder acts without a trust prompt
@@ -172,6 +176,11 @@ def run_scenario(
                 finally:
                     screen, raw = session.screen_text(), session.raw_bytes()
                     session.close()
+                # Capture the debuggable side-channels now: effective settings, the coder's
+                # session transcript (in the workspace), and this run's slice of daemon log.
+                settings_snapshot = observe.settings_snapshot(Settings.load())
+                session_jsonl = observe.session_jsonl(ws)
+                daemon_log = observe.log_since(log_path, log_start)
                 checks = run_checks(list(sc.checks), ws, screen)
                 checks_pass = all(c["ok"] for c in checks)
                 verdict: dict[str, Any] | None = None
@@ -196,7 +205,9 @@ def run_scenario(
                     steps_log=log,
                     checks=checks,
                     verdict=verdict,
-                    settings_snapshot="",
+                    daemon_log=daemon_log,
+                    session_jsonl=session_jsonl,
+                    settings_snapshot=settings_snapshot,
                 )
                 root = Path(_E2E_ROOT).expanduser() / f"{stamp}-{sc.name}"
                 bundle = write_bundle(record, root=str(root))
