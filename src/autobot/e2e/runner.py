@@ -146,7 +146,13 @@ def run_scenario(
     sc.validate()
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     settings = Settings.load()
-    provider = f"{settings.llm_provider}:{settings.llm_model}"
+    # Report the model actually in use: the anthropic provider drives ``anthropic_model``,
+    # not ``llm_model`` (which stays the local default). Getting this wrong makes a cloud
+    # bundle read as a local run.
+    active_model = (
+        settings.anthropic_model if settings.llm_provider == "anthropic" else settings.llm_model
+    )
+    provider = f"{settings.llm_provider}:{active_model}"
     log: list[dict[str, Any]] = []
     screen, raw = "", b""
     # Fresh, empty access_store so the coder jails to its launch cwd (the throwaway repo)
