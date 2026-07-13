@@ -14,10 +14,11 @@ import random
 import re
 import threading
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
+    from autobot.agent.coder_turn import CoderTurnDriver
     from autobot.mcp.provider import McpProvider
 
 import numpy as np
@@ -394,6 +395,9 @@ class Orchestrator:
         # Set by the composition root when allow_meetings is True. The daemon
         # delegates /meeting/* HTTP actions to the recorder via this attribute.
         self.meeting_recorder: Any = None
+        # Set by app.build() in the coder profile; None for the assistant. Backs the
+        # daemon's /coder/turn + /coder/reply endpoints (plan → approve → act).
+        self.coder_driver: CoderTurnDriver | None = None
 
     def _greeting(self) -> str:
         """The reply to a bare wake word — name-aware, and a first hello if new."""
@@ -441,6 +445,18 @@ class Orchestrator:
 
             get_buffer().mark_session()
         _log.info("new chat session started")
+
+    def list_sessions(self) -> list[dict[str, Any]]:
+        """Summaries of stored agent sessions (id/cwd/model/mtime), for the daemon."""
+        fn = getattr(self._llm, "list_sessions", None)
+        result = fn() if callable(fn) else []
+        return result if isinstance(result, list) else []
+
+    def resume_session(self, session_id: str) -> bool:
+        """Resume a stored agent session by id. Held under the turn lock like a new turn."""
+        with self._turn_lock:
+            fn = getattr(self._llm, "resume", None)
+            return bool(fn(session_id)) if callable(fn) else False
 
     def run_tool(self, name: str, arguments: dict[str, Any]) -> str:
         """Run one registered tool through the permission gate — for a UI action.
@@ -943,6 +959,38 @@ class Orchestrator:
             return reply
         finally:
             self._text_mode = False
+
+    def start_coder_stream(self, text: str) -> Iterator[dict[str, Any]]:
+        """Begin a coder turn and stream its events (coder profile only)."""
+        if self.coder_driver is None:
+            yield {"status": "error", "reply": "coding turns aren't available here."}
+            return
+        yield from self.coder_driver.start_stream(text)
+
+    def reply_coder_stream(self, value: str, text: str = "") -> Iterator[dict[str, Any]]:
+        """Deliver the CLI's answer and stream the next phase's events (coder profile only)."""
+        if self.coder_driver is None:
+            yield {"status": "error", "reply": "coding turns aren't available here."}
+            return
+        yield from self.coder_driver.reply_stream(value, text)
+
+    def undo_coder(self) -> tuple[bool, str]:
+        """Restore the most recent workspace checkpoint (coder profile only)."""
+        if self.coder_driver is None:
+            return False, "Undo isn't available here."
+        return self.coder_driver.undo()
+
+    def list_coder_checkpoints(self) -> list[dict[str, str]]:
+        """List workspace checkpoints newest-first (coder profile only)."""
+        return self.coder_driver.list_checkpoints() if self.coder_driver is not None else []
+
+    def resume_coder_session(self, session_id: str) -> bool:
+        """Resume a stored coder session through the driver's lock (coder profile only)."""
+        return self.coder_driver.resume(session_id) if self.coder_driver is not None else False
+
+    def new_coder_session(self) -> bool:
+        """Start a fresh coder session through the driver's lock (coder profile only)."""
+        return self.coder_driver.new_session() if self.coder_driver is not None else False
 
     def run(self) -> None:
         """Run the interaction loop until interrupted with Ctrl-C."""

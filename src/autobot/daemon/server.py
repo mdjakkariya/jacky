@@ -15,7 +15,9 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import json
 import threading
+from collections.abc import Iterable, Iterator
 from typing import TYPE_CHECKING, Any
 
 # Imported at module top (not lazily) on purpose: with ``from __future__ import
@@ -26,6 +28,7 @@ from typing import TYPE_CHECKING, Any
 # This module is the daemon transport, so requiring FastAPI to import it is fine;
 # nothing on the core/engine import path pulls this in. uvicorn stays lazy.
 from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
+from fastapi.responses import StreamingResponse
 
 from autobot.core.events import EventBus, StateEvent
 from autobot.logging_setup import get_logger
@@ -39,9 +42,20 @@ if TYPE_CHECKING:
 
 _log = get_logger("daemon")
 
+
+def _sse_frames(events: Iterable[dict[str, Any]]) -> Iterator[str]:
+    """Serialize coder events to SSE ``data:`` frames; a bad event degrades to an error frame."""
+    for evt in events:
+        try:
+            payload = json.dumps(evt)
+        except (TypeError, ValueError):
+            payload = json.dumps({"status": "error", "reply": "unserializable event"})
+        yield f"data: {payload}\n\n"
+
+
 # Secrets the Settings view may store (Keychain account names). Anything else is
 # rejected so the endpoint can't write arbitrary Keychain items.
-_SECRET_NAMES = ("anthropic_api_key", "web_api_key")
+_SECRET_NAMES = ("anthropic_api_key", "openai_api_key", "web_api_key")
 
 # Valid values for the ``risk`` field on the /mcp/servers/{id}/tools/{tool} endpoint.
 _VALID_MCP_RISKS = frozenset({"read_only", "write", "destructive"})
@@ -87,6 +101,12 @@ def create_app(
     on_action: Any | None = None,
     mcp_provider: McpProvider | None = None,
     on_meeting: Any | None = None,
+    on_list_sessions: Any | None = None,
+    on_resume_session: Any | None = None,
+    on_coder_turn: Any | None = None,
+    on_coder_reply: Any | None = None,
+    on_coder_undo: Any | None = None,
+    on_coder_checkpoints: Any | None = None,
 ) -> Any:
     """Build the FastAPI app: the event stream plus the Settings-view API.
 
@@ -112,6 +132,28 @@ def create_app(
             dispatching meeting actions (``start``/``stop``/``pause``/``resume``/
             ``status``/``list``/``last``/``reveal``) to the recorder. When ``None``,
             all /meeting/* routes return ``{"ok": False, "error": "meetings disabled"}``.
+        on_list_sessions: Optional callback returning the stored agent sessions
+            (id/cwd/model/mtime summaries); wired to the orchestrator's
+            ``list_sessions``. When ``None``, ``GET /sessions`` returns ``[]``.
+        on_resume_session: Optional callback (session_id: str -> bool) that resumes a
+            stored agent session; wired to the orchestrator's ``resume_session``. When
+            ``None``, ``POST /sessions/resume`` returns ``{"ok": False}``.
+        on_coder_turn: Optional callback (text: str -> Iterator[dict]) that starts a
+            coder plan→approve→act turn and streams its events; wired to the
+            orchestrator's ``start_coder_stream``. When ``None``, ``POST /coder/turn``
+            streams a single error status event.
+        on_coder_reply: Optional callback (value: str, text: str -> Iterator[dict])
+            that delivers the CLI's answer to a parked coder turn and streams the
+            next phase's events; wired to the orchestrator's ``reply_coder_stream``.
+            When ``None``, ``POST /coder/reply`` streams a single error status event.
+        on_coder_undo: Optional callback (() -> tuple[bool, str]) that restores the
+            most recent coder checkpoint; wired to the orchestrator's
+            ``undo_coder``. When ``None``, ``POST /coder/undo`` returns
+            ``{"ok": False, "message": "undo unavailable"}``.
+        on_coder_checkpoints: Optional callback (() -> list[dict[str, str]]) that
+            lists coder checkpoints newest-first; wired to the orchestrator's
+            ``list_coder_checkpoints``. When ``None``, ``GET /coder/checkpoints``
+            returns ``{"checkpoints": []}``.
 
     Returns:
         A FastAPI app: ``/healthz``, WebSocket ``/ws``, the settings API, and
@@ -216,6 +258,7 @@ def create_app(
             "needs_setup": not _Path(path).expanduser().exists(),
             "provider": settings.llm_provider,
             "has_anthropic_key": has_secret("anthropic_api_key"),
+            "has_openai_key": has_secret("openai_api_key"),
             "ollama_models": _installed_ollama_models(settings.ollama_host),
             "voice_present": voice.exists(),
         }
@@ -301,6 +344,47 @@ def create_app(
         reply = await asyncio.to_thread(on_chat, str(text))
         return {"ok": True, "reply": reply}
 
+    async def post_coder_turn(request: Request) -> Any:
+        """Start a coder plan→approve→act turn; stream its events as SSE."""
+        payload = await request.json()
+        text = payload.get("text") if isinstance(payload, dict) else None
+        if not text or on_coder_turn is None:
+            return StreamingResponse(
+                _sse_frames(iter([{"status": "error", "reply": "no text / coder unavailable"}])),
+                media_type="text/event-stream",
+            )
+        return StreamingResponse(
+            _sse_frames(on_coder_turn(str(text))), media_type="text/event-stream"
+        )
+
+    async def post_coder_reply(request: Request) -> Any:
+        """Deliver the CLI's answer to a parked coder turn; stream the next phase as SSE."""
+        payload = await request.json()
+        value = payload.get("value") if isinstance(payload, dict) else None
+        text = payload.get("text", "") if isinstance(payload, dict) else ""
+        if value is None or on_coder_reply is None:
+            return StreamingResponse(
+                _sse_frames(iter([{"status": "error", "reply": "no value / coder unavailable"}])),
+                media_type="text/event-stream",
+            )
+        return StreamingResponse(
+            _sse_frames(on_coder_reply(str(value), str(text))), media_type="text/event-stream"
+        )
+
+    async def post_coder_undo() -> dict[str, Any]:
+        """Restore the most recent coder checkpoint. Runs off the loop (takes the driver lock)."""
+        if on_coder_undo is None:
+            return {"ok": False, "message": "undo unavailable"}
+        ok, message = await asyncio.to_thread(on_coder_undo)
+        return {"ok": bool(ok), "message": message}
+
+    async def get_coder_checkpoints() -> dict[str, Any]:
+        """List coder checkpoints (newest first)."""
+        if on_coder_checkpoints is None:
+            return {"checkpoints": []}
+        rows = await asyncio.to_thread(on_coder_checkpoints)
+        return {"checkpoints": rows if isinstance(rows, list) else []}
+
     async def post_new_session() -> dict[str, Any]:
         """Start a fresh chat session — discard the engine's conversation history.
 
@@ -310,6 +394,22 @@ def create_app(
         if on_new_session is not None:
             await asyncio.to_thread(on_new_session)
         return {"ok": True}
+
+    async def get_sessions() -> list[dict[str, Any]]:
+        """List stored agent sessions (id/cwd/model/mtime), most recent first."""
+        if on_list_sessions is None:
+            return []
+        result = await asyncio.to_thread(on_list_sessions)
+        return result if isinstance(result, list) else []
+
+    async def post_sessions_resume(request: Request) -> dict[str, Any]:
+        """Resume a stored agent session (``{id}``) — replaces the live conversation."""
+        payload = await request.json()
+        session_id = payload.get("id") if isinstance(payload, dict) else None
+        if not session_id or on_resume_session is None:
+            return {"ok": False}
+        ok = await asyncio.to_thread(on_resume_session, str(session_id))
+        return {"ok": bool(ok)}
 
     async def get_voice_status() -> dict[str, Any]:
         """Which voice models are present, and whether voice can be enabled."""
@@ -613,7 +713,13 @@ def create_app(
     app.add_api_route("/access/grant", post_access_grant, methods=["POST"])
     app.add_api_route("/access/revoke", post_access_revoke, methods=["POST"])
     app.add_api_route("/chat", post_chat, methods=["POST"])
+    app.add_api_route("/coder/turn", post_coder_turn, methods=["POST"])
+    app.add_api_route("/coder/reply", post_coder_reply, methods=["POST"])
+    app.add_api_route("/coder/undo", post_coder_undo, methods=["POST"])
+    app.add_api_route("/coder/checkpoints", get_coder_checkpoints, methods=["GET"])
     app.add_api_route("/session/new", post_new_session, methods=["POST"])
+    app.add_api_route("/sessions", get_sessions, methods=["GET"])
+    app.add_api_route("/sessions/resume", post_sessions_resume, methods=["POST"])
     app.add_api_route("/voice/status", get_voice_status, methods=["GET"])
     app.add_api_route("/voice/download", post_voice_download, methods=["POST"])
 
@@ -657,6 +763,42 @@ def create_app(
     return app
 
 
+def _install_idle_shutdown(app: Any, idle_timeout: float) -> None:
+    """Self-terminate the daemon after ``idle_timeout`` seconds with no HTTP requests.
+
+    A per-workspace coder daemon should not linger forever: a middleware stamps the last
+    request time and a background thread SIGTERMs the process (uvicorn shuts down cleanly)
+    once it's been idle too long, so daemons for projects you've stopped using go away.
+    """
+    import os
+    import signal
+    import threading
+    import time
+    from collections.abc import Awaitable, Callable
+
+    last = {"t": time.monotonic()}
+
+    async def _stamp(request: Request, call_next: Callable[[Request], Awaitable[Any]]) -> Any:
+        last["t"] = time.monotonic()
+        return await call_next(request)
+
+    # Register via a call rather than decorating the def: ``app`` is Any, so decorating the
+    # definition would make _stamp itself untyped (a mypy-strict error). A plain call keeps
+    # _stamp typed and discards the Any return.
+    app.middleware("http")(_stamp)
+
+    def _reaper() -> None:
+        interval = max(5.0, min(60.0, idle_timeout / 4))
+        while True:
+            time.sleep(interval)
+            if time.monotonic() - last["t"] > idle_timeout:
+                _log.info("coder daemon idle for %.0fs — shutting down", idle_timeout)
+                os.kill(os.getpid(), signal.SIGTERM)
+                return
+
+    threading.Thread(target=_reaper, name="idle-reaper", daemon=True).start()
+
+
 def run_daemon(
     bus: EventBus,
     host: str,
@@ -668,6 +810,13 @@ def run_daemon(
     on_action: Any | None = None,
     mcp_provider: McpProvider | None = None,
     on_meeting: Any | None = None,
+    on_list_sessions: Any | None = None,
+    on_resume_session: Any | None = None,
+    on_coder_turn: Any | None = None,
+    on_coder_reply: Any | None = None,
+    on_coder_undo: Any | None = None,
+    on_coder_checkpoints: Any | None = None,
+    idle_timeout: float | None = None,
 ) -> None:
     """Run the daemon server (blocking) on ``host:port``.
 
@@ -676,6 +825,10 @@ def run_daemon(
     ``on_change`` is invoked after a settings/secret update so the engine can pick
     it up live; ``on_confirm_answer`` delivers a clicked Yes/No to the engine.
     ``on_meeting`` dispatches /meeting/* HTTP actions to the MeetingRecorder.
+    ``on_list_sessions``/``on_resume_session`` back the ``/sessions`` endpoints.
+    ``on_coder_turn``/``on_coder_reply`` back the ``/coder/turn``/``/coder/reply``
+    endpoints. ``on_coder_undo``/``on_coder_checkpoints`` back the
+    ``/coder/undo``/``/coder/checkpoints`` endpoints.
     """
     if host not in {"127.0.0.1", "localhost", "::1"}:
         raise ValueError(f"daemon must bind loopback only, got host={host!r}")
@@ -694,7 +847,15 @@ def run_daemon(
         on_action=on_action,
         mcp_provider=mcp_provider,
         on_meeting=on_meeting,
+        on_list_sessions=on_list_sessions,
+        on_resume_session=on_resume_session,
+        on_coder_turn=on_coder_turn,
+        on_coder_reply=on_coder_reply,
+        on_coder_undo=on_coder_undo,
+        on_coder_checkpoints=on_coder_checkpoints,
     )
+    if idle_timeout and idle_timeout > 0:
+        _install_idle_shutdown(app, idle_timeout)
     try:
         with contextlib.suppress(KeyboardInterrupt):
             uvicorn.run(app, host=host, port=port, log_level="warning", lifespan="off")

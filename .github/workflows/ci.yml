@@ -24,7 +24,9 @@ jobs:
       - name: Sync dependencies
         # `daemon` (fastapi) is needed so the daemon-server tests run in CI and their
         # coverage counts; without it those tests skip and server.py shows 0% covered.
-        run: uv sync --extra dev --extra daemon
+        # `tui` (rich + prompt_toolkit) is needed so the cli shell type-checks and its
+        # tests don't skip.
+        run: uv sync --extra dev --extra daemon --extra tui
 
       - name: Lint (ruff)
         run: uv run ruff check .

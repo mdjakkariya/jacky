@@ -23,6 +23,23 @@ from typing import Any
 
 DEFAULT_SETTINGS_PATH = "~/.autobot/settings.json"
 
+# Process-wide workspace-settings overlay: a coder daemon sets this once at startup (to its
+# `<workspace>/.jack/settings.json`) so every `Settings.load()` — including live reloads —
+# layers the workspace's config over the global file. None means "global only".
+_WORKSPACE_OVERLAY: Path | None = None
+
+
+def set_workspace_overlay(path: str | Path | None) -> None:
+    """Set (or clear) the process-wide ``.jack/settings.json`` overlay for ``Settings.load``."""
+    global _WORKSPACE_OVERLAY
+    _WORKSPACE_OVERLAY = Path(path).expanduser() if path else None
+
+
+def _workspace_overlay() -> Path | None:
+    """The active process-wide workspace overlay path (or None)."""
+    return _WORKSPACE_OVERLAY
+
+
 # --- Defaults -------------------------------------------------------------
 # qwen3:8b is the most reliable small tool-caller (it actually emits tool calls
 # instead of narrating them). Drop to "qwen2.5:3b"/":1.5b" for snappier replies
@@ -51,6 +68,7 @@ _DEFAULT_TTS_VOICE = "~/.autobot/voices/en_US-ryan-high.onnx"
 # Absolute (under ~/.autobot) so it works regardless of the working directory —
 # e.g. launched from the bundled .app, whose CWD is "/".
 _DEFAULT_SESSION_DIR = "~/.autobot/sessions"
+_DEFAULT_AGENT_SESSION_DIR = "~/.autobot/agent_sessions"
 _DEFAULT_LOG_DIR = "~/.autobot/logs"
 _DEFAULT_LOG_LEVEL = "DEBUG"
 _DEFAULT_LOG_CONSOLE_LEVEL = "WARNING"
@@ -78,11 +96,17 @@ class Settings:
     """All runtime-tunable configuration for the assistant."""
 
     # --- language model ---
-    # Which brain: "ollama" (local, default) or "anthropic" (cloud, opt-in). The
-    # Anthropic API key lives in the Keychain, never in this file.
+    # Which brain: "ollama" (local, default), "anthropic" (cloud, opt-in), or
+    # "openai" (any OpenAI-compatible endpoint, opt-in). API keys live in the
+    # Keychain, never in this file.
     llm_provider: str = "ollama"
     llm_model: str = _DEFAULT_LLM_MODEL
     ollama_host: str = _DEFAULT_OLLAMA_HOST
+    # OpenAI-compatible provider ("openai"): any endpoint speaking chat.completions
+    # (OpenAI, OpenRouter, Groq, Together, DeepSeek, Mistral, local vLLM/LM Studio,
+    # Gemini's OpenAI-compat endpoint). The model id is llm_model; the key is stored
+    # in the keyring under "openai_api_key". Blank base_url uses the SDK default (OpenAI).
+    openai_base_url: str = ""
     anthropic_model: str = _DEFAULT_ANTHROPIC_MODEL
     anthropic_max_tokens: int = 512
     # Cloud context window (prompt-token budget). 0 -> resolve from a per-model
@@ -117,6 +141,39 @@ class Settings:
     # Seconds to wait for a spoken yes/no before auto-cancelling a destructive
     # action (silence/timeout cancels — nothing destructive runs without a clear yes).
     confirm_timeout_s: float = 30.0
+    # --- coding agent (Phase 2) ---
+    # Autonomy for coding turns — a progressive-trust dial:
+    #   "plan" (default) — propose a plan; act only after the user approves it, then carry
+    #     out the whole plan without re-prompting per step (approving the plan IS the
+    #     approval for its commands);
+    #   "confirm" — no plan phase; act directly but ask before each command not on the
+    #     allowlist;
+    #   "auto" — auto-select: a lightweight router classifies each request and runs it as
+    #     "plan" (multi-step/risky work) or "confirm" (simple, low-risk change); on any
+    #     router failure it falls back to "plan" (approval before changes).
+    # All three still refuse blocklisted commands and stay within the cwd jail + a
+    # start-of-turn git checkpoint (undoable), so nothing is unrecoverable.
+    coding_autonomy: str = "plan"
+    # Snapshot the workspace (via a git shadow ref) at the start of each coding turn so a
+    # change can be rewound (`jack undo`). Off disables checkpointing entirely.
+    checkpoints: bool = True
+    # Command safety for run_command, layered on the permission gate. These hold the USER's
+    # additions; the built-in dangerous-pattern baseline lives in the command-policy module.
+    # Blocklisted commands are refused outright; allowlisted patterns (e.g. "git *",
+    # "pytest*") are trusted to run with less friction. Empty = baseline + gate only.
+    command_allowlist: list[str] = field(default_factory=list)
+    command_blocklist: list[str] = field(default_factory=list)
+    # Which agent this process is: "assistant" (voice/chat helper, default) or "coder"
+    # (a code-editing agent — swaps in the code tools + a coding system prompt). Set by the
+    # daemon's --profile flag or settings.json; the jack CLI runs a coder-profile daemon.
+    profile: str = "assistant"
+    # Output-token budget for coder turns. The assistant/voice default (llm_max_tokens=120)
+    # is far too small for code — a coder plan or reply would truncate — so the coder build
+    # raises it via _apply_profile_overrides. The assistant's budget is left untouched.
+    coder_llm_max_tokens: int = 4096
+    # A per-workspace coder daemon shuts itself down after this many seconds with no
+    # requests, so daemons for projects you've stopped using don't pile up. 0 disables it.
+    coder_idle_timeout_s: int = 1200
     # --- listening (Phase 2) ---
     input_mode: str = _DEFAULT_INPUT_MODE
     wake_detector: str = _DEFAULT_WAKE_DETECTOR
@@ -246,6 +303,9 @@ class Settings:
     # Keep only the most recent N session transcripts; older ones are pruned on
     # startup so the sessions folder never accumulates hundreds of files.
     session_keep: int = 20
+    # Resumable agent conversation sessions (JSONL via SessionStore); separate from
+    # session_dir's per-run debug transcripts so session_keep pruning can't delete them.
+    agent_session_dir: str = _DEFAULT_AGENT_SESSION_DIR
     show_debug: bool = True
     log_dir: str = _DEFAULT_LOG_DIR
     log_level: str = _DEFAULT_LOG_LEVEL
@@ -254,13 +314,24 @@ class Settings:
     channels: int = CHANNELS
 
     @classmethod
-    def load(cls, path: str | Path = DEFAULT_SETTINGS_PATH) -> Settings:
-        """Build settings from ``settings.json``, overlaying it on the defaults.
+    def load(
+        cls,
+        path: str | Path = DEFAULT_SETTINGS_PATH,
+        *,
+        workspace_settings: str | Path | None = None,
+    ) -> Settings:
+        """Build settings by overlaying, low→high: defaults < global file < workspace file.
 
-        Unknown keys are ignored and badly-typed values fall back to the default,
-        so a hand-edited or partial file can never crash startup.
+        ``path`` is the global ``settings.json``; ``workspace_settings`` (a workspace's
+        ``.jack/settings.json``) overrides it when given, else the process-wide overlay set
+        via :func:`set_workspace_overlay` (so every reload in a coder daemon keeps the
+        workspace layer). Unknown keys are ignored and badly-typed values fall back to the
+        default, so a hand-edited or partial file can never crash startup.
         """
         data = _read_settings(path)
+        overlay = workspace_settings if workspace_settings is not None else _workspace_overlay()
+        if overlay is not None:
+            data = {**data, **_read_settings(overlay)}  # workspace wins over global
         defaults = cls()
         overrides: dict[str, Any] = {}
         for f in fields(cls):
@@ -300,12 +371,19 @@ def _read_settings(path: str | Path) -> dict[str, Any]:
 
 
 def write_settings(data: dict[str, Any], path: str | Path = DEFAULT_SETTINGS_PATH) -> None:
-    """Persist ``data`` to the settings file (0600), creating parents as needed."""
+    """Persist ``data`` to the settings file (0600) atomically (temp write + ``os.replace``).
+
+    Writing to a sibling temp file and renaming means an interrupted or crashing write can
+    never leave a half-written ``settings.json`` behind — readers see either the old file
+    or the complete new one.
+    """
     p = Path(path).expanduser()
     p.parent.mkdir(parents=True, exist_ok=True)
-    p.write_text(json.dumps(data, indent=2, sort_keys=True), encoding="utf-8")
+    tmp = p.with_name(p.name + ".tmp")
+    tmp.write_text(json.dumps(data, indent=2, sort_keys=True), encoding="utf-8")
     with contextlib.suppress(OSError):  # best effort on exotic filesystems
-        p.chmod(0o600)
+        tmp.chmod(0o600)
+    tmp.replace(p)  # atomic rename on POSIX and Windows
 
 
 def _coerce(value: Any, default: Any) -> Any:

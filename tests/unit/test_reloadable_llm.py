@@ -10,11 +10,26 @@ class FakeLLM:
     def __init__(self, tag: str) -> None:
         self.tag = tag
 
-    def run_turn(self, user_text: str, execute: object) -> str:
+    def run_turn(self, user_text: str, execute: object, on_event: object = None) -> str:
         return self.tag
 
     def complete(self, prompt: str, *, temperature: float = 0.0) -> str:
         return self.tag
+
+
+class FakeHarness(FakeLLM):
+    """A FakeLLM that also supports session resume/list, like AgentHarness."""
+
+    def __init__(self, tag: str) -> None:
+        super().__init__(tag)
+        self.resumed: list[str] = []
+
+    def resume(self, session_id: str) -> bool:
+        self.resumed.append(session_id)
+        return session_id == "known"
+
+    def list_sessions(self) -> list[dict[str, object]]:
+        return [{"id": "known", "cwd": ".", "model": self.tag}]
 
 
 def _exec(_c: ToolCall) -> ToolResult:  # unused stub
@@ -49,3 +64,44 @@ def test_keeps_working_model_if_reload_fails() -> None:
     assert model.run_turn("a", _exec) == "v1"
     model.mark_dirty()
     assert model.run_turn("b", _exec) == "v1"  # reload failed -> kept v1
+
+
+def test_run_turn_forwards_on_event() -> None:
+    # Regression: the coder driver always passes on_event; the proxy must forward it to the
+    # inner model (else a 2-arg run_turn TypeErrors → the coder turn's generic error reply).
+    seen: list[object] = []
+
+    class RecordingLLM(FakeLLM):
+        def run_turn(self, user_text: str, execute: object, on_event: object = None) -> str:
+            seen.append(on_event)
+            return self.tag
+
+    def sink(evt: dict[str, object]) -> None:
+        pass
+
+    model = ReloadableLanguageModel(lambda: RecordingLLM("v1"))
+    assert model.run_turn("hi", _exec, on_event=sink) == "v1"
+    assert seen == [sink]
+
+
+def test_resume_delegates_to_inner() -> None:
+    inner = FakeHarness("v1")
+    model = ReloadableLanguageModel(lambda: inner)
+    assert model.resume("known") is True
+    assert model.resume("unknown") is False
+    assert inner.resumed == ["known", "unknown"]
+
+
+def test_resume_is_false_when_inner_lacks_it() -> None:
+    model = ReloadableLanguageModel(lambda: FakeLLM("v1"))
+    assert model.resume("anything") is False
+
+
+def test_list_sessions_delegates_to_inner() -> None:
+    model = ReloadableLanguageModel(lambda: FakeHarness("v1"))
+    assert model.list_sessions() == [{"id": "known", "cwd": ".", "model": "v1"}]
+
+
+def test_list_sessions_is_empty_when_inner_lacks_it() -> None:
+    model = ReloadableLanguageModel(lambda: FakeLLM("v1"))
+    assert model.list_sessions() == []

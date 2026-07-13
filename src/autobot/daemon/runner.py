@@ -79,11 +79,12 @@ def make_voice_sink(bus: EventBus) -> Callable[[bool], None]:
     return sink
 
 
-def serve(settings: Settings | None = None) -> None:
+def serve(settings: Settings | None = None, *, workspace: str | None = None) -> None:
     """Run the real engine behind the daemon (blocking).
 
     Building the orchestrator loads the STT model, the audit log, the sandbox,
     and connects to Ollama — same as a normal run, just with a UI-facing socket.
+    ``workspace`` binds the coder to that directory (see :func:`autobot.app.build`).
     """
     settings = settings or Settings.load()
     from autobot.app import build
@@ -121,6 +122,7 @@ def serve(settings: Settings | None = None) -> None:
 
     orchestrator = build(
         settings,
+        workspace=workspace,
         on_state=make_state_listener(bus, is_chat=_is_chat),
         amplitude_sink=make_amplitude_sink(bus),
         on_visibility=bus.publish_visibility,
@@ -173,19 +175,57 @@ def serve(settings: Settings | None = None) -> None:
     thread = threading.Thread(target=orchestrator.run, name="engine", daemon=True)
     thread.start()
     print(f"[daemon] serving on ws://{settings.daemon_host}:{settings.daemon_port}/ws")
+    # Coder profile: the driver owns turn concurrency with its OWN lock over the shared
+    # gate/confirmer/session, which is not safe to interleave with the assistant/drawer
+    # turn-mutating endpoints (they take the orchestrator's own _turn_lock and could
+    # route a /chat confirmation into a parked coder turn's channel). So the coder
+    # profile disables `on_chat`/`on_action` — /coder/turn and /coder/reply are the only
+    # turn entry point. `on_new_session`/`on_resume_session` stay wired for both profiles:
+    # in the coder profile they route through the driver's own lock (`new_coder_session`/
+    # `resume_coder_session`), so they're safe to interleave with a parked coder turn.
+    # `on_list_sessions` stays wired (read-only; it's the `jack` readiness probe hitting
+    # GET /sessions) as does `on_change`/`on_confirm_answer`/`mcp_provider`/`on_meeting`.
+    coder = settings.profile == "coder"
+    # Register which workspace/port this coder daemon serves, so the `jack` CLI can find it,
+    # run it alongside daemons for other workspaces, and stop it. Removed again on shutdown.
+    from autobot.daemon import registry as _registry
+
+    coder_ws: str | None = None
+    if coder:
+        import os
+
+        from autobot.app import resolve_workspace_root
+
+        coder_ws = str(resolve_workspace_root(True, workspace, settings.sandbox_dir))
+        _registry.record(coder_ws, settings.daemon_port, os.getpid())
     # Live-apply settings/key changes from the Settings view (next turn, no restart).
-    run_daemon(
-        bus,
-        settings.daemon_host,
-        settings.daemon_port,
-        on_change=orchestrator.mark_settings_changed,
-        on_confirm_answer=inbox.submit,
-        on_chat=orchestrator.run_text_turn,
-        on_new_session=orchestrator.new_chat_session,
-        on_action=orchestrator.run_tool,
-        mcp_provider=orchestrator.mcp_provider,
-        on_meeting=on_meeting,
-    )
+    try:
+        run_daemon(
+            bus,
+            settings.daemon_host,
+            settings.daemon_port,
+            on_change=orchestrator.mark_settings_changed,
+            on_confirm_answer=inbox.submit,
+            on_chat=None if coder else orchestrator.run_text_turn,
+            on_new_session=(
+                orchestrator.new_coder_session if coder else orchestrator.new_chat_session
+            ),
+            on_action=None if coder else orchestrator.run_tool,
+            mcp_provider=orchestrator.mcp_provider,
+            on_meeting=on_meeting,
+            on_list_sessions=orchestrator.list_sessions,
+            on_resume_session=(
+                orchestrator.resume_coder_session if coder else orchestrator.resume_session
+            ),
+            on_coder_turn=orchestrator.start_coder_stream,
+            on_coder_reply=orchestrator.reply_coder_stream,
+            on_coder_undo=orchestrator.undo_coder,
+            on_coder_checkpoints=orchestrator.list_coder_checkpoints,
+            idle_timeout=float(settings.coder_idle_timeout_s) if coder else None,
+        )
+    finally:
+        if coder_ws is not None:
+            _registry.remove(coder_ws)
 
 
 def serve_demo(settings: Settings | None = None) -> None:

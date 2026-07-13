@@ -14,10 +14,12 @@ import json
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
+    from autobot.agent.session import Session
     from autobot.core.interfaces import ToolSelector
 
+from autobot.agent.chat_model import ChatResponse, OnEvent
 from autobot.config import Settings
-from autobot.core.types import ToolCall, ToolExecutor
+from autobot.core.types import ToolCall, ToolResult
 from autobot.logging_setup import get_logger
 from autobot.memory.store import MemoryStore
 from autobot.session_log import NullTranscript, Transcript
@@ -28,7 +30,6 @@ _log = get_logger("llm")
 
 _DEFAULT_CONTEXT_TOKENS = 4096  # fallback when the model's window can't be detected
 _HARD_MAX_MESSAGES = 100  # safety backstop so history can't grow unbounded
-_MAX_TOOL_ROUNDS = 8  # cap the plan→tool→result loop so it can't spin forever (cloud parity)
 _CHARS_PER_TOKEN = 4  # rough English token estimate for pre-flight compaction
 
 _SUMMARIZE_INSTRUCTION = (
@@ -84,7 +85,7 @@ SYSTEM_PROMPT = (
 
 # How the reply is delivered depends on the turn's mode — spoken vs. shown as text.
 # Kept separate from SYSTEM_PROMPT so the principles stay shared and only the
-# delivery instruction changes per turn (see system_prompt / set_delivery_mode).
+# delivery instruction changes per turn (see system_prompt / Session.delivery_mode).
 VOICE_DELIVERY = (
     "Your reply will be spoken aloud. Talk like a person and keep it SHORT — one "
     "sentence, two at most — with no lists, numbering, markdown, or headings."
@@ -96,15 +97,29 @@ CHAT_DELIVERY = (
     "you'll read anything out."
 )
 
+# System prompt for the coder profile: a code-editing agent rather than the voice/chat
+# assistant. Kept separate from SYSTEM_PROMPT so each profile's principles stay focused.
+CODER_SYSTEM_PROMPT = (
+    "You are a precise, autonomous coding agent working in a real code repository. "
+    "Use the tools to inspect and change files: read a file (line-numbered) before you "
+    "edit it, search with grep/glob, get an overview with repo_map, and run commands "
+    "(tests, build, git) with run_command. Prefer the dedicated file tools over shelling "
+    "out. Make the smallest change that satisfies the request, keep edits consistent with "
+    "the surrounding code, and verify your work (run the tests) when practical. If a tool "
+    "reports a failure, read the message and adjust rather than repeating the same call."
+)
 
-def system_prompt(mode: str) -> str:
+
+def system_prompt(mode: str, *, coder: bool = False) -> str:
     """The system prompt with a delivery line matched to the turn's mode.
 
     Args:
         mode: ``"chat"`` (reply shown as text) or anything else (spoken/voice).
+        coder: when ``True``, use the coding-agent prompt instead of the assistant one.
     """
+    base = CODER_SYSTEM_PROMPT if coder else SYSTEM_PROMPT
     delivery = CHAT_DELIVERY if mode == "chat" else VOICE_DELIVERY
-    return f"{SYSTEM_PROMPT}\n{delivery}"
+    return f"{base}\n{delivery}"
 
 
 def active_folder_line() -> str:
@@ -253,6 +268,25 @@ def _to_message_dict(message: Any) -> dict[str, Any]:
     return {"role": "assistant", "content": message_content(message)}
 
 
+def _to_plain(obj: Any) -> Any:
+    """Best-effort convert a (possibly pydantic) object to a JSON-serializable value.
+
+    Used to make streamed tool-call chunks (which arrive as SDK objects, not dicts)
+    safe to store in session history, matching the shape the blocking path produces
+    (where the whole response is dict-ified via :func:`_to_message_dict`).
+    """
+    for attr in ("model_dump", "dict"):
+        fn = getattr(obj, attr, None)
+        if callable(fn):
+            try:
+                result = fn()
+                if isinstance(result, dict):
+                    return result
+            except Exception:  # fall through and store the raw object
+                pass
+    return obj
+
+
 class OllamaLanguageModel:
     """Runs user turns against a local Ollama model with tool calling."""
 
@@ -278,14 +312,15 @@ class OllamaLanguageModel:
             from ollama import Client
 
             self._client = Client(host=settings.ollama_host)
-        # Conversational memory: recent {user, assistant} turns kept verbatim, plus
-        # a running summary of older turns once the context fills up.
-        self._history: list[dict[str, Any]] = []
-        self._summary = ""
         self._last_prompt_tokens = 0
         self._last_eval_tokens = 0  # this turn's generated output (for the "This turn" line)
         self._context_tokens = self._resolve_context()
         _log.info("context window=%d tokens model=%s", self._context_tokens, settings.llm_model)
+        # Per-turn buffers shared by the ChatModel primitives (begin_turn/send/…). Valid
+        # only during one serialized turn; re-initialized in begin_turn from the session.
+        self._messages: list[dict[str, Any]] = []  # this turn's working message list
+        self._sent_start = 0  # index in _messages where this turn's tool exchange begins
+        self._user_msg: dict[str, Any] = {}  # this turn's user message (persisted at finalize)
 
     def _resolve_context(self) -> int:
         """Detect the model's context window (or use the configured override)."""
@@ -299,8 +334,22 @@ class OllamaLanguageModel:
             _log.warning("could not detect context length; using %d", _DEFAULT_CONTEXT_TOKENS)
             return _DEFAULT_CONTEXT_TOKENS
 
-    def _chat(self, messages: list[dict[str, Any]], *, with_tools: bool = True) -> Any:
-        """Call Ollama with the full window + bounded output; track prompt tokens."""
+    def _chat(
+        self,
+        messages: list[dict[str, Any]],
+        *,
+        with_tools: bool = True,
+        on_event: OnEvent | None = None,
+    ) -> Any:
+        """Call Ollama with the full window + bounded output; track prompt tokens.
+
+        When ``on_event`` is set, streams the response and emits a ``{"type":
+        "token", "text": ...}`` event per content delta, then returns a synthetic
+        response shaped like the blocking one (a ``{"message": {...}}`` dict) so
+        callers (:meth:`send`) read it through the same helpers. Both paths pass
+        ``think=think_on`` for qwen3 models (falling back without it on
+        ``TypeError``), so streamed turns respect ``llm_think`` too.
+        """
         model = self._settings.llm_model
         think_on = "qwen3" in model and self._settings.llm_think
         # Reasoning tokens count against num_predict but go to `thinking`, not the
@@ -322,6 +371,41 @@ class OllamaLanguageModel:
         }
         if with_tools:
             kwargs["tools"] = self._tools_for_round()
+        if on_event is not None:
+            kwargs["stream"] = True
+            content_parts: list[str] = []
+            tool_calls_raw: list[Any] = []
+            prompt_tok = eval_tok = 0
+            # Only qwen3 supports the reasoning toggle; other models reject the kwarg —
+            # same fallback as the blocking path, so a streamed turn doesn't silently
+            # ignore `llm_think`.
+            if "qwen3" in model:
+                try:
+                    stream = self._client.chat(think=think_on, **kwargs)
+                except TypeError:
+                    stream = self._client.chat(**kwargs)
+            else:
+                stream = self._client.chat(**kwargs)
+            for chunk in stream:
+                msg = _get(chunk, "message")
+                # Read the raw delta (not via message_content, which strips whitespace —
+                # fine once on a whole message, but would eat meaningful inter-token
+                # spaces if applied per chunk).
+                piece = _get(msg, "content") or ""
+                if piece:
+                    on_event({"type": "token", "text": piece})
+                    content_parts.append(piece)
+                tc = _get(msg, "tool_calls")
+                if tc:  # Ollama sends whole tool_calls, usually on the final chunk
+                    tool_calls_raw = [_to_plain(t) for t in tc]
+                prompt_tok = int(_get(chunk, "prompt_eval_count") or prompt_tok)
+                eval_tok = int(_get(chunk, "eval_count") or eval_tok)
+            self._last_prompt_tokens = prompt_tok
+            self._last_eval_tokens = eval_tok
+            message: dict[str, Any] = {"role": "assistant", "content": "".join(content_parts)}
+            if tool_calls_raw:
+                message["tool_calls"] = tool_calls_raw
+            return {"message": message}
         # Only qwen3 supports the reasoning toggle; other models reject the kwarg.
         if "qwen3" in model:
             try:
@@ -370,10 +454,13 @@ class OllamaLanguageModel:
         lines = [f"- {s.name}: {s.description}" for s in found]
         return "Found these tools (now available to call):\n" + "\n".join(lines)
 
-    def _assemble(self, user_msg: dict[str, Any]) -> list[dict[str, Any]]:
+    def _assemble(self, session: Session, user_msg: dict[str, Any]) -> list[dict[str, Any]]:
         """System prompt + running summary (if any) + recent turns + the new message."""
-        mode = getattr(self, "_delivery_mode", "voice")
-        messages: list[dict[str, Any]] = [{"role": "system", "content": system_prompt(mode)}]
+        mode = session.delivery_mode
+        coder = self._settings.profile == "coder"
+        messages: list[dict[str, Any]] = [
+            {"role": "system", "content": system_prompt(mode, coder=coder)}
+        ]
         if self._memory is not None:
             profile = self._memory.context()
             if profile:
@@ -384,90 +471,72 @@ class OllamaLanguageModel:
         meeting = meeting_state_line()
         if meeting:
             messages.append({"role": "system", "content": meeting})
-        if self._summary:
+        if session.summary:
             messages.append(
-                {"role": "system", "content": f"Summary of earlier conversation: {self._summary}"}
+                {"role": "system", "content": f"Summary of earlier conversation: {session.summary}"}
             )
-        messages += self._history
+        messages += session.history
         messages.append(user_msg)
         return messages
 
-    def set_delivery_mode(self, mode: str) -> None:
-        """Set how the next reply is delivered ('chat' = text, else spoken/voice)."""
-        self._delivery_mode = mode
-
-    def run_turn(self, user_text: str, execute: ToolExecutor) -> str:
-        """Handle one user turn end-to-end; see the interface for the contract.
-
-        Runs a bounded multi-round tool loop: the model may call tools, see their
-        results, and decide the next action, until it returns no tool calls (the
-        final answer) or the round cap is hit (then one tools-disabled call forces a
-        final answer). A tool call that already failed this turn is reused, never
-        re-run, so a flapping step can't spin the loop.
-        """
-        user_msg = {"role": "user", "content": user_text}
+    def begin_turn(self, session: Session, user_text: str) -> None:
+        """Start a turn: reset per-turn state, compact pre-flight, assemble messages."""
+        self._user_msg = {"role": "user", "content": user_text}
         self._round_query = user_text  # relevance signal for tool selection this turn
         self._pinned = set()  # find_tools discoveries are per-turn; never leak across turns
-
         # Proactive: compact BEFORE sending if this prompt would cross the budget.
-        estimated = estimate_tokens(self._assemble(user_msg))
-        self._compact_if_needed(estimated, source="preflight")
+        estimated = estimate_tokens(self._assemble(session, self._user_msg))
+        self._compact_if_needed(session, estimated, source="preflight")
+        self._messages = self._assemble(session, self._user_msg)
+        self._sent_start = len(self._messages)
 
-        messages = self._assemble(user_msg)
-        sent_start = len(messages)  # everything appended below is this turn's tool exchange
-        failed: dict[str, str] = {}  # anti-thrash: name+args -> failure text
-        reply = ""
-        for _ in range(_MAX_TOOL_ROUNDS):
-            response = self._chat(messages)
-            message = _get(response, "message")
-            calls = normalize_tool_calls(message)
-            # Record the assistant turn faithfully (text and/or tool_calls).
-            messages.append(_to_message_dict(message))
-            if not calls:
-                _log.debug("planned no tool calls model=%s", self._settings.llm_model)
-                reply = message_content(message)
-                break
-            _log.info(
-                "planned tools=%s model=%s", [c.name for c in calls], self._settings.llm_model
+    def send(self, session: Session, on_event: OnEvent | None = None) -> ChatResponse:
+        """Call the model once, record the assistant message, return text + tool calls.
+
+        When ``on_event`` is set, streams ``{"type": "token", ...}`` events as they
+        arrive from Ollama; ``on_event=None`` keeps the blocking call.
+        """
+        response = self._chat(self._messages, on_event=on_event)
+        message = _get(response, "message")
+        calls = normalize_tool_calls(message)
+        self._messages.append(_to_message_dict(message))  # record assistant turn faithfully
+        if not calls:
+            _log.debug("planned no tool calls model=%s", self._settings.llm_model)
+        return ChatResponse(text=message_content(message), tool_calls=calls)
+
+    def handle_discovery(self, session: Session, call: ToolCall) -> str | None:
+        """Service a ``find_tools`` call inline; ``None`` for any normal tool call."""
+        if call.name == FIND_TOOLS.name and self._selector is not None:
+            return self._discover_tools(call.arguments.get("intent", ""))
+        return None
+
+    def record_results(self, session: Session, results: list[tuple[ToolCall, ToolResult]]) -> None:
+        """Append this round's tool results to the working messages, in call order."""
+        for call, result in results:
+            self._messages.append(
+                {"role": "tool", "tool_name": call.name, "content": result.content}
             )
-            all_repeat = True  # did this round only re-issue calls that already failed?
-            last_fail = ""  # most recent cached failure text this round; used only when all_repeat
-            for call in calls:
-                if call.name == FIND_TOOLS.name and self._selector is not None:
-                    all_repeat = False  # discovery is real progress, not a failing repeat
-                    summary = self._discover_tools(call.arguments.get("intent", ""))
-                    messages.append({"role": "tool", "tool_name": call.name, "content": summary})
-                    continue
-                key = call.name + "\0" + json.dumps(call.arguments, sort_keys=True, default=str)
-                if key in failed:
-                    out = failed[key]  # already failed — reuse, don't re-run
-                    last_fail = out
-                else:
-                    all_repeat = False
-                    # Execution goes through the injected executor (the permission
-                    # gate), never the registry directly — this is the gate's seam.
-                    result = execute(call)
-                    out = result.content
-                    if not result.ok:
-                        failed[key] = out
-                        last_fail = out
-                # In call order: the native API pairs results to calls by order.
-                messages.append({"role": "tool", "tool_name": call.name, "content": out})
-            if all_repeat:  # model is just retrying a failing step — stop and explain
-                _log.info("stopping: round repeated only previously-failed tool calls")
-                reply = last_fail or "I couldn't complete that, so I stopped."
-                break
-        else:
-            reply = self._final_answer_no_tools(messages)
 
-        # Persist this turn append-only: the user message + everything appended in the
-        # loop (assistant tool_calls and each tool result), so a later turn has a real
-        # record of what was done and the KV-cache prefix stays stable.
-        self._history.extend([user_msg, *messages[sent_start:]])
-        self._history = trim_history(self._history, _HARD_MAX_MESSAGES)  # hard backstop
-        self._compact_if_needed(self._last_prompt_tokens, source="post-turn")
-        self._report_usage()
-        return reply
+    def finalize_turn(self, session: Session) -> list[dict[str, Any]]:
+        """Persist this turn append-only, then post-turn compact; return new messages."""
+        new = [self._user_msg, *self._messages[self._sent_start :]]
+        session.history.extend(new)
+        session.history = trim_history(session.history, _HARD_MAX_MESSAGES)
+        self._compact_if_needed(session, self._last_prompt_tokens, source="post-turn")
+        self._report_usage(session)
+        return new
+
+    def final_answer_no_tools(self, session: Session) -> str:
+        """One tools-disabled call to synthesize a reply when the round cap is hit."""
+        _log.info("tool-round cap reached; forcing a final answer without tools")
+        try:
+            response = self._chat(self._messages, with_tools=False)
+        except Exception:
+            _log.exception("forced final answer failed")
+            return "I hit my step limit; partial changes are saved."
+        message = _get(response, "message")
+        self._messages.append(_to_message_dict(message))
+        return message_content(message) or "I hit my step limit; partial changes are saved."
 
     def complete(self, prompt: str, *, temperature: float = 0.0) -> str:
         """One-shot completion via Ollama chat (no tools advertised).
@@ -498,33 +567,26 @@ class OllamaLanguageModel:
             response = self._client.chat(**kwargs)
         return str(message_content(_get(response, "message"))).strip()
 
-    def _final_answer_no_tools(self, messages: list[dict[str, Any]]) -> str:
-        """One tools-disabled call to synthesize a reply when the round cap is hit.
-
-        The history ends with the last round's tool results, so a tool-free call
-        yields a clean final reply. Appends the assistant message so it is persisted.
-        """
-        _log.info("tool-round cap reached; forcing a final answer without tools")
-        try:
-            response = self._chat(messages, with_tools=False)
-        except Exception:
-            _log.exception("forced final answer failed")
-            return "Sorry, that took too many steps."
-        message = _get(response, "message")
-        messages.append(_to_message_dict(message))
-        return message_content(message) or "Sorry, that took too many steps."
-
-    def context_usage(self) -> dict[str, Any] | None:
-        """Context-meter payload, or None pre-turn.
+    def _report_usage(self, session: Session) -> None:
+        """Write the context-meter payload into the session, and log/echo it.
 
         Local has no prompt-cache billing, so cache_read/write are None (the card
         hides those rows).
         """
-        if not self._last_prompt_tokens or not self._context_tokens:
-            return None
-        return {
+        ctx = self._context_tokens
+        pct = round(100 * self._last_prompt_tokens / ctx) if ctx else 0
+        _log.info("turn prompt_tokens=%d ctx=%d pct=%d", self._last_prompt_tokens, ctx, pct)
+        self._transcript.note(f"{self._last_prompt_tokens}/{ctx} tokens ({pct}% of context)")
+        if self._settings.show_debug:
+            print(f"[ctx] {self._last_prompt_tokens}/{ctx} tokens ({pct}%)")
+        if ctx and self._last_prompt_tokens > ctx:
+            _log.warning("context limit exceeded prompt=%d ctx=%d", self._last_prompt_tokens, ctx)
+        if not self._last_prompt_tokens or not ctx:
+            session.last_usage = None
+            return
+        session.last_usage = {
             "used": self._last_prompt_tokens,
-            "window": self._context_tokens,
+            "window": ctx,
             "cache_read": None,
             "cache_write": None,
             # Local has no prompt cache, so the whole prompt is processed each turn:
@@ -534,31 +596,7 @@ class OllamaLanguageModel:
             "model": self._settings.llm_model,
         }
 
-    def new_session(self) -> None:
-        """Discard all conversation history and start a fresh session.
-
-        Clears the running summary and per-turn token counts so the context meter
-        resets. The resolved context window and client are untouched — only the
-        conversation is wiped. Drives the chat's "New chat" action.
-        """
-        self._history = []
-        self._summary = ""
-        self._last_prompt_tokens = 0
-        self._last_eval_tokens = 0
-        _log.info("session reset (new chat)")
-
-    def _report_usage(self) -> None:
-        """Log/echo this turn's token usage for debugging."""
-        ctx = self._context_tokens
-        pct = round(100 * self._last_prompt_tokens / ctx) if ctx else 0
-        _log.info("turn prompt_tokens=%d ctx=%d pct=%d", self._last_prompt_tokens, ctx, pct)
-        self._transcript.note(f"{self._last_prompt_tokens}/{ctx} tokens ({pct}% of context)")
-        if self._settings.show_debug:
-            print(f"[ctx] {self._last_prompt_tokens}/{ctx} tokens ({pct}%)")
-        if ctx and self._last_prompt_tokens > ctx:
-            _log.warning("context limit exceeded prompt=%d ctx=%d", self._last_prompt_tokens, ctx)
-
-    def _compact_if_needed(self, prompt_tokens: int, *, source: str) -> None:
+    def _compact_if_needed(self, session: Session, prompt_tokens: int, *, source: str) -> None:
         """Summarize older turns if ``prompt_tokens`` crosses the compaction threshold.
 
         Called both pre-flight (estimated tokens) and post-turn (measured tokens),
@@ -570,12 +608,12 @@ class OllamaLanguageModel:
         keep = self._settings.keep_recent_messages
         # Keep a *clean* recent tail (never starting mid tool-exchange); summarize
         # everything before it. Using trim_history keeps the boundary valid.
-        kept = trim_history(self._history, keep) if keep > 0 else []
-        older = self._history[: len(self._history) - len(kept)]
+        kept = trim_history(session.history, keep) if keep > 0 else []
+        older = session.history[: len(session.history) - len(kept)]
         if not older:
             return
-        self._summary = self._summarize(self._summary, older)
-        self._history = kept
+        session.summary = self._summarize(session.summary, older)
+        session.history = kept
         pct = round(100 * prompt_tokens / ctx) if ctx else 0
         _log.info(
             "compacted source=%s prompt_tokens=%d ctx=%d pct=%d summarized=%d kept=%d",
@@ -584,11 +622,11 @@ class OllamaLanguageModel:
             ctx,
             pct,
             len(older),
-            len(self._history),
+            len(session.history),
         )
         self._transcript.note(
             f"compaction ({source}) at {pct}% — summarized {len(older)} older "
-            f"messages, kept {len(self._history)}"
+            f"messages, kept {len(session.history)}"
         )
         if self._settings.show_debug:
             print(f"[ctx] compaction ({source}) at ~{pct}% — summarized older turns")

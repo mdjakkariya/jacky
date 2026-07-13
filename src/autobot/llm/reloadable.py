@@ -56,9 +56,23 @@ class ReloadableLanguageModel:
                 self._dirty = False
             return self._inner
 
-    def run_turn(self, user_text: str, execute: ToolExecutor) -> str:
-        """Rebuild from fresh settings if dirty, then handle the turn."""
-        return self._ensure().run_turn(user_text, execute)
+    def run_turn(
+        self,
+        user_text: str,
+        execute: ToolExecutor,
+        on_event: Callable[[dict[str, Any]], None] | None = None,
+    ) -> str:
+        """Rebuild from fresh settings if dirty, then handle the turn.
+
+        Forwards the optional ``on_event`` streaming callback to the inner model — the
+        concrete ``AgentHarness`` accepts it; it is intentionally not on the minimal
+        ``LanguageModel`` protocol (so 2-arg fakes/callers still satisfy it), hence the
+        ``call-arg`` ignore on the streaming branch.
+        """
+        inner = self._ensure()
+        if on_event is None:
+            return inner.run_turn(user_text, execute)
+        return inner.run_turn(user_text, execute, on_event=on_event)  # type: ignore[call-arg]
 
     def complete(self, prompt: str, *, temperature: float = 0.0) -> str:
         """Forward to the (lazily built) inner model; same reload semantics as run_turn."""
@@ -84,3 +98,18 @@ class ReloadableLanguageModel:
         fn = getattr(inner, "set_delivery_mode", None)
         if callable(fn):
             fn(mode)
+
+    def resume(self, session_id: str) -> bool:
+        """Delegate to the active inner model's ``resume`` (if it has one)."""
+        with self._lock:
+            inner = self._inner
+        fn = getattr(inner, "resume", None)
+        return bool(fn(session_id)) if callable(fn) else False
+
+    def list_sessions(self) -> list[dict[str, Any]]:
+        """Delegate to the active inner model's ``list_sessions`` (if it has one)."""
+        with self._lock:
+            inner = self._inner
+        fn = getattr(inner, "list_sessions", None)
+        result = fn() if callable(fn) else []
+        return result if isinstance(result, list) else []

@@ -165,8 +165,16 @@ class PermissionGate:
             return decision if decision in ("once", "session") else ""
         return "once" if self._confirmer.confirm(prompt, kind) else ""
 
-    def execute(self, call: ToolCall) -> ToolResult:
-        """Run one tool call through the gate; see the module docstring for policy."""
+    def execute(self, call: ToolCall, *, pre_authorized: bool = False) -> ToolResult:
+        """Run one tool call through the gate; see the module docstring for policy.
+
+        Args:
+            call: The tool call to run.
+            pre_authorized: When ``True``, skip the confirmation prompt (the caller has
+                already obtained the user's approval, e.g. an allowlisted command in an
+                approved plan). Classification, dispatch, and auditing still happen, so
+                the gate remains the single execution + audit choke point.
+        """
         spec = self._registry.get(call.name)
 
         if spec is None:
@@ -205,7 +213,10 @@ class PermissionGate:
                     name=call.name, content=permissions.needed_message(spec.requires), ok=False
                 )
 
-        if spec.risk >= self._threshold or (spec.network and spec.risk >= Risk.WRITE):
+        needs_confirm = spec.risk >= self._threshold or (spec.network and spec.risk >= Risk.WRITE)
+        if needs_confirm and pre_authorized:
+            _log.info("pre-authorized tool=%s risk=%s", call.name, spec.risk.name)
+        if needs_confirm and not pre_authorized:
             prompt = spec.confirm_prompt or self._format_prompt(
                 spec.name, spec.risk, call.arguments
             )

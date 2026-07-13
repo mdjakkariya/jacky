@@ -12,14 +12,19 @@ audit log and sandboxed filesystem tools) in front of the language model.
 from __future__ import annotations
 
 from collections.abc import Callable
+from dataclasses import replace
+from pathlib import Path
 from typing import TYPE_CHECKING
 
+from autobot.agent.harness import AgentHarness
+from autobot.agent.session_store import SessionStore
 from autobot.config import Settings
 from autobot.core.events import AmplitudeSink, ChoicesSink, VisibilitySink
-from autobot.core.interfaces import AudioSource, LanguageModel, SpeechToText, TextToSpeech
+from autobot.core.interfaces import AudioSource, SpeechToText, TextToSpeech
 from autobot.io.audio import PushToTalkRecorder
 from autobot.llm.ollama_llm import OllamaLanguageModel
 from autobot.logging_setup import get_logger, setup_logging
+from autobot.orchestrator.checkpoint import create_checkpoint
 from autobot.orchestrator.state_machine import Orchestrator, StateListener, _print_transition
 from autobot.orchestrator.wake_gate import PassThroughGate, SttWakeGate, WakeGate
 from autobot.session_log import FileTranscript, NullTranscript, Transcript
@@ -27,11 +32,14 @@ from autobot.stt.faster_whisper_stt import FasterWhisperSTT
 from autobot.tools.access import AccessPolicy, set_active_policy
 from autobot.tools.audit import AuditLog
 from autobot.tools.builtin import register_builtins
+from autobot.tools.code.redact import redact_secrets
+from autobot.tools.code.tools import register_code_tools
 from autobot.tools.filesystem import register_filesystem_tools
 from autobot.tools.permission import Confirmer, PermissionGate
 from autobot.tools.registry import ToolRegistry
 
 if TYPE_CHECKING:
+    from autobot.agent.coder_turn import CoderTurnDriver, SuspendingConfirmer
     from autobot.io.listening import FrameSource
     from autobot.mcp.manager import McpManager
     from autobot.memory.store import MemoryStore
@@ -279,18 +287,65 @@ def _summary_window_chars(settings: Settings) -> int:
     return 8000
 
 
+def _apply_profile_overrides(settings: Settings) -> Settings:
+    """Return settings with profile-specific overrides applied.
+
+    The coder profile raises the LLM output budget so plans/replies and file writes don't
+    truncate at the assistant's small default. Both the local (``llm_max_tokens``) and the
+    cloud (``anthropic_max_tokens``) budgets are raised — otherwise a cloud coder is silently
+    capped at the tiny assistant default and large edits fail with "too many steps". The
+    OpenAI-compatible provider sends no max-tokens cap, so it needs no override. All other
+    profiles are returned unchanged.
+    """
+    if settings.profile == "coder":
+        return replace(
+            settings,
+            llm_max_tokens=settings.coder_llm_max_tokens,
+            anthropic_max_tokens=settings.coder_llm_max_tokens,
+        )
+    return settings
+
+
 def _build_llm(
     settings: Settings,
     registry: ToolRegistry,
     transcript: Transcript,
     memory: MemoryStore | None,
-) -> LanguageModel:
-    """Pick the language-model backend: local Ollama (default) or Anthropic (opt-in).
+) -> AgentHarness:
+    """Pick the LLM backend: local Ollama (default), Anthropic, or an OpenAI-compatible endpoint.
 
-    Cloud is disclosed and degrades gracefully — a missing key or the missing
-    ``cloud`` extra falls back to local rather than failing startup.
+    The latter two are opt-in. Cloud is disclosed and degrades gracefully — a missing key or
+    the missing ``cloud`` extra falls back to local rather than failing startup. Every backend
+    is wrapped in an :class:`AgentHarness`, which owns the conversation `Session` (history,
+    summary, delivery mode, usage) — the adapters themselves are stateless across turns.
     """
+    settings = _apply_profile_overrides(settings)
     log = get_logger("app")
+
+    from autobot.tools.access import active_policy
+
+    def _coder_cwd() -> str:
+        # Read the coder's active folder LIVE: it is set/changed after the client connects,
+        # so a value captured now would be stale. Checkpoints must be created in the same
+        # live cwd that `/undo` restores from (see the undo wiring below), or the ref won't
+        # resolve. Falls back to the launch cwd before any policy is active.
+        pol = active_policy()
+        return str(pol.cwd) if pol is not None else str(Path.cwd())
+
+    cwd = _coder_cwd()  # initial cwd for the harness (session/display); checkpoints read live
+    # Coder sessions live in the workspace (<cwd>/.jack/sessions) so history is per-project;
+    # the assistant uses the shared global directory.
+    _is_coder = settings.profile == "coder"
+    store = SessionStore(
+        resolve_session_dir(
+            _is_coder, cwd if _is_coder else None, settings.sandbox_dir, settings.agent_session_dir
+        )
+    )
+
+    def _snapshot(label: str) -> None:
+        create_checkpoint(_coder_cwd(), label)
+
+    checkpoint = _snapshot if settings.checkpoints else None
     if settings.llm_provider == "anthropic":
         try:
             from autobot.llm.anthropic_llm import AnthropicLanguageModel
@@ -305,7 +360,14 @@ def _build_llm(
                 f"[llm] CLOUD mode — Claude ({settings.anthropic_model}). Your requests and "
                 "remembered profile are sent to Anthropic. Actions still run locally."
             )
-            return llm
+            return AgentHarness(
+                llm,
+                store,
+                cwd=cwd,
+                model_name=settings.anthropic_model,
+                redact=lambda t: redact_secrets(t)[0],
+                checkpoint=checkpoint,
+            )
         except ImportError:
             log.warning("cloud LLM extra missing, falling back to local")
             print(
@@ -315,10 +377,69 @@ def _build_llm(
         except ValueError as exc:
             log.warning("cloud LLM unavailable, falling back to local: %s", exc)
             print(f"[llm] cloud unavailable ({exc}) — using local Ollama.")
+    if settings.llm_provider == "openai":
+        from autobot.agent.providers.openai_compatible import OpenAICompatibleModel
+        from autobot.tools.selection import build_tool_selector
+
+        log.info(
+            "llm provider=openai base_url=%s model=%s (OFF-DEVICE)",
+            settings.openai_base_url or "(default)",
+            settings.llm_model,
+        )
+        print(
+            f"[llm] CLOUD mode — OpenAI-compatible ({settings.llm_model} @ "
+            f"{settings.openai_base_url or 'default endpoint'}). Your requests and remembered "
+            "profile are sent to that endpoint. Actions still run locally."
+        )
+        selector = build_tool_selector(settings, registry)
+        openai_model = OpenAICompatibleModel(
+            settings, registry, transcript, memory=memory, selector=selector
+        )
+        return AgentHarness(
+            openai_model,
+            store,
+            cwd=cwd,
+            model_name=settings.llm_model,
+            redact=lambda t: redact_secrets(t)[0],
+            checkpoint=checkpoint,
+        )
     from autobot.tools.selection import build_tool_selector
 
     selector = build_tool_selector(settings, registry)
-    return OllamaLanguageModel(settings, registry, transcript, memory=memory, selector=selector)
+    model = OllamaLanguageModel(settings, registry, transcript, memory=memory, selector=selector)
+    return AgentHarness(
+        model,
+        store,
+        cwd=cwd,
+        model_name=settings.llm_model,
+        redact=lambda t: redact_secrets(t)[0],
+        checkpoint=checkpoint,
+    )
+
+
+def resolve_workspace_root(coder: bool, workspace: str | None, sandbox_dir: str) -> Path:
+    """The directory the engine is jailed to: the coder's workspace, else the sandbox.
+
+    For the coder, an explicit ``workspace`` wins; otherwise the launch cwd. For the
+    assistant, always the configured sandbox.
+    """
+    if coder:
+        base = Path(workspace).expanduser() if workspace else Path.cwd()
+        return base.resolve()
+    return Path(sandbox_dir).expanduser().resolve()
+
+
+def resolve_session_dir(
+    coder: bool, workspace: str | None, sandbox_dir: str, agent_session_dir: str
+) -> str:
+    """Where session transcripts live: per-workspace (``.jack/sessions``) for the coder.
+
+    The coder scopes sessions to its workspace so ``/sessions`` and history are isolated
+    per project; the assistant uses the shared global directory.
+    """
+    if coder:
+        return str(resolve_workspace_root(True, workspace, sandbox_dir) / ".jack" / "sessions")
+    return agent_session_dir
 
 
 def build(
@@ -336,6 +457,7 @@ def build(
     on_workspace: Callable[[str, str], None] | None = None,
     on_mcp_event: Callable[[dict[str, object]], None] | None = None,
     on_meeting_event: Callable[[dict[str, object]], None] | None = None,
+    workspace: str | None = None,
 ) -> Orchestrator:
     """Compose a fully wired :class:`Orchestrator`.
 
@@ -379,20 +501,28 @@ def build(
         on_meeting_event: Optional callback invoked with the recorder's ``status()``
             dict at each meeting lifecycle transition; the daemon passes the bus's
             ``publish_meeting`` so connected clients receive live recording state.
+        workspace: Coder workspace directory to jail to (an explicit ``--workspace``,
+            else the launch cwd). Ignored for the assistant, which uses the sandbox.
 
     Returns:
         A ready-to-run orchestrator. Constructing it loads the STT model, opens
         the audit log, prepares the sandbox, and connects to Ollama.
     """
     settings = settings or Settings.load()
+    # Coder profile: a lean, code-only tool registry (read_file/edit_file/grep/
+    # run_command/repo_map) instead of the assistant's fileio/apps/notes/etc. tools —
+    # the two sets share names (write_file, edit_file), so they can never coexist in
+    # one registry. See the `coder` branches below and the `register_code_tools` call.
+    coder = settings.profile == "coder"
     log_path = setup_logging(settings)
     log = get_logger("app")
     log.info(
-        "starting input=%s llm=%s stt=%s sandbox=%s",
+        "starting input=%s llm=%s stt=%s sandbox=%s profile=%s",
         settings.input_mode,
         settings.llm_model,
         settings.stt_model,
         settings.sandbox_dir,
+        settings.profile,
     )
     print(f"[log] writing debug log to {log_path}")
 
@@ -404,107 +534,131 @@ def build(
     # relative paths from the filesystem tools land in the right place.
     from pathlib import Path as _Path
 
-    workspace_root = _Path(settings.sandbox_dir).expanduser().resolve()
+    # A coder operates in — and is jailed to — its workspace (an explicit --workspace, else
+    # the launch cwd), so `jack "…"` edits the current project, not a scratch sandbox. The
+    # coder pins its cwd to that workspace (restore_cwd=False) so a stale persisted folder
+    # can't override it; the assistant uses the sandbox and keeps restoring its cwd.
+    workspace_root = resolve_workspace_root(coder, workspace, settings.sandbox_dir)
 
     def _cwd_changed(p: _Path) -> None:
         if on_workspace is not None:
             on_workspace(str(p), p.name)
 
-    access_policy = AccessPolicy(settings.access_store, workspace_root, on_cwd_change=_cwd_changed)
+    # The coder acts only in a trusted workspace (an untrusted one denies all file ops until
+    # the user trusts it — see autobot.trust). The assistant's sandbox is always writable.
+    from autobot.trust import is_trusted
+
+    workspace_trusted = is_trusted(workspace_root) if coder else True
+    access_policy = AccessPolicy(
+        settings.access_store,
+        workspace_root,
+        on_cwd_change=_cwd_changed,
+        restore_cwd=not coder,
+        workspace_trusted=workspace_trusted,
+    )
     set_active_policy(access_policy)  # so the Settings access endpoints can manage grants
-    if settings.allow_app_control:
-        # macOS app lifecycle by voice; gated like everything else (uninstall
-        # confirms, the rest are audited WRITEs).
-        from autobot.tools.apps import register_app_tools
-
-        register_app_tools(registry)
-        log.info("app control ENABLED (open/focus/quit/uninstall …)")
-        print("[apps] app control ENABLED — Jack can open/quit apps by voice.")
-    if settings.allow_system_info:
-        # Read-only system status (battery/wifi/disk) — safe, queries only.
-        from autobot.tools.system import register_system_tools
-
-        register_system_tools(registry)
-        log.info("system info ENABLED (battery/wifi/disk)")
-
-    if settings.allow_system_toggles:
-        # Write-side system controls (volume/brightness/appearance/sleep/wifi/
-        # keep-awake/lock) — audited WRITEs through the gate; no sudo, ever.
-        from autobot.tools.toggles import register_system_toggles
-
-        register_system_toggles(registry)
-        log.info("system toggles ENABLED (volume/brightness/appearance/sleep/wifi/keep-awake/lock)")
-
-    if settings.allow_file_search:
-        # Read-only Spotlight file search (on-device).
-        from autobot.tools.files import register_file_tools
-
-        register_file_tools(registry, choices=on_choices)
-        log.info("file search ENABLED (Spotlight)")
-
-    if settings.allow_clipboard:
-        # Read/set the macOS clipboard (on-device).
-        from autobot.tools.clipboard import register_clipboard_tools
-
-        register_clipboard_tools(registry)
-        log.info("clipboard ENABLED (read/set)")
-
-    if settings.allow_reminders:
-        # macOS Reminders (create/list/complete/delete) via osascript; gated like
-        # everything else — list is READ_ONLY, create/complete are WRITE, delete
-        # confirms (DESTRUCTIVE). On-device.
-        from autobot.tools.reminders import register_reminders_tools
-
-        register_reminders_tools(registry)
-        log.info("reminders ENABLED (create/update/list/complete/delete)")
-        print("[reminders] reminders ENABLED — Jack can manage your Reminders.")
-
-    if settings.allow_notes:
-        # macOS Notes (capture/read/organize/delete) via osascript; gated like
-        # everything else — reads are READ_ONLY, note/move are WRITE, delete
-        # confirms (DESTRUCTIVE). On-device.
-        from autobot.tools.notes import register_notes_tools
-
-        register_notes_tools(registry)
-        log.info("notes ENABLED (note/list/read/move/delete/folders)")
-        print("[notes] notes ENABLED — Jack can manage your Notes.")
 
     # Phase 4: persistent personalization. The store is read into the prompt each
-    # turn and grown via the (gated) memory tools.
+    # turn and grown via the (gated) memory tools. Declared here (not inside the
+    # assistant-only block below) because it's referenced unconditionally later.
     memory = None
-    if settings.allow_memory:
-        from autobot.memory.store import MemoryStore
-        from autobot.tools.memory import register_memory_tools
 
-        memory = MemoryStore(settings.memory_db)
-        register_memory_tools(registry, memory)
-        log.info("memory ENABLED db=%s", settings.memory_db)
-        name = memory.get_name()
-        print(f"[memory] personalization ON{f' — hi {name}!' if name else ''}")
-    if settings.allow_web:
-        # The one tool that reaches off-device; only registered when opted in.
-        from autobot.tools.web import register_web_tools
+    # Assistant-only tools: the coder profile skips this whole section (macOS
+    # lifecycle/system/notes/reminders/memory/web/orb/trash) in favor of the lean
+    # code-tool set registered further down, once ``broker`` exists.
+    if not coder:
+        if settings.allow_app_control:
+            # macOS app lifecycle by voice; gated like everything else (uninstall
+            # confirms, the rest are audited WRITEs).
+            from autobot.tools.apps import register_app_tools
 
-        register_web_tools(registry, settings)
-        from autobot.secrets import get_secret
+            register_app_tools(registry)
+            log.info("app control ENABLED (open/focus/quit/uninstall …)")
+            print("[apps] app control ENABLED — Jack can open/quit apps by voice.")
+        if settings.allow_system_info:
+            # Read-only system status (battery/wifi/disk) — safe, queries only.
+            from autobot.tools.system import register_system_tools
 
-        using_api = settings.web_provider != "ddgs" and bool(get_secret("web_api_key"))
-        provider = "API" if using_api else "ddgs scraping"
-        log.info("web search ENABLED provider=%s (queries leave the device)", provider)
-        print(f"[web] web search ENABLED via {provider} — queries leave the device.")
+            register_system_tools(registry)
+            log.info("system info ENABLED (battery/wifi/disk)")
 
-    if on_visibility is not None:
-        # A UI is attached: let the user dismiss the orb by voice ("go away").
-        from autobot.tools.orb import register_orb_tools
+        if settings.allow_system_toggles:
+            # Write-side system controls (volume/brightness/appearance/sleep/wifi/
+            # keep-awake/lock) — audited WRITEs through the gate; no sudo, ever.
+            from autobot.tools.toggles import register_system_toggles
 
-        visibility = on_visibility
-        register_orb_tools(registry, lambda: visibility(False))
-        log.info("orb dismiss tool ENABLED")
+            register_system_toggles(registry)
+            log.info(
+                "system toggles ENABLED (volume/brightness/appearance/sleep/wifi/keep-awake/lock)"
+            )
 
-    # Empty-the-Trash: a destructive action, so the gate confirms it (by voice).
-    from autobot.tools.trash import register_trash_tools
+        if settings.allow_file_search:
+            # Read-only Spotlight file search (on-device).
+            from autobot.tools.files import register_file_tools
 
-    register_trash_tools(registry)
+            register_file_tools(registry, choices=on_choices)
+            log.info("file search ENABLED (Spotlight)")
+
+        if settings.allow_clipboard:
+            # Read/set the macOS clipboard (on-device).
+            from autobot.tools.clipboard import register_clipboard_tools
+
+            register_clipboard_tools(registry)
+            log.info("clipboard ENABLED (read/set)")
+
+        if settings.allow_reminders:
+            # macOS Reminders (create/list/complete/delete) via osascript; gated like
+            # everything else — list is READ_ONLY, create/complete are WRITE, delete
+            # confirms (DESTRUCTIVE). On-device.
+            from autobot.tools.reminders import register_reminders_tools
+
+            register_reminders_tools(registry)
+            log.info("reminders ENABLED (create/update/list/complete/delete)")
+            print("[reminders] reminders ENABLED — Jack can manage your Reminders.")
+
+        if settings.allow_notes:
+            # macOS Notes (capture/read/organize/delete) via osascript; gated like
+            # everything else — reads are READ_ONLY, note/move are WRITE, delete
+            # confirms (DESTRUCTIVE). On-device.
+            from autobot.tools.notes import register_notes_tools
+
+            register_notes_tools(registry)
+            log.info("notes ENABLED (note/list/read/move/delete/folders)")
+            print("[notes] notes ENABLED — Jack can manage your Notes.")
+
+        if settings.allow_memory:
+            from autobot.memory.store import MemoryStore
+            from autobot.tools.memory import register_memory_tools
+
+            memory = MemoryStore(settings.memory_db)
+            register_memory_tools(registry, memory)
+            log.info("memory ENABLED db=%s", settings.memory_db)
+            name = memory.get_name()
+            print(f"[memory] personalization ON{f' — hi {name}!' if name else ''}")
+        if settings.allow_web:
+            # The one tool that reaches off-device; only registered when opted in.
+            from autobot.tools.web import register_web_tools
+
+            register_web_tools(registry, settings)
+            from autobot.secrets import get_secret
+
+            using_api = settings.web_provider != "ddgs" and bool(get_secret("web_api_key"))
+            provider = "API" if using_api else "ddgs scraping"
+            log.info("web search ENABLED provider=%s (queries leave the device)", provider)
+            print(f"[web] web search ENABLED via {provider} — queries leave the device.")
+
+        if on_visibility is not None:
+            # A UI is attached: let the user dismiss the orb by voice ("go away").
+            from autobot.tools.orb import register_orb_tools
+
+            visibility = on_visibility
+            register_orb_tools(registry, lambda: visibility(False))
+            log.info("orb dismiss tool ENABLED")
+
+        # Empty-the-Trash: a destructive action, so the gate confirms it (by voice).
+        from autobot.tools.trash import register_trash_tools
+
+        register_trash_tools(registry)
 
     # Per-session transcript (readable conversation + debug notes).
     transcript = _build_transcript(settings)
@@ -550,9 +704,16 @@ def build(
     # Permission gate: audit everything, confirm destructive actions only. The
     # confirmer asks by voice (with a card on the orb) when hands-free.
     audit = AuditLog(settings.audit_db)
-    confirmer = _build_confirmer(
-        settings, tts, audio, stt, on_confirm, on_confirm_clear, poll_click
-    )
+    suspending: SuspendingConfirmer | None = None
+    if coder:
+        from autobot.agent.coder_turn import SuspendingConfirmer
+
+        suspending = SuspendingConfirmer()
+        confirmer: Confirmer = suspending
+    else:
+        confirmer = _build_confirmer(
+            settings, tts, audio, stt, on_confirm, on_confirm_clear, poll_click
+        )
 
     # MCP integration (opt-in, the third disclosed exception). Built behind a provider
     # so "Enable MCP connections" (allow_mcp) can turn the whole subsystem on or off at
@@ -598,25 +759,78 @@ def build(
     from autobot.tools.access import AccessBroker
 
     broker = AccessBroker(access_policy, confirmer)
-    register_filesystem_tools(registry, broker)  # now active-folder aware
 
-    from autobot.tools.workspace import register_workspace_tools
+    if coder:
+        # Lean code-tool registry: read_file/write_file/edit_file/multi_edit, nav
+        # (glob/grep), run_command, repo_map — no fileio/filesystem/workspace tools
+        # (their write_file/edit_file names would clash with the code tools above).
+        register_code_tools(
+            registry,
+            broker,
+            allowlist=settings.command_allowlist,
+            blocklist=settings.command_blocklist,
+        )
+        log.info("coder profile ENABLED (code tools only)")
+    else:
+        register_filesystem_tools(registry, broker)  # now active-folder aware
 
-    register_workspace_tools(registry, broker, access_policy)
+        from autobot.tools.workspace import register_workspace_tools
 
-    if settings.allow_file_io:
-        # Broad read/copy/write/edit, scoped by the access policy; first use of a new
-        # folder asks for a grant via the same confirmer the gate uses.
-        from autobot.tools.fileio import register_file_io_tools
+        register_workspace_tools(registry, broker, access_policy)
 
-        register_file_io_tools(registry, broker)
-        log.info("file I/O ENABLED (read/copy/write/edit, access-gated)")
+        if settings.allow_file_io:
+            # Broad read/copy/write/edit, scoped by the access policy; first use of a
+            # new folder asks for a grant via the same confirmer the gate uses.
+            from autobot.tools.fileio import register_file_io_tools
+
+            register_file_io_tools(registry, broker)
+            log.info("file I/O ENABLED (read/copy/write/edit, access-gated)")
 
     # Reloadable LLM: rebuilt from fresh settings + Keychain when the Settings
     # view changes the provider/model/key — no restart needed (applies next turn).
+    # The profile is pinned to this build (never hot-swapped mid-daemon-life), so it's
+    # forced onto every reload — otherwise a daemon started with --profile coder would
+    # silently fall back to the assistant prompt/registry choice baked into settings.json.
     from autobot.llm.reloadable import ReloadableLanguageModel
 
-    llm = ReloadableLanguageModel(lambda: _build_llm(Settings.load(), registry, transcript, memory))
+    llm = ReloadableLanguageModel(
+        lambda: _build_llm(
+            replace(Settings.load(), profile=settings.profile), registry, transcript, memory
+        )
+    )
+
+    coder_driver: CoderTurnDriver | None = None
+    if coder and suspending is not None:
+        from autobot.agent.coder_turn import CoderTurnDriver
+        from autobot.orchestrator.checkpoint import list_checkpoints, restore_checkpoint
+
+        # Read `access_policy.cwd` LIVE inside each call — it is the same policy object the
+        # checkpoint snapshot hook reads via `active_policy()`, but the coder's cwd is set
+        # after the client connects, so capturing it here (at build time) would point `/undo`
+        # at the pre-connect cwd while checkpoints land in the live one — the ref would not
+        # resolve. Reading live keeps create and restore on the same repo.
+        def _undo_latest() -> tuple[bool, str]:
+            """Restore the newest checkpoint for the coder's cwd (used by /undo)."""
+            cwd = str(access_policy.cwd)
+            cps = list_checkpoints(cwd)
+            if not cps:
+                return False, "Nothing to undo."
+            return restore_checkpoint(cwd, cps[0].ref)
+
+        def _checkpoint_dicts() -> list[dict[str, str]]:
+            """Checkpoints as plain dicts for the daemon/CLI (used by /undo list)."""
+            cps = list_checkpoints(str(access_policy.cwd))
+            return [{"ref": c.ref, "sha": c.sha, "label": c.label} for c in cps]
+
+        coder_driver = CoderTurnDriver(
+            llm,
+            gate,
+            suspending,
+            settings_provider=Settings.load,
+            undo=_undo_latest,
+            checkpoints=_checkpoint_dicts,
+        )
+        log.info("coder plan→approve→act driver ready")
 
     # Barge-in engages in voice mode when the user wants it AND the mic is
     # echo-cancelled. The voice I/O is built lazily (chat-first), so we can't probe
@@ -728,6 +942,7 @@ def build(
     # Expose the meeting recorder (if built) so the daemon dispatcher can route
     # /meeting/* HTTP actions to it — same pattern as mcp_provider above.
     orch.meeting_recorder = _meeting_recorder
+    orch.coder_driver = coder_driver
     return orch
 
 

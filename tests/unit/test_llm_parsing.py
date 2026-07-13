@@ -106,9 +106,11 @@ def test_trim_history_starts_on_a_clean_user_turn() -> None:
     assert [m["role"] for m in trimmed] == ["user", "assistant"]
 
 
-def test_ollama_persists_tool_exchange_in_history() -> None:
+def test_ollama_persists_tool_exchange_in_history(tmp_path: Any) -> None:
     # The local model must keep the assistant tool call + tool result in history
     # (not just the final text), so a later "close it" can resolve what it opened.
+    from autobot.agent.harness import AgentHarness
+    from autobot.agent.session_store import SessionStore
     from autobot.config import Settings
     from autobot.core.types import ToolResult
     from autobot.llm.ollama_llm import OllamaLanguageModel
@@ -148,20 +150,27 @@ def test_ollama_persists_tool_exchange_in_history() -> None:
     m._transcript = NullTranscript()
     m._memory = None
     m._client = cast(Any, FakeClient())
-    m._history = []
-    m._summary = ""
     m._last_prompt_tokens = 0
     m._context_tokens = 8192
+    m._messages = []
+    m._sent_start = 0
+    m._user_msg = {}
+    m._round_query = ""
+    m._pinned = set()
 
-    reply = m.run_turn("open safari", lambda c: ToolResult(name=c.name, content="Opened Safari."))
+    harness = AgentHarness(m, SessionStore(str(tmp_path)))
+    harness.session.delivery_mode = "chat"
+    reply = harness.run_turn(
+        "open safari", lambda c: ToolResult(name=c.name, content="Opened Safari.")
+    )
     assert reply == "Opened it."
-    roles = [msg.get("role") for msg in m._history]
+    roles = [msg.get("role") for msg in harness.session.history]
     assert "tool" in roles  # the tool result is persisted, not dropped
     assert roles[0] == "user" and roles[-1] == "assistant"
 
     # Local parity for the context meter: a usage payload with the local model and no
     # cache billing (cache_read/write are None — the dev card hides those rows).
-    usage = m.context_usage()
+    usage = harness.context_usage()
     assert usage is not None
     assert usage["used"] == 120 and usage["window"] == 8192
     assert usage["model"] == m._settings.llm_model
@@ -170,24 +179,24 @@ def test_ollama_persists_tool_exchange_in_history() -> None:
     assert usage["turn_in"] == 120 and usage["turn_out"] == 0
 
 
-def test_ollama_new_session_clears_history_and_usage() -> None:
+def test_ollama_new_session_clears_history_and_usage(tmp_path: Any) -> None:
+    from autobot.agent.harness import AgentHarness
+    from autobot.agent.session_store import SessionStore
     from autobot.config import Settings
     from autobot.llm.ollama_llm import OllamaLanguageModel
+    from autobot.tools.registry import ToolRegistry
 
-    m = object.__new__(OllamaLanguageModel)
-    m._settings = Settings()
-    m._history = [{"role": "user", "content": "hi"}]
-    m._summary = "earlier stuff"
-    m._last_prompt_tokens = 1200
-    m._last_eval_tokens = 40
-    m._context_tokens = 8192
+    m = OllamaLanguageModel(Settings(context_tokens=8192), ToolRegistry(), client=cast(Any, None))
+    harness = AgentHarness(m, SessionStore(str(tmp_path)))
+    harness.session.history = [{"role": "user", "content": "hi"}]
+    harness.session.summary = "earlier stuff"
+    harness.session.last_usage = {"used": 1200, "window": 8192}
 
-    m.new_session()
+    harness.new_session()
 
-    assert m._history == []
-    assert m._summary == ""
-    assert m._last_prompt_tokens == 0 and m._last_eval_tokens == 0
-    assert m.context_usage() is None  # meter reads empty until the next turn
+    assert harness.session.history == []
+    assert harness.session.summary == ""
+    assert harness.context_usage() is None  # meter reads empty until the next turn
 
 
 def test_pick_context_length_finds_arch_specific_key() -> None:
@@ -313,6 +322,7 @@ def test_meeting_state_line_swallows_provider_errors() -> None:
 
 
 def test_ollama_assemble_injects_meeting_state() -> None:
+    from autobot.agent.session import Session
     from autobot.config import Settings
     from autobot.llm.ollama_llm import OllamaLanguageModel
     from autobot.meeting.state import set_meeting_status_provider
@@ -320,13 +330,11 @@ def test_ollama_assemble_injects_meeting_state() -> None:
     m = object.__new__(OllamaLanguageModel)
     m._settings = Settings()
     m._memory = None
-    m._summary = ""
-    m._history = []
-    m._delivery_mode = "chat"
+    session = Session(id="t", cwd=".", model="m", delivery_mode="chat")
 
     set_meeting_status_provider(lambda: {"active": True, "elapsed_s": 60.0, "paused": False})
     try:
-        msgs = m._assemble({"role": "user", "content": "take minutes"})
+        msgs = m._assemble(session, {"role": "user", "content": "take minutes"})
         system_text = " ".join(str(x.get("content", "")) for x in msgs if x.get("role") == "system")
         assert "recording" in system_text.lower()
     finally:

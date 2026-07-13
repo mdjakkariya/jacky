@@ -126,34 +126,25 @@ def test_empty_env_with_successful_token_injection_returns_dict() -> None:
 # ---------------------------------------------------------------------------
 
 
-def _make_fake_runner(store: dict[str, str]) -> Callable[[list[str]], tuple[int, str]]:
-    """Create a fake Keychain runner that stores values in ``store`` (in-memory)."""
+class _FakeKeyring:
+    """In-memory keyring backend keyed by account name.
 
-    def runner(args: list[str]) -> tuple[int, str]:
-        # Simulate: security find-generic-password -s autobot -a <name> -w
-        if "find-generic-password" in args:
-            try:
-                idx = args.index("-a")
-                name = args[idx + 1]
-            except (ValueError, IndexError):
-                return 1, "missing -a flag"
-            if name in store:
-                return 0, store[name]
-            return 1, "not found"
-        # Simulate: security add-generic-password -U -s autobot -a <name> -w <value>
-        if "add-generic-password" in args:
-            try:
-                idx_a = args.index("-a")
-                idx_w = args.index("-w")
-                name = args[idx_a + 1]
-                value = args[idx_w + 1]
-            except (ValueError, IndexError):
-                return 1, "missing flags"
-            store[name] = value
-            return 0, ""
-        return 1, "unknown command"
+    Mirrors the real ``keyring`` API subset ``autobot.secrets`` uses:
+    ``get_password``/``set_password``/``delete_password``. Seeded directly via
+    ``store`` for pre-populated cases.
+    """
 
-    return runner
+    def __init__(self, store: dict[str, str]) -> None:
+        self.store = store
+
+    def get_password(self, service: str, name: str) -> str | None:
+        return self.store.get(name)
+
+    def set_password(self, service: str, name: str, value: str) -> None:
+        self.store[name] = value
+
+    def delete_password(self, service: str, name: str) -> None:
+        del self.store[name]
 
 
 class _FakeOAuthToken:
@@ -225,8 +216,8 @@ class _FakeClientInfoFull:
 def test_keychain_get_tokens_returns_none_when_absent() -> None:
     """get_tokens returns None when Keychain has no entry."""
     store: dict[str, str] = {}
-    runner = _make_fake_runner(store)
-    storage = KeychainTokenStorage("github", runner=runner)
+    backend = _FakeKeyring(store)
+    storage = KeychainTokenStorage("github", backend=backend)
 
     with patch.dict(
         "sys.modules",
@@ -244,8 +235,8 @@ def test_keychain_get_tokens_returns_none_when_absent() -> None:
 def test_keychain_set_and_get_tokens_round_trip() -> None:
     """set_tokens then get_tokens returns the same access_token."""
     store: dict[str, str] = {}
-    runner = _make_fake_runner(store)
-    storage = KeychainTokenStorage("github", runner=runner)
+    backend = _FakeKeyring(store)
+    storage = KeychainTokenStorage("github", backend=backend)
 
     fake_token = _FakeOAuthToken("tok-abc123")
 
@@ -271,8 +262,8 @@ def test_keychain_set_and_get_tokens_round_trip() -> None:
 def test_keychain_get_tokens_returns_none_on_unparseable_json() -> None:
     """get_tokens returns None when the stored JSON is corrupt."""
     store: dict[str, str] = {"mcp.github.oauth": "not-valid-json!!!"}
-    runner = _make_fake_runner(store)
-    storage = KeychainTokenStorage("github", runner=runner)
+    backend = _FakeKeyring(store)
+    storage = KeychainTokenStorage("github", backend=backend)
 
     with patch.dict(
         "sys.modules",
@@ -290,8 +281,8 @@ def test_keychain_get_tokens_returns_none_on_unparseable_json() -> None:
 def test_keychain_get_client_info_returns_none_when_absent() -> None:
     """get_client_info returns None when Keychain has no entry."""
     store: dict[str, str] = {}
-    runner = _make_fake_runner(store)
-    storage = KeychainTokenStorage("github", runner=runner)
+    backend = _FakeKeyring(store)
+    storage = KeychainTokenStorage("github", backend=backend)
 
     with patch.dict(
         "sys.modules",
@@ -309,8 +300,8 @@ def test_keychain_get_client_info_returns_none_when_absent() -> None:
 def test_keychain_set_and_get_client_info_round_trip() -> None:
     """set_client_info then get_client_info returns the same client_id."""
     store: dict[str, str] = {}
-    runner = _make_fake_runner(store)
-    storage = KeychainTokenStorage("github", runner=runner)
+    backend = _FakeKeyring(store)
+    storage = KeychainTokenStorage("github", backend=backend)
 
     fake_info = _FakeClientInfo("client-xyz")
 
@@ -336,8 +327,8 @@ def test_keychain_set_and_get_client_info_round_trip() -> None:
 def test_keychain_get_client_info_returns_none_on_unparseable_json() -> None:
     """get_client_info returns None when the stored JSON is corrupt."""
     store: dict[str, str] = {"mcp.github.client": "{bad json"}
-    runner = _make_fake_runner(store)
-    storage = KeychainTokenStorage("github", runner=runner)
+    backend = _FakeKeyring(store)
+    storage = KeychainTokenStorage("github", backend=backend)
 
     with patch.dict(
         "sys.modules",
@@ -355,8 +346,8 @@ def test_keychain_get_client_info_returns_none_on_unparseable_json() -> None:
 def test_keychain_token_value_never_logged(caplog: pytest.LogCaptureFixture) -> None:
     """set_tokens must not emit the token value into any log record."""
     store: dict[str, str] = {}
-    runner = _make_fake_runner(store)
-    storage = KeychainTokenStorage("github", runner=runner)
+    backend = _FakeKeyring(store)
+    storage = KeychainTokenStorage("github", backend=backend)
     fake_token = _FakeOAuthToken("super-secret-tok-9999")
 
     with (
@@ -385,8 +376,8 @@ def test_keychain_token_value_never_logged_on_read(caplog: pytest.LogCaptureFixt
             {"access_token": "super-secret-tok-read-7777", "token_type": "Bearer"}
         )
     }
-    runner = _make_fake_runner(store)
-    storage = KeychainTokenStorage("github", runner=runner)
+    backend = _FakeKeyring(store)
+    storage = KeychainTokenStorage("github", backend=backend)
 
     with (
         caplog.at_level(logging.DEBUG),
@@ -600,10 +591,10 @@ def test_oauth_redirect_uri_format() -> None:
 def test_keychain_get_client_info_returns_preregistered_when_client_id_set() -> None:
     """get_client_info returns a pre-built client when client_id is configured."""
     store: dict[str, str] = {}
-    runner = _make_fake_runner(store)
+    backend = _FakeKeyring(store)
     storage = KeychainTokenStorage(
         "slack",
-        runner=runner,
+        backend=backend,
         client_id="my-client-id",
         client_secret="my-secret",
         redirect_uri="http://127.0.0.1:8975/callback",
@@ -631,10 +622,10 @@ def test_keychain_get_client_info_returns_preregistered_when_client_id_set() -> 
 def test_keychain_get_client_info_auth_method_none_when_no_secret() -> None:
     """get_client_info uses token_endpoint_auth_method='none' when no client_secret."""
     store: dict[str, str] = {}
-    runner = _make_fake_runner(store)
+    backend = _FakeKeyring(store)
     storage = KeychainTokenStorage(
         "github",
-        runner=runner,
+        backend=backend,
         client_id="gh-client-id",
         client_secret=None,
         redirect_uri="http://127.0.0.1:8975/callback",
@@ -659,10 +650,10 @@ def test_keychain_get_client_info_auth_method_none_when_no_secret() -> None:
 def test_keychain_set_client_info_noop_when_client_id_set() -> None:
     """set_client_info does NOT write to Keychain when client_id is configured."""
     store: dict[str, str] = {}
-    runner = _make_fake_runner(store)
+    backend = _FakeKeyring(store)
     storage = KeychainTokenStorage(
         "slack",
-        runner=runner,
+        backend=backend,
         client_id="my-client-id",
         client_secret="my-secret",
         redirect_uri="http://127.0.0.1:8975/callback",

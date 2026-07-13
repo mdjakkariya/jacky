@@ -12,10 +12,10 @@ setup: install hooks ## Create the env and install git hooks
 	@echo "Setup complete. Run 'make run' to start (needs Ollama running)."
 
 # `uv sync` REPLACES the installed extra set, so always sync the whole set at once.
-EXTRAS := dev all daemon cloud whispercpp aec mcp
+EXTRAS := dev all daemon cloud whispercpp aec mcp tui
 EXTRA_FLAGS := $(addprefix --extra ,$(EXTRAS))
 
-install: ## Sync the virtualenv with all deps (dev + wake + tts + daemon + cloud + whispercpp + aec + mcp)
+install: ## Sync the virtualenv with all deps (dev + wake + tts + daemon + cloud + whispercpp + aec + mcp + tui)
 	uv sync $(EXTRA_FLAGS)
 
 lint: ## Lint with ruff
@@ -43,6 +43,9 @@ check: ## Everything CI runs: lint + format check + types + tests
 
 run: ## Launch the assistant daemon
 	uv run autobot-daemon
+
+e2e: ## Dev-only: run the real-PTY E2E scenarios (needs `uv sync --extra e2e`)
+	.venv/bin/python -m autobot.e2e $(if $(S),$(S),) $(if $(JUDGE),--judge $(JUDGE),)
 
 dev-orb: ## Run the orb + drawer UI live from source (loads the CURRENT ui/orb). Run `make run` in another terminal for the daemon.
 	@echo "Live UI from ui/orb — keep 'make run' (daemon on :8765) running in another terminal."
