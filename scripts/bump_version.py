@@ -92,7 +92,11 @@ def _bump(
 ) -> None:
     for rel, (pattern, template) in files.items():
         path = root / rel
-        path.write_text(set_version(path.read_text(), pattern, template, version))
+        # Read/write UTF-8 explicitly — the manifests contain non-ASCII (em-dashes,
+        # arrows in comments), and the OS default encoding (cp1252 on Windows CI) can't
+        # decode them, which crashed the Windows release binary build.
+        new = set_version(path.read_text(encoding="utf-8"), pattern, template, version)
+        path.write_text(new, encoding="utf-8")
         print(f"updated {rel} -> {version}")
     tag = f"v{version}" if track == "cli" else f"orb-v{version}"
     print(
@@ -109,7 +113,7 @@ def _check(files: dict[str, tuple[re.Pattern[str], str]], version: str, root: Pa
     """Return 0 if every manifest in this track is at ``version``, else 1."""
     ok = True
     for rel, (pattern, _template) in files.items():
-        found = current_version((root / rel).read_text(), pattern)
+        found = current_version((root / rel).read_text(encoding="utf-8"), pattern)
         if found != version:
             ok = False
             print(f"MISMATCH {rel}: {found!r} != {version!r}")
