@@ -52,4 +52,4 @@ remain available in a `uv`/source install.
 ## Signing
 
 Unsigned for the dev preview (Gatekeeper right-click → Open). Sign + notarize later
-via Apple Developer secrets in the orb build (see `docs/RELEASING.md`).
+via Apple Developer secrets in the orb build (see `RELEASING.md`).

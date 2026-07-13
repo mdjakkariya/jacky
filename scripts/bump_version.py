@@ -1,11 +1,16 @@
-"""Bump (or verify) the project version across every manifest.
+"""Bump (or verify) the version for one release track.
 
-The version lives in ``pyproject.toml`` (engine), ``src-tauri/Cargo.toml`` and
-``src-tauri/tauri.conf.json`` (orb app), and they must always agree because the
-release workflow checks them against the pushed git tag. We also rewrite the
-``jack-orb`` entry in ``src-tauri/Cargo.lock`` and the ``autobot`` entry in
-``uv.lock`` so a later ``cargo``/``uv`` run doesn't re-touch a lockfile and force a
-stray, changelog-polluting follow-up commit (and a surprise diff on the next pull).
+Jack releases on two independent tracks, each with its own version and tag:
+
+- ``cli`` (the engine/CLI) — ``pyproject.toml``, ``src/autobot/__init__.py``, and the
+  ``autobot`` entry in ``uv.lock``; tagged ``vX.Y.Z``.
+- ``orb`` (the macOS app) — ``src-tauri/Cargo.toml``, ``src-tauri/tauri.conf.json``, and
+  the ``jack-orb`` entry in ``src-tauri/Cargo.lock``; tagged ``orb-vX.Y.Z``.
+
+Within a track the manifests must agree (the release workflow ``--check``s the CLI
+track against the pushed ``v*`` tag); the two tracks version independently. The lockfile
+entries are pinned by name so a later ``cargo``/``uv`` run doesn't re-touch a lockfile
+and force a stray follow-up commit.
 
 Usage::
 
