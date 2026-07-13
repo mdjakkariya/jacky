@@ -189,6 +189,44 @@ def test_stream_plan_approve_done_with_tool_line(tmp_path: Path) -> None:
     assert "edit foo" in out and "Edited foo" in out and "Edited foo." in out
 
 
+def test_loading_gap_is_printed_before_output_not_after_reply(tmp_path: Path) -> None:
+    """The blank gap sits above the loading region, not squeezed in before the reply."""
+
+    class _RecCon(Console):
+        def __init__(self, **kw: Any) -> None:
+            super().__init__(**kw)
+            self.prints: list[bool] = []  # True = printed content, False = printed a blank
+
+        def print(self, *args: Any, **kwargs: Any) -> None:
+            self.prints.append(bool(args))
+            super().print(*args, **kwargs)
+
+    console = _RecCon(record=True, width=80, theme=jack_theme(), force_terminal=True)
+    stream_turn, stream_answer = _streams(
+        {
+            "start": [
+                {"type": "tool", "event": "start", "name": "write_file", "label": "Edited foo"},
+                {"status": "done", "reply": "Done."},
+            ]
+        }
+    )
+    shell.Shell(
+        "http://x",
+        str(tmp_path),
+        stream_turn=stream_turn,
+        stream_answer=stream_answer,
+        reader=_scripted_reader(["build foo", None]),
+        console=console,
+        snapshot=lambda _c: None,
+        diff_since=lambda _c, _b: None,
+        spin=_noop_spin,
+    ).run()
+    # log[0] is the welcome banner; the turn's prints follow. The first must be the blank
+    # gap, then the tool line, then the reply — with no blank wedged between tool and reply.
+    turn = console.prints[1:]
+    assert turn[:3] == [False, True, True]
+
+
 def test_stream_error_event_renders_in_red(tmp_path: Path) -> None:
     """An ``error``-status event (e.g. transport failure) renders without crashing the shell."""
     sh, console = _make(
