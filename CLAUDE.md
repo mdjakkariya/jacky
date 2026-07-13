@@ -115,9 +115,13 @@ docs/          architecture + design reference (no tracking — see GitHub Issue
 - **Commit messages: Conventional Commits.** Write `feat: …`, `fix: …`, `perf: …`,
   `refactor: …`, `docs: …`, `chore: …` (use `!` or a `BREAKING CHANGE:` footer for
   breaking changes; `chore(release): vX` for release bumps). The changelog and
-  GitHub release notes are generated from these by git-cliff — see
-  [`docs/RELEASING.md`](docs/RELEASING.md). Non-conventional commits are left out of
-  the changelog, so keep the subject in this form.
+  GitHub release notes are generated from these by git-cliff. Non-conventional
+  commits are left out of the changelog, so keep the subject in this form.
+  **Scope tells the two changelogs apart:** scope orb-only work `(orb)`/`(ui)`;
+  everything else (`cli`, `engine`, `update`, `install`, `daemon`, or unscoped) is the
+  CLI/engine track. `git-cliff` writes `CHANGELOG-cli.md` (tag `vX.Y.Z`) and
+  `CHANGELOG-orb.md` (tag `orb-vX.Y.Z`) from those scopes — see
+  [`docs/reference/RELEASING.md`](docs/reference/RELEASING.md).
 
 ## Commands
 
