@@ -132,6 +132,11 @@ def _run_config(action: str, rest: list[str], base_url: str) -> int:
 def main(argv: list[str] | None = None) -> int:
     """`jack` opens the TUI; `jack "…"` runs a request; `jack config …` manages settings."""
     argv = list(sys.argv[1:] if argv is None else argv)
+    if argv and argv[0] in ("--version", "-V", "version"):
+        from autobot import __version__
+
+        print(f"jack {__version__}")
+        return 0
     if argv and argv[0] == "config":
         action = argv[1] if len(argv) > 1 else "show"
         return _run_config(action, argv[2:], f"http://127.0.0.1:{_CODER_PORT}")

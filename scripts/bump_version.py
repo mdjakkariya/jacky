@@ -28,6 +28,13 @@ _SEMVER = re.compile(r"^\d+\.\d+\.\d+$")
 # rel-path -> (pattern matching the current version line, replacement template).
 _FILES: dict[str, tuple[re.Pattern[str], str]] = {
     "pyproject.toml": (re.compile(r'(?m)^version = "[^"]+"'), 'version = "{v}"'),
+    # The engine's runtime version constant. It compiles into the frozen `jack`
+    # binary (importlib.metadata dist files are NOT bundled by PyInstaller), so this
+    # is the single source `jack --version` reads — keep it in lockstep here.
+    "src/autobot/__init__.py": (
+        re.compile(r'(?m)^__version__ = "[^"]+"'),
+        '__version__ = "{v}"',
+    ),
     "ui/orb-shell/src-tauri/Cargo.toml": (re.compile(r'(?m)^version = "[^"]+"'), 'version = "{v}"'),
     "ui/orb-shell/src-tauri/tauri.conf.json": (
         re.compile(r'"version": "[^"]+"'),
