@@ -2,7 +2,7 @@
 # First time:  make setup
 
 .DEFAULT_GOAL := help
-.PHONY: help setup install lint format typecheck test ui-test check run hooks clean release release-check changelog changelog-preview package-orb publish-orb freeze freeze-cli bundle voice
+.PHONY: help setup install lint format typecheck test ui-test check run hooks clean release-cli release-orb release-check-cli release-check-orb changelog-cli changelog-orb changelog-preview-cli changelog-preview-orb package-orb publish-orb freeze freeze-cli bundle voice
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) \
@@ -59,21 +59,37 @@ logs: ## Tail the debug log (override path with LOG=…)
 logs-grep: ## Filter the log to one component, e.g. make logs-grep C=stt
 	grep "\[$(C)\]" "$(LOG)"
 
-release: ## Bump version in all manifests: make release VERSION=0.2.0
-	uv run python scripts/bump_version.py $(VERSION)
+release-cli: ## Bump the CLI/engine manifests: make release-cli VERSION=0.7.0
+	uv run python scripts/bump_version.py cli $(VERSION)
 
-release-check: ## Verify all manifests agree: make release-check VERSION=0.2.0
-	uv run python scripts/bump_version.py --check $(VERSION)
+release-orb: ## Bump the orb (src-tauri) manifests: make release-orb VERSION=0.3.0
+	uv run python scripts/bump_version.py orb $(VERSION)
 
-changelog: ## Prepend this version's section to CHANGELOG.md from Conventional Commits: make changelog VERSION=0.3.0
-	@command -v git-cliff >/dev/null || { echo "git-cliff not found — install with 'brew install git-cliff'."; exit 1; }
-	@if [ -z "$(VERSION)" ]; then echo "Set VERSION, e.g. make changelog VERSION=0.3.0"; exit 1; fi
-	git-cliff --unreleased --tag "v$(VERSION)" --prepend CHANGELOG.md
-	@echo "Updated CHANGELOG.md with v$(VERSION). Review it, then commit."
+release-check-cli: ## Verify the CLI track agrees: make release-check-cli VERSION=0.7.0
+	uv run python scripts/bump_version.py --check cli $(VERSION)
 
-changelog-preview: ## Print the pending (unreleased) changelog without writing anything
-	@command -v git-cliff >/dev/null || { echo "git-cliff not found — install with 'brew install git-cliff'."; exit 1; }
-	@git-cliff --unreleased
+release-check-orb: ## Verify the orb track agrees: make release-check-orb VERSION=0.3.0
+	uv run python scripts/bump_version.py --check orb $(VERSION)
+
+changelog-cli: ## Prepend the CLI changelog section: make changelog-cli VERSION=0.7.0
+	@command -v git-cliff >/dev/null || { echo "git-cliff not found — 'brew install git-cliff'."; exit 1; }
+	@if [ -z "$(VERSION)" ]; then echo "Set VERSION, e.g. make changelog-cli VERSION=0.7.0"; exit 1; fi
+	git-cliff --config cliff.cli.toml --unreleased --tag "v$(VERSION)" --prepend CHANGELOG-cli.md
+	@echo "Updated CHANGELOG-cli.md with v$(VERSION). Review it, then commit."
+
+changelog-orb: ## Prepend the orb changelog section: make changelog-orb VERSION=0.3.0
+	@command -v git-cliff >/dev/null || { echo "git-cliff not found — 'brew install git-cliff'."; exit 1; }
+	@if [ -z "$(VERSION)" ]; then echo "Set VERSION, e.g. make changelog-orb VERSION=0.3.0"; exit 1; fi
+	git-cliff --config cliff.orb.toml --unreleased --tag "orb-v$(VERSION)" --prepend CHANGELOG-orb.md
+	@echo "Updated CHANGELOG-orb.md with orb-v$(VERSION). Review it, then commit."
+
+changelog-preview-cli: ## Print the pending CLI changelog without writing
+	@command -v git-cliff >/dev/null || { echo "git-cliff not found — 'brew install git-cliff'."; exit 1; }
+	@git-cliff --config cliff.cli.toml --unreleased
+
+changelog-preview-orb: ## Print the pending orb changelog without writing
+	@command -v git-cliff >/dev/null || { echo "git-cliff not found — 'brew install git-cliff'."; exit 1; }
+	@git-cliff --config cliff.orb.toml --unreleased
 
 freeze: ## Freeze the engine into dist/autobot-daemon (bundles the daemon/cloud/tts/wake/mcp deps)
 	uv sync $(EXTRA_FLAGS) --extra freeze
@@ -123,26 +139,27 @@ package-orb: ## Build only the orb .dmg (assumes the sidecar is already in place
 	cd ui/orb-shell && cargo tauri build
 	@echo "Built: $$(find $(ORB_BUNDLE)/dmg -name '*.dmg' 2>/dev/null | head -1)"
 
-publish-orb: ## Upload the .dmg to the GitHub release with auto-generated notes: make publish-orb VERSION=0.2.0
+publish-orb: ## Upload the .dmg to the orb release with auto-generated notes: make publish-orb VERSION=0.3.0
 	@dmg=$$(find $(ORB_BUNDLE)/dmg -name '*.dmg' 2>/dev/null | head -1); \
 	if [ -z "$$dmg" ]; then echo "No .dmg found — run 'make package-orb' first."; exit 1; fi; \
 	notes=$$(mktemp); \
-	printf 'Jack **v%s** — dev preview. The .dmg is unsigned: right-click **Jack** → **Open**.\n\n' "$(VERSION)" > "$$notes"; \
+	printf 'Jack orb **v%s** — dev preview. The .dmg is unsigned: right-click **Jack** → **Open**.\n\n' "$(VERSION)" > "$$notes"; \
 	if command -v git-cliff >/dev/null 2>&1; then \
-	  git-cliff --latest --strip header >> "$$notes" || git-cliff --unreleased --tag "v$(VERSION)" --strip header >> "$$notes" || true; \
+	  git-cliff --config cliff.orb.toml --latest --strip header >> "$$notes" \
+	    || git-cliff --config cliff.orb.toml --unreleased --tag "orb-v$(VERSION)" --strip header >> "$$notes" || true; \
 	else \
 	  echo "(install git-cliff for auto-generated release notes)"; \
 	fi; \
-	if ! gh release view "v$(VERSION)" >/dev/null 2>&1; then \
-	  echo "Release v$(VERSION) not found — creating it (tag from the pushed HEAD)…"; \
-	  gh release create "v$(VERSION)" --title "v$(VERSION)" --notes-file "$$notes" \
+	if ! gh release view "orb-v$(VERSION)" >/dev/null 2>&1; then \
+	  echo "Release orb-v$(VERSION) not found — creating it (tag from the pushed HEAD)…"; \
+	  gh release create "orb-v$(VERSION)" --title "orb-v$(VERSION)" --notes-file "$$notes" \
 	    || { echo "Couldn't create the release. Is 'gh auth login' done and HEAD pushed?"; rm -f "$$notes"; exit 1; }; \
 	else \
-	  gh release edit "v$(VERSION)" --notes-file "$$notes" >/dev/null 2>&1 || true; \
+	  gh release edit "orb-v$(VERSION)" --notes-file "$$notes" >/dev/null 2>&1 || true; \
 	fi; \
 	rm -f "$$notes"; \
-	echo "Uploading $$dmg to release v$(VERSION)…"; \
-	gh release upload "v$(VERSION)" "$$dmg" --clobber
+	echo "Uploading $$dmg to release orb-v$(VERSION)…"; \
+	gh release upload "orb-v$(VERSION)" "$$dmg" --clobber
 
 hooks: ## Install pre-commit git hooks
 	uv run pre-commit install
