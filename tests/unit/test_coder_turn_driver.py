@@ -408,3 +408,20 @@ def test_no_checkpoint_when_plan_rejected() -> None:
     list(d.start_stream("do it"))
     list(d.reply_stream("reject"))
     assert labels == []
+
+
+def test_checkpoint_failure_does_not_break_the_turn() -> None:
+    # A snapshot hook that raises must be swallowed — the edit still runs and the turn
+    # completes normally (the "checkpoint failure never breaks the turn" contract).
+    def boom(_label: str) -> None:
+        raise RuntimeError("checkpoint blew up")
+
+    llm = _ScriptedLLM(
+        "1. edit foo",
+        "Edited foo.",
+        act_calls=[ToolCall(name="write_file", arguments={"path": "foo.py"})],
+    )
+    d = _driver(llm, checkpoint=boom)
+    list(d.start_stream("edit foo"))
+    final = list(d.reply_stream("approve"))
+    assert final[-1] == {"status": "done", "reply": "Edited foo."}

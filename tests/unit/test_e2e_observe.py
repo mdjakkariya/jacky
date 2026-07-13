@@ -32,6 +32,21 @@ def test_session_jsonl_missing_dir_is_empty(tmp_path: Path) -> None:
     assert observe.session_jsonl(tmp_path) == ""  # no .jack/sessions at all
 
 
+def test_session_jsonl_when_sessions_path_is_not_a_directory(tmp_path: Path) -> None:
+    # `.jack` exists as a FILE, so globbing `.jack/sessions/*` raises — swallowed to "".
+    (tmp_path / ".jack").write_text("not a dir")
+    assert observe.session_jsonl(tmp_path) == ""
+
+
+def test_session_jsonl_skips_an_unreadable_entry(tmp_path: Path) -> None:
+    # A directory named like a transcript makes read_text raise (IsADirectoryError); the
+    # loop skips it rather than blowing up, and returns "" when nothing readable remains.
+    sessions = tmp_path / ".jack" / "sessions"
+    sessions.mkdir(parents=True)
+    (sessions / "not-a-file.jsonl").mkdir()
+    assert observe.session_jsonl(tmp_path) == ""
+
+
 def test_log_since_returns_only_the_appended_slice(tmp_path: Path) -> None:
     log = tmp_path / "autobot.log"
     log.write_text("before the run\n")

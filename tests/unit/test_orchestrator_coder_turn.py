@@ -99,6 +99,40 @@ def test_refine_answer_recorded_as_a_user_turn() -> None:
     assert ("user", "also update the docs") in tr.events
 
 
+class _PendingDriver:
+    def start_stream(self, text: str) -> Iterator[dict[str, Any]]:
+        yield {"status": "pending", "prompt": "run pytest?"}
+
+
+def test_pending_event_recorded_as_a_confirmation_note() -> None:
+    orch = _bare_orchestrator()
+    orch.coder_driver = _PendingDriver()  # type: ignore[assignment]
+    tr = _RecordingTranscript()
+    orch._transcript = tr
+    list(orch.start_coder_stream("run the tests"))
+    assert ("note", "awaiting confirmation: run pytest?") in tr.events
+
+
+class _RaisingTranscript(NullTranscript):
+    """Every write raises — the stream must survive it (best-effort transcript)."""
+
+    def user(self, text: str, confidence: float) -> None:
+        raise RuntimeError("disk full")
+
+    def assistant(self, text: str) -> None:
+        raise RuntimeError("disk full")
+
+
+def test_transcript_write_failure_does_not_break_the_stream() -> None:
+    # A transcript that raises on every write must not break the event stream — the CLI
+    # still receives every event untouched.
+    orch = _bare_orchestrator()
+    orch.coder_driver = _StreamDriver()  # type: ignore[assignment]
+    orch._transcript = _RaisingTranscript()
+    events = list(orch.start_coder_stream("edit foo"))
+    assert events[-1]["status"] == "plan"  # stream completed despite every write raising
+
+
 def test_start_coder_stream_no_driver_yields_error() -> None:
     orch = _bare_orchestrator()
     events = list(orch.start_coder_stream("do it"))
