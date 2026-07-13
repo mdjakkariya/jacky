@@ -137,6 +137,11 @@ def main(argv: list[str] | None = None) -> int:
 
         print(f"jack {__version__}")
         return 0
+    if argv and argv[0] == "serve":
+        from autobot.daemon.__main__ import main as daemon_main
+
+        daemon_main(argv[1:])  # run the headless daemon (used by the frozen re-exec)
+        return 0
     if argv and argv[0] == "config":
         action = argv[1] if len(argv) > 1 else "show"
         return _run_config(action, argv[2:], f"http://127.0.0.1:{_CODER_PORT}")

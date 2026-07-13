@@ -59,9 +59,9 @@ def _settings_from_args(base: Settings, args: argparse.Namespace) -> Settings:
     return replace(base, **overrides)
 
 
-def main() -> None:
+def main(argv: list[str] | None = None) -> None:
     """Console entry point: ``--demo`` cycles states without the engine."""
-    args = _parse_args()
+    args = _parse_args(argv)
     try:
         # Imported here so a missing 'daemon' extra fails with a clear hint
         # rather than an opaque ImportError at startup.
