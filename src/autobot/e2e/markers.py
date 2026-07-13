@@ -49,6 +49,22 @@ def turn_started(screen: str) -> bool:
     return working(screen) or tool_line(screen) or any_gate(screen)
 
 
+def awaiting_reply(screen: str) -> bool:
+    """A gate is *live* — the ``>`` answer prompt is the last line, waiting for a choice.
+
+    This is the reliable "a gate needs answering now" signal, distinct from :func:`any_gate`
+    (a plain substring match for ``Proceed?``). The plan/permission card is committed to the
+    scrollback, so its ``Proceed?`` text lingers long after it's answered; only the ``>``
+    input prompt tells you a gate is *currently* awaiting input. Distinct from the ``❯`` REPL
+    prompt (:func:`idle_prompt`).
+    """
+    lines = [ln for ln in screen.splitlines() if ln.strip()]
+    if not lines:
+        return False
+    last = lines[-1].rstrip()
+    return last == ">" or last.startswith("> ")
+
+
 def error(screen: str) -> bool:
     """An error segment (``Error:``) is on screen."""
     return "Error:" in screen
@@ -75,6 +91,7 @@ BY_NAME: dict[str, Marker] = {
     "plan_card": plan_card,
     "permission_card": permission_card,
     "any_gate": any_gate,
+    "awaiting_reply": awaiting_reply,
     "working": working,
     "turn_started": turn_started,
     "error": error,

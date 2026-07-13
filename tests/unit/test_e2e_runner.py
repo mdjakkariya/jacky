@@ -55,7 +55,13 @@ def test_unattended_auto_approves_gate_then_completes(tmp_path: Path) -> None:
         success_criteria="did X",
         checks=(FileExists("hello.py"),),
     )
-    screens = ["❯ ", "⏺ working", "Proceed?   [1] Yes   [2] Edit", "⏺ done\n❯ "]
+    screens = [
+        "❯ ",  # pre-send idle
+        "⠹ Working…  ·  esc to interrupt · 1s",  # turn_started (spinner)
+        "Proceed?   [1] Yes   [2] Edit\n> ",  # awaiting_reply — a LIVE gate
+        "⎿  Edited hello.py\n⠋ Working…  ·  esc to interrupt · 2s",  # act running
+        "⏺ done\n❯ ",  # settled idle
+    ]
     sess = _FakeSession(screens)
 
     def factory(argv, cwd):  # type: ignore[no-untyped-def]
@@ -74,6 +80,38 @@ def test_unattended_auto_approves_gate_then_completes(tmp_path: Path) -> None:
     # The gate must be approved exactly once — not re-approved on every poll until the
     # 50-iteration cap silently falls through (the bug this test guards against).
     assert sess.sent.count("<1>") == 1
+    assert sess.sent.count("<enter>") == 1
+
+
+def test_unattended_does_not_reapprove_a_stale_gate_card(tmp_path: Path) -> None:
+    # Regression: after a gate is answered, its committed "Proceed?  [1] Yes  [2] Edit" text
+    # lingers in the scrollback above the idle prompt. The driver must NOT treat that stale
+    # card as a live gate and re-approve (which used to spam the coder with '1' as chat).
+    sc = Scenario(
+        name="t",
+        autonomy="auto",
+        strategy="unattended",
+        task="do X",
+        success_criteria="did X",
+        checks=(FileExists("hello.py"),),
+    )
+    screens = [
+        "❯ ",
+        "⠹ Working…  ·  esc to interrupt · 1s",  # turn_started
+        "Proceed?   [1] Yes   [2] Edit\n> ",  # live gate → approve once
+        "Proceed?   [1] Yes   [2] Edit\n⏺ done\n❯ ",  # answered; card lingers, but idle
+    ]
+    sess = _FakeSession(screens)
+
+    def factory(argv, cwd):  # type: ignore[no-untyped-def]
+        (Path(cwd) / "hello.py").write_text("hi")
+        return sess
+
+    res = runner.run_scenario(
+        sc, port=8999, judge_mode="manual", session_factory=factory, judge_fn=lambda *a, **k: None
+    )
+    assert res.passed is True
+    assert sess.sent.count("<1>") == 1  # approved exactly once — not once per lingering frame
     assert sess.sent.count("<enter>") == 1
 
 
