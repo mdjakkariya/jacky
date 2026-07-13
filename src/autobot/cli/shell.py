@@ -142,19 +142,19 @@ class Shell:
         _log.info("turn start")
         events = self._stream_turn(self._base_url, text)
         while True:
+            # Breathing room ABOVE the loading region: print the gap before the spinner
+            # starts, so it's there during loading — not popped in after the reply arrives.
+            self._console.print()
             phase = self._consume_until_phase(events, verb)
             if phase is None:
-                self._console.print()
                 return
             seg = classify(phase)
             if seg.kind in ("plan", "pending"):
-                self._console.print()
                 self._console.print(render.render_rich(seg))
                 ans = self._ask(seg.kind)
                 events = self._stream_answer(self._base_url, ans.value, ans.text)
                 continue
             # done / error
-            self._console.print()
             self._console.print(render.render_rich(seg))
             if phase.get("status") == "done":
                 diff = self._diff_since(self._cwd, snap)

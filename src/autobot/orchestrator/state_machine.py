@@ -965,14 +965,62 @@ class Orchestrator:
         if self.coder_driver is None:
             yield {"status": "error", "reply": "coding turns aren't available here."}
             return
-        yield from self.coder_driver.start_stream(text)
+        self._record_transcript(lambda: self._transcript.user(text, 1.0))
+        yield from self._record_coder_events(self.coder_driver.start_stream(text))
 
     def reply_coder_stream(self, value: str, text: str = "") -> Iterator[dict[str, Any]]:
         """Deliver the CLI's answer and stream the next phase's events (coder profile only)."""
         if self.coder_driver is None:
             yield {"status": "error", "reply": "coding turns aren't available here."}
             return
-        yield from self.coder_driver.reply_stream(value, text)
+        # The gate answer is part of the conversation: a refine/edit carries new instruction
+        # text (record it as a user turn); a bare approve/reject/yes/no is just a note.
+        refinement = text.strip()
+        if refinement:
+            self._record_transcript(lambda: self._transcript.user(refinement, 1.0))
+        else:
+            self._record_transcript(lambda: self._transcript.note(f"gate answered: {value}"))
+        yield from self._record_coder_events(self.coder_driver.reply_stream(value, text))
+
+    def _record_coder_events(self, events: Iterator[dict[str, Any]]) -> Iterator[dict[str, Any]]:
+        """Mirror a coder event stream into the readable transcript as it passes through.
+
+        The coder previously left the Markdown transcript with only cloud-usage lines — the
+        actual conversation (the plan, tool activity, the final reply) never reached it. This
+        re-yields every event untouched while recording the human-readable ones, so the file
+        shows what happened without changing what the CLI receives.
+        """
+        for evt in events:
+            self._record_one_coder_event(evt)
+            yield evt
+
+    def _record_one_coder_event(self, evt: dict[str, Any]) -> None:
+        """Write one coder stream event to the readable transcript (best-effort)."""
+
+        def write() -> None:
+            if evt.get("type") == "tool" and evt.get("event") == "end":
+                self._transcript.tool(
+                    str(evt.get("name", "")),
+                    {},
+                    bool(evt.get("ok", True)),
+                    str(evt.get("label", "")),
+                )
+                return
+            status = evt.get("status")
+            if status == "pending":
+                self._transcript.note(f"awaiting confirmation: {evt.get('prompt', '')}")
+            elif status in ("plan", "done", "error"):
+                self._transcript.assistant(str(evt.get("reply", "")))
+
+        self._record_transcript(write)
+
+    @staticmethod
+    def _record_transcript(write: Callable[[], None]) -> None:
+        """Run a transcript write; a transcript failure must never break the stream."""
+        try:
+            write()
+        except Exception:  # a readable-log write is best-effort — never fail a turn for it
+            _log.debug("coder transcript write failed; continuing", exc_info=True)
 
     def undo_coder(self) -> tuple[bool, str]:
         """Restore the most recent workspace checkpoint (coder profile only)."""

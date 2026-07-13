@@ -30,6 +30,18 @@ def test_working_and_turn_started() -> None:
     assert not markers.turn_started("⏺ Done.\n❯ ")
 
 
+def test_awaiting_reply_is_the_live_gate_prompt() -> None:
+    # A LIVE gate shows the '>' answer prompt as the last line.
+    assert markers.awaiting_reply("Proceed?   [1] Yes   [2] Edit\n> ")
+    assert markers.awaiting_reply("Run `pytest`?\nProceed?   [1] Yes, run it   [2] No\n>")
+    # An ANSWERED gate whose committed 'Proceed?' text lingers above the idle prompt is NOT
+    # live — this is the stale-card case that used to trigger spurious re-approvals.
+    assert not markers.awaiting_reply("Proceed?   [1] Yes   [2] Edit\n⏺ Done.\n❯ ")
+    assert not markers.awaiting_reply("⏺ Done.\n❯ ")
+    assert not markers.awaiting_reply("⠹ Working…  ·  esc to interrupt · 2s")
+    assert "awaiting_reply" in markers.BY_NAME
+
+
 def test_plan_vs_permission_gate() -> None:
     plan = "Here's my plan\nProceed?   [1] Yes   [2] Edit   [3] No\n> "
     perm = "Run `pytest`?\nProceed?   [1] Yes, run it   [2] No\n> "

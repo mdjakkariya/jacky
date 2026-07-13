@@ -9,6 +9,7 @@ real run is dogfooded via ``make e2e``.
 from __future__ import annotations
 
 import tempfile
+import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -16,7 +17,7 @@ from pathlib import Path
 from typing import Any
 
 from autobot.config import Settings
-from autobot.e2e import markers
+from autobot.e2e import markers, observe
 from autobot.e2e.artifact import RunRecord, write_bundle
 from autobot.e2e.judge import judge_auto, run_checks
 from autobot.e2e.pty_session import PtySession, jack_argv
@@ -30,6 +31,8 @@ _log = get_logger("e2e")
 
 _E2E_ROOT = "~/.autobot/e2e"
 _STARTUP_TIMEOUT = 30.0
+_RUN_DEADLINE_S = 900.0  # overall wall-clock cap for one unattended scenario (a wedged run
+# must not spin for hours — see the stale-gate regression this guards against)
 
 SessionFactory = Callable[[list[str], str], Any]
 JudgeFn = Callable[..., dict[str, Any] | None]
@@ -52,17 +55,20 @@ def _approve(session: Any, log: list[dict[str, Any]]) -> None:
 
 
 def _await_rest(session: Any, timeout: float) -> None:
-    """Wait for the running turn to reach a resting state — a gate awaiting input, or idle.
+    """Wait for the running turn to reach a resting state — a *live* gate, or idle.
 
     Requires the turn to *visibly start* (spinner/tool/gate) before accepting a stable idle
     frame as "done", so the ever-present ``❯`` prompt (which the TUI flickers back into view
-    between transient render regions) is never mistaken for turn completion. The edge wait is
+    between transient render regions) is never mistaken for turn completion. The resting
+    state is ``idle_prompt`` OR ``awaiting_reply`` — a gate is "resting" only while its ``>``
+    prompt is live, NOT when its committed ``Proceed?`` text merely lingers in scrollback
+    (the stale-card case that used to drive spurious re-approvals). The edge wait is
     best-effort and capped, so a turn that finishes faster than a poll still resolves via the
-    stable-idle wait below.
+    stable wait below.
     """
     session.wait_for(markers.turn_started, min(timeout, 45.0))
     if not session.wait_until_stable(
-        lambda s: markers.idle_prompt(s) or markers.any_gate(s), timeout
+        lambda s: markers.idle_prompt(s) or markers.awaiting_reply(s), timeout
     ):
         raise TimeoutError("turn did not settle at idle or a gate")
 
@@ -96,18 +102,33 @@ def drive_scripted(session: Any, sc: Scenario, *, log: list[dict[str, Any]]) -> 
 
 
 def drive_unattended(
-    session: Any, sc: Scenario, *, log: list[dict[str, Any]], turn_timeout: float = 180.0
+    session: Any,
+    sc: Scenario,
+    *,
+    log: list[dict[str, Any]],
+    turn_timeout: float = 180.0,
+    deadline_s: float = _RUN_DEADLINE_S,
 ) -> None:
-    """Send the task, auto-approve any gate that appears, wait until idle."""
+    """Send the task, approve each *live* gate, and stop when the turn settles at idle.
+
+    Approval keys off ``awaiting_reply`` (the live ``>`` prompt), never ``any_gate`` (which
+    matches the committed ``Proceed?`` card lingering in scrollback) — so a completed turn
+    is never mistaken for a pending gate and re-approved. A wall-clock ``deadline_s`` caps a
+    wedged run instead of letting the 50-iteration loop spin for tens of minutes.
+    """
     session.send(sc.task)
     log.append({"action": "send", "text": sc.task})
+    deadline = time.monotonic() + deadline_s
     for _ in range(50):  # bounded: at most 50 gate approvals
+        if time.monotonic() > deadline:
+            raise TimeoutError(f"scenario exceeded the {deadline_s:.0f}s wall-clock cap")
         _await_rest(session, turn_timeout)
-        if not markers.any_gate(session.screen_text()):
-            return  # settled idle → done
+        if not markers.awaiting_reply(session.screen_text()):
+            return  # settled at idle → done (a stale Proceed? card no longer counts)
         _approve(session, log)
-        # Let the just-approved gate clear before looping, so we don't re-approve it.
-        session.wait_for(lambda s: not markers.any_gate(s), turn_timeout)
+        # Wait for THIS gate to be answered (the > prompt leaves), not for its card text
+        # to scroll off — the answer prompt is the reliable "gate resolved" signal.
+        session.wait_for(lambda s: not markers.awaiting_reply(s), turn_timeout)
     raise TimeoutError("too many gate prompts without completing")
 
 
@@ -125,13 +146,23 @@ def run_scenario(
     sc.validate()
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     settings = Settings.load()
-    provider = f"{settings.llm_provider}:{settings.llm_model}"
+    # Report the model actually in use: the anthropic provider drives ``anthropic_model``,
+    # not ``llm_model`` (which stays the local default). Getting this wrong makes a cloud
+    # bundle read as a local run.
+    active_model = (
+        settings.anthropic_model if settings.llm_provider == "anthropic" else settings.llm_model
+    )
+    provider = f"{settings.llm_provider}:{active_model}"
     log: list[dict[str, Any]] = []
     screen, raw = "", b""
     # Fresh, empty access_store so the coder jails to its launch cwd (the throwaway repo)
     # instead of restoring a persisted active folder (e.g. the user's real workspace).
     access_store = str(Path(tempfile.gettempdir()) / f"jack-e2e-access-{stamp}.json")
     scope: dict[str, object] = {"coding_autonomy": sc.autonomy, "access_store": access_store}
+    # Read only the daemon log written from here on — the run's own slice, not history.
+    log_path = Path(settings.log_dir).expanduser() / "autobot.log"
+    log_start = observe.log_offset(log_path)
+    daemon_log, session_jsonl, settings_snapshot = "", "", ""
     with settings_scope(scope):  # noqa: SIM117 (wraps the workspace)
         with workspace(sc.seed_files, keep=keep) as ws:
             # Pre-trust the throwaway workspace so the coder acts without a trust prompt
@@ -151,6 +182,11 @@ def run_scenario(
                 finally:
                     screen, raw = session.screen_text(), session.raw_bytes()
                     session.close()
+                # Capture the debuggable side-channels now: effective settings, the coder's
+                # session transcript (in the workspace), and this run's slice of daemon log.
+                settings_snapshot = observe.settings_snapshot(Settings.load())
+                session_jsonl = observe.session_jsonl(ws)
+                daemon_log = observe.log_since(log_path, log_start)
                 checks = run_checks(list(sc.checks), ws, screen)
                 checks_pass = all(c["ok"] for c in checks)
                 verdict: dict[str, Any] | None = None
@@ -175,7 +211,9 @@ def run_scenario(
                     steps_log=log,
                     checks=checks,
                     verdict=verdict,
-                    settings_snapshot="",
+                    daemon_log=daemon_log,
+                    session_jsonl=session_jsonl,
+                    settings_snapshot=settings_snapshot,
                 )
                 root = Path(_E2E_ROOT).expanduser() / f"{stamp}-{sc.name}"
                 bundle = write_bundle(record, root=str(root))

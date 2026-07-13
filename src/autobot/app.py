@@ -342,10 +342,6 @@ def _build_llm(
         )
     )
 
-    def _snapshot(label: str) -> None:
-        create_checkpoint(_coder_cwd(), label)
-
-    checkpoint = _snapshot if settings.checkpoints else None
     if settings.llm_provider == "anthropic":
         try:
             from autobot.llm.anthropic_llm import AnthropicLanguageModel
@@ -366,7 +362,6 @@ def _build_llm(
                 cwd=cwd,
                 model_name=settings.anthropic_model,
                 redact=lambda t: redact_secrets(t)[0],
-                checkpoint=checkpoint,
             )
         except ImportError:
             log.warning("cloud LLM extra missing, falling back to local")
@@ -401,7 +396,6 @@ def _build_llm(
             cwd=cwd,
             model_name=settings.llm_model,
             redact=lambda t: redact_secrets(t)[0],
-            checkpoint=checkpoint,
         )
     from autobot.tools.selection import build_tool_selector
 
@@ -413,7 +407,6 @@ def _build_llm(
         cwd=cwd,
         model_name=settings.llm_model,
         redact=lambda t: redact_secrets(t)[0],
-        checkpoint=checkpoint,
     )
 
 
@@ -822,6 +815,10 @@ def build(
             cps = list_checkpoints(str(access_policy.cwd))
             return [{"ref": c.ref, "sha": c.sha, "label": c.label} for c in cps]
 
+        def _make_checkpoint(label: str) -> None:
+            """Snapshot the live coder cwd before the act phase's first change."""
+            create_checkpoint(str(access_policy.cwd), label)
+
         coder_driver = CoderTurnDriver(
             llm,
             gate,
@@ -829,6 +826,7 @@ def build(
             settings_provider=Settings.load,
             undo=_undo_latest,
             checkpoints=_checkpoint_dicts,
+            checkpoint=_make_checkpoint if settings.checkpoints else None,
         )
         log.info("coder plan→approve→act driver ready")
 

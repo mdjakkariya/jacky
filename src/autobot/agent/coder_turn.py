@@ -152,6 +152,7 @@ def act_executor(
     blocklist: list[str],
     *,
     ask_on_confirm: bool = True,
+    before_mutation: Callable[[], None] | None = None,
 ) -> ToolExecutor:
     """An executor for the act phase: auto-apply edits; classify run_command by policy.
 
@@ -163,7 +164,20 @@ def act_executor(
     already approved and in ``auto`` mode nothing prompts. Everything else (reads, in-cwd
     edits) goes straight to the gate; being below the gate's destructive threshold, edits
     never prompt.
+
+    ``before_mutation`` is fired exactly once, just before the first tool that actually
+    changes the workspace runs — a file-mutating edit (``Risk.WRITE`` and up) or a
+    non-blocked ``run_command``. This is the workspace-checkpoint hook: a plan phase (which
+    only reads) or a conversational/read-only act never triggers it, so a checkpoint is
+    taken only when there is a real change to snapshot.
     """
+    fired = False
+
+    def snapshot_once() -> None:
+        nonlocal fired
+        if before_mutation is not None and not fired:
+            fired = True
+            before_mutation()
 
     def execute(call: ToolCall) -> ToolResult:
         if call.name == "run_command":
@@ -177,10 +191,15 @@ def act_executor(
                     content=f"That command is blocked for safety ({reason}).",
                     ok=False,
                 )
+            snapshot_once()  # a command will run — snapshot the pre-change state first
             if decision == "allow" or (decision == "confirm" and not ask_on_confirm):
                 _log.info("command auto-run cmd=%s", logged_command)
                 return gate.execute(call, pre_authorized=True)
             _log.info("command ask cmd=%s", logged_command)  # confirm + ask → gate asks CLI
+            return gate.execute(call)
+        risk = gate.risk_of(call.name)
+        if risk is not None and risk >= Risk.WRITE:
+            snapshot_once()  # a file-mutating edit — snapshot the pre-change state first
         return gate.execute(call)
 
     return execute
@@ -239,11 +258,14 @@ class CoderTurnDriver:
         *,
         undo: Callable[[], tuple[bool, str]] | None = None,
         checkpoints: Callable[[], list[dict[str, str]]] | None = None,
+        checkpoint: Callable[[str], None] | None = None,
     ) -> None:
         """Wire the driver. ``llm`` must expose ``run_turn(text, execute, on_event=...)``.
 
         ``undo``/``checkpoints`` are optional closures (bound to the workspace cwd in
-        ``app.py``) backing the ``/undo`` command; ``None`` disables it.
+        ``app.py``) backing the ``/undo`` command; ``None`` disables it. ``checkpoint`` is
+        the snapshot hook, called with the user's request as its label just before the act
+        phase's first real change; ``None`` disables checkpointing.
         """
         self._llm = llm
         self._gate = gate
@@ -254,6 +276,7 @@ class CoderTurnDriver:
         self._awaiting = False  # True when the worker is parked awaiting an answer
         self._undo = undo
         self._checkpoints = checkpoints
+        self._checkpoint = checkpoint
 
     @staticmethod
     def _is_phase_ender(evt: dict[str, Any]) -> bool:
@@ -410,9 +433,9 @@ class CoderTurnDriver:
                     channel.done(payload)
                     return
                 # outcome == "act": the plan was approved, so its commands run pre-authorized.
-                reply = self._act(channel, ask_on_confirm=False)
+                reply = self._act(channel, ask_on_confirm=False, request_text=text)
             else:  # confirm: no plan gate; ask before each non-allowlisted command
-                reply = self._act(channel, first_text=text, ask_on_confirm=True)
+                reply = self._act(channel, first_text=text, ask_on_confirm=True, request_text=text)
             channel.done(reply)
         except Exception:  # a turn must always terminate with a reply for the CLI
             _log.exception("coder turn failed")
@@ -454,21 +477,40 @@ class CoderTurnDriver:
             _log.info("plan refined")
 
     def _act(
-        self, channel: TurnChannel, *, first_text: str | None = None, ask_on_confirm: bool
+        self,
+        channel: TurnChannel,
+        *,
+        first_text: str | None = None,
+        ask_on_confirm: bool,
+        request_text: str,
     ) -> str:
         """Run the act phase; ``ask_on_confirm`` gates each non-allowlisted command.
 
         The *resolved* mode sets ``ask_on_confirm``: an approved ``plan`` runs its commands
         pre-authorized (``False``); ``confirm`` asks before each non-allowlisted command
-        (``True``). Both still refuse blocklisted commands and stay within the cwd jail +
-        start-of-turn checkpoint.
+        (``True``). Both still refuse blocklisted commands and stay within the cwd jail. A
+        workspace checkpoint labelled ``request_text`` (the user's original request) is taken
+        just before the first real change — never on a read-only act.
         """
         settings = self._settings()
+        before_mutation: Callable[[], None] | None = None
+        cp = self._checkpoint
+        if cp is not None:
+
+            def _snapshot() -> None:  # snapshot the workspace before the first change
+                try:
+                    cp(request_text)
+                except Exception:  # a checkpoint failure must never break the turn
+                    _log.exception("checkpoint failed; continuing turn")
+
+            before_mutation = _snapshot
+
         executor = act_executor(
             self._gate,
             settings.command_allowlist,
             settings.command_blocklist,
             ask_on_confirm=ask_on_confirm,
+            before_mutation=before_mutation,
         )
         prompt = first_text if first_text is not None else _ACT_PROMPT
         reply: str = self._llm.run_turn(prompt, executor, on_event=channel.emit)
