@@ -1,14 +1,17 @@
-# Publish a release when a version tag (vX.Y.Z) is pushed.
+# Publish a release when a version tag (vX.Y.Z) is pushed. This is the CLI/engine
+# track: it builds the `jack` CLI binaries + the Python engine wheel/sdist and
+# creates the GitHub Release for them. The macOS **orb** app releases on its own,
+# independent track — tag `orb-vX.Y.Z`, built locally (see `docs/reference/RELEASING.md`).
 #
 # The manifest bump lands on the default branch via a **release PR** (branch
 # protection blocks direct pushes — including this workflow's bot — so CI does NOT
-# commit a bump back). Pushing the tag on the merged commit triggers this workflow,
-# which builds the engine and creates the GitHub Release. CI still sets the *build*
-# version from the tag, so the wheel/sdist are correct regardless of the manifests.
+# commit a bump back). Pushing the tag on the merged commit triggers this workflow.
+# CI still sets the *build* version from the tag, so the wheel/sdist/binaries are
+# correct regardless of the manifests.
 #
-# Runs on Linux only (macOS CI minutes are ~10x the cost). The macOS orb `.dmg` is
-# built locally on a Mac and uploaded to the same Release — see `docs/RELEASING.md`
-# (`make bundle` + `make publish-orb`).
+# Runs on Linux only for the engine build (macOS CI minutes are ~10x the cost); the
+# `binaries` job below additionally builds/attaches per-OS `jack` binaries, including
+# on macOS runners, using the free GitHub-hosted minutes for public repos.
 name: Release
 
 on:
@@ -37,8 +40,8 @@ jobs:
       - run: uv run pytest
       - name: Manifest version vs tag (non-blocking)
         run: |
-          uv run python scripts/bump_version.py --check "${GITHUB_REF_NAME#v}" \
-            || echo "::warning::manifests differ from ${GITHUB_REF_NAME}; the release PR should have bumped them. CI builds with the tag's version regardless."
+          uv run python scripts/bump_version.py --check cli "${GITHUB_REF_NAME#v}" \
+            || echo "::warning::CLI manifests differ from ${GITHUB_REF_NAME}; the release PR should have bumped them. CI builds with the tag's version regardless."
 
   release:
     needs: gate
@@ -53,11 +56,11 @@ jobs:
       # Build the artifacts from the *tag* with the version taken from the tag, so
       # the wheel/sdist are always versioned correctly regardless of what's committed.
       - name: Set version from the tag (source of truth)
-        run: uv run python scripts/bump_version.py "${GITHUB_REF_NAME#v}"
+        run: uv run python scripts/bump_version.py cli "${GITHUB_REF_NAME#v}"
       - name: Build engine (wheel + sdist)
         run: uv build # -> dist/*.whl, dist/*.tar.gz
 
-      - name: Create the GitHub Release (engine attached; orb .dmg added locally)
+      - name: Create the GitHub Release (CLI wheel + engine sdist)
         uses: softprops/action-gh-release@v2
         with:
           generate_release_notes: true
@@ -65,20 +68,21 @@ jobs:
             dist/*.whl
             dist/*.tar.gz
           body: |
-            ### Jack ${{ github.ref_name }}
+            ### Jack CLI ${{ github.ref_name }}
 
-            **Orb app (macOS):** the `.dmg` is uploaded separately (built locally).
-            It's an **unsigned dev preview** — first launch, right-click the app →
-            **Open** → **Open**, then it runs normally.
+            **Install (no Python needed):**
+            `curl -fsSL https://raw.githubusercontent.com/mdjakkariya/jacky/main/install.sh | sh`
+            (Windows: `irm https://raw.githubusercontent.com/mdjakkariya/jacky/main/install.ps1 | iex`).
+            Per-OS `jack` binaries + checksums are attached below; `jack update` self-updates.
 
-            **Engine:** install the attached wheel —
+            **Engine (library):** install the attached wheel —
             `uv tool install ./autobot-*.whl` (or `pipx install ./autobot-*.whl`).
-            See the README for prerequisites (Ollama or an Anthropic key, the
-            STT/TTS models, Microphone + Automation permissions).
+
+            The macOS **orb app** releases on its own track (`orb-vX.Y.Z`).
 
       # No bump-back: branch protection blocks direct pushes to the default branch
       # (the bot included), so the manifest bump lands via the release PR instead.
-      # See docs/RELEASING.md.
+      # See docs/reference/RELEASING.md.
 
   # Build, smoke-test, and attach the frozen `jack` CLI binary for each platform we
   # publish (see `autobot.update.asset_name` for the os/arch strings this must match).
@@ -114,7 +118,7 @@ jobs:
 
       - name: Set version from the tag
         shell: bash
-        run: uv run python scripts/bump_version.py "${GITHUB_REF_NAME#v}"
+        run: uv run python scripts/bump_version.py cli "${GITHUB_REF_NAME#v}"
 
       # Inlined `make freeze-cli`'s two commands (see the Makefile target) rather
       # than invoking `make` itself, so this doesn't depend on `make` being present
