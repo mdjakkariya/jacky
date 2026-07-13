@@ -9,14 +9,20 @@ from __future__ import annotations
 
 import hashlib
 import json
+import platform
 import stat
 import sys
+import tarfile
+import tempfile
+import urllib.request
+import zipfile
 from collections.abc import Callable
 from pathlib import Path
 
 _CHECK_INTERVAL_S = 86400.0  # notice at most once/day
 _OS = {"darwin": "macos", "linux": "linux", "windows": "windows"}
 _ARCH = {"arm64": "arm64", "aarch64": "arm64", "x86_64": "x64", "amd64": "x64"}
+_REPO = "mdjakkariya/jacky"
 
 
 def cache_path() -> Path:
@@ -124,3 +130,68 @@ def _write_cache(path: Path, now: float, latest: str) -> None:
         path.write_text(json.dumps({"last_check": now, "latest": latest}))
     except OSError:  # caching is best-effort
         pass
+
+
+def update_notice(latest: str | None) -> str | None:
+    """The one-line 'update available' banner, or ``None`` when up to date."""
+    if not latest:
+        return None
+    return f"▲ jack {latest} is available — run 'jack update'"
+
+
+def fetch_latest_version(
+    repo: str = _REPO, timeout: float = 5.0
+) -> str | None:  # pragma: no cover - network
+    """The latest release version (tag without the leading ``v``), or ``None`` on failure."""
+    url = f"https://api.github.com/repos/{repo}/releases/latest"
+    try:
+        with urllib.request.urlopen(url, timeout=timeout) as resp:
+            tag = json.loads(resp.read().decode("utf-8")).get("tag_name", "")
+    except Exception:
+        return None
+    return tag.lstrip("v") or None
+
+
+def run_update(  # pragma: no cover - network + archive extraction (smoke-tested in CI)
+    current: str,
+    target: Path,
+    repo: str = _REPO,
+    fetch_latest: Callable[[], str | None] = fetch_latest_version,
+) -> str:
+    """Download the latest release asset for this platform, verify it, self-replace.
+
+    Returns a human status line. Raises ``RuntimeError`` (leaving the installed binary
+    untouched) on any failure — no version, checksum mismatch, or a missing asset.
+    """
+    latest = fetch_latest()
+    if not latest:
+        raise RuntimeError("couldn't reach GitHub to check for the latest release.")
+    if not version_gt(latest, current):
+        return f"jack is already up to date ({current})."
+    name = asset_name(latest, platform.system(), platform.machine())
+    base = f"https://github.com/{repo}/releases/download/v{latest}/{name}"
+    with tempfile.TemporaryDirectory() as tmp:
+        tmpd = Path(tmp)
+        archive = _download(base, tmpd / name)
+        want = _download(base + ".sha256", tmpd / (name + ".sha256")).read_text().split()[0]
+        if sha256_of(archive) != want:
+            raise RuntimeError("downloaded asset failed its checksum — aborting.")
+        binary = _extract_jack(archive, tmpd)
+        self_replace(binary, target)
+    return f"updated to jack {latest} — restart any running daemon with 'jack restart'."
+
+
+def _download(url: str, dest: Path) -> Path:  # pragma: no cover - network
+    with urllib.request.urlopen(url, timeout=30.0) as resp:
+        dest.write_bytes(resp.read())
+    return dest
+
+
+def _extract_jack(archive: Path, into: Path) -> Path:  # pragma: no cover - archive I/O
+    if archive.suffix == ".zip":
+        with zipfile.ZipFile(archive) as z:
+            z.extractall(into)
+        return next(into.rglob("jack.exe"))
+    with tarfile.open(archive) as t:
+        t.extractall(into)
+    return next(into.rglob("jack"))

@@ -97,3 +97,8 @@ def test_sha256_of(tmp_path: Path) -> None:
     f.write_bytes(b"abc")
     # sha256("abc")
     assert update.sha256_of(f) == "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+
+
+def test_update_notice_only_when_newer() -> None:
+    assert update.update_notice("0.7.0") == "▲ jack 0.7.0 is available — run 'jack update'"
+    assert update.update_notice(None) is None

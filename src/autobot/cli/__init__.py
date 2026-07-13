@@ -170,6 +170,15 @@ def main(argv: list[str] | None = None) -> int:
         _trust_workspace(target)
         print(f"trusted: {target}")
         return 0
+    if argv and argv[0] == "update":
+        from autobot import __version__, update
+
+        try:
+            print(update.run_update(__version__, Path(sys.executable)))
+            return 0
+        except (RuntimeError, ValueError) as exc:
+            print(str(exc), file=sys.stderr)
+            return 1
     parser = argparse.ArgumentParser(prog="jack", description="Jack coding agent (terminal).")
     parser.add_argument("text", nargs="*", help="a coding request; omit to open the TUI")
     parser.add_argument(
@@ -206,4 +215,20 @@ def main(argv: list[str] | None = None) -> int:
         with contextlib.suppress(Exception):
             _post(f"{base_url}/coder/reply", {"value": "reject"}, 1.0)
         return 130
+    _print_update_notice()
     return 0
+
+
+def _print_update_notice() -> None:
+    """Best-effort: one dim line if a newer release exists (throttled to once/day)."""
+    import time
+
+    from autobot import __version__, update
+
+    with contextlib.suppress(Exception):
+        latest = update.check_for_update(
+            __version__, time.time(), update.cache_path(), update.fetch_latest_version
+        )
+        notice = update.update_notice(latest)
+        if notice:
+            print(notice, file=sys.stderr)
