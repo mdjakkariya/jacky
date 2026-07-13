@@ -5,7 +5,7 @@ from __future__ import annotations
 import tomllib
 from pathlib import Path
 
-from scripts.bump_version import _FILES, set_version
+from scripts.bump_version import _CLI_FILES, set_version
 
 import autobot
 
@@ -21,7 +21,7 @@ def test_bump_version_rewrites_the_package_init() -> None:
     # bump_version must know how to rewrite src/autobot/__init__.py so a release
     # bump can't leave __version__ stale (the bug this task fixes).
     rel = "src/autobot/__init__.py"
-    assert rel in _FILES
-    pattern, template = _FILES[rel]
+    assert rel in _CLI_FILES  # the engine version constant lives on the CLI track
+    pattern, template = _CLI_FILES[rel]
     out = set_version('__version__ = "0.0.1"\n', pattern, template, "9.9.9")
     assert out == '__version__ = "9.9.9"\n'
