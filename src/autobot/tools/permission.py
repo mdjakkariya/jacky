@@ -326,6 +326,11 @@ class PermissionGate:
             src = str(arguments.get("source", "a file"))
             dst = str(arguments.get("destination", "a new location"))
             return f"📦 Move “{src}” to “{dst}”?"
+        if name == "run_command":
+            command = str(arguments.get("command", "")).strip()
+            cwd = str(arguments.get("cwd", "")).strip()
+            where = f"\n\nin {cwd}" if cwd and cwd != "." else ""
+            return f"Run this command?\n\n  $ {command}{where}"
         # Generic fallback — readable, with the targets spelled out.
         detail = ", ".join(f"{k}: {v}" for k, v in arguments.items())
         suffix = f" ({detail})" if detail else ""

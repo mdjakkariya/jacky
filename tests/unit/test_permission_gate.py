@@ -456,3 +456,17 @@ def test_not_pre_authorized_still_confirms_destructive() -> None:
     gate, _ = _gate_with(tool, "run_command", AlwaysDeny())
     result = gate.execute(ToolCall(name="run_command", arguments={}))
     assert not tool.ran and not result.ok  # default path unchanged: declined
+
+
+def test_run_command_prompt_shows_command_plainly() -> None:
+    # The run_command confirm prompt shows the actual command, not the scary generic
+    # fallback ("permanently change things on your Mac") or a raw args dump.
+    prompt = PermissionGate._format_prompt(
+        "run_command",
+        Risk.DESTRUCTIVE,
+        {"command": "npm install", "cwd": "/tmp/proj", "timeout": 120},
+    )
+    assert "npm install" in prompt
+    assert "/tmp/proj" in prompt
+    assert "permanently change things" not in prompt
+    assert "timeout" not in prompt
