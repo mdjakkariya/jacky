@@ -61,6 +61,11 @@ def awaiting_reply(screen: str) -> bool:
     return any_gate(screen)
 
 
+def cost_view(screen: str) -> bool:
+    """The ``/cost`` usage summary is on screen (its per-window ``Today`` + ``All time`` rows)."""
+    return "Today" in screen and "All time" in screen
+
+
 def error(screen: str) -> bool:
     """An error segment (``Error:``) is on screen."""
     return "Error:" in screen
@@ -90,6 +95,7 @@ BY_NAME: dict[str, Marker] = {
     "awaiting_reply": awaiting_reply,
     "working": working,
     "turn_started": turn_started,
+    "cost_view": cost_view,
     "error": error,
     "idle_prompt": idle_prompt,
 }

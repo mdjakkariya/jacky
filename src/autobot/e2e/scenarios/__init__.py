@@ -101,6 +101,23 @@ ALL: tuple[Scenario, ...] = (
         checks=(FileContains("foo.py", "ORIGINAL"), FileLacks("foo.py", "# marker")),
     ),
     Scenario(
+        name="cost-summary",
+        autonomy="auto",
+        strategy="scripted",
+        task="run a read-only command, then check /cost",
+        success_criteria="After a turn recorded usage, /cost rendered a summary with per-window "
+        "totals (Today / All time), a Cache r/w column, and a cost figure — no crash.",
+        steps=(
+            # A read-only echo auto-runs (no gate) and still records a usage row; then /cost
+            # renders the summary from the (E2E-isolated) ledger via the daemon endpoint.
+            Send("run this shell command: echo e2e-cost-ok"),
+            Expect("idle_prompt", _TURN),
+            Send("/cost"),
+            Expect("cost_view", _CMD),
+        ),
+        checks=(ScreenContains("All time"),),
+    ),
+    Scenario(
         name="slash-and-chat",
         autonomy="auto",
         strategy="scripted",

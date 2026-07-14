@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 import pytest
 
 pytest.importorskip("pyte")
@@ -48,6 +50,44 @@ def test_plan_vs_permission_gate() -> None:
     assert markers.any_gate(plan) and markers.any_gate(perm)
 
 
+def test_cost_view_matches_the_rendered_cost_summary() -> None:
+    # Render the REAL /cost output (same renderer the TUI uses) and assert the marker fires
+    # on it but not on an ordinary reply — so the E2E /cost scenario syncs to the true screen.
+    from rich.console import Console
+
+    from autobot.cli import render
+
+    bucket: dict[str, Any] = {
+        "turns": 1,
+        "in": 52,
+        "out": 4079,
+        "cache_read": 219067,
+        "cache_write": 54908,
+        "tokens": 4131,
+        "usd": 0.333,
+        "has_unpriced": False,
+    }
+    payload: dict[str, Any] = {
+        "ctx": {"model": "claude-sonnet-5"},
+        "provider": "anthropic",
+        "model": "claude-sonnet-5",
+        "rollups": {
+            "totals": {"today": bucket, "last_7d": bucket, "last_30d": bucket, "all_time": bucket},
+            "daily": [],
+            "by_model": [{"key": "claude-sonnet-5", **bucket}],
+            "by_provider": [],
+            "by_workspace": [],
+            "session": bucket,
+        },
+    }
+    console = Console(width=90)
+    with console.capture() as cap:
+        console.print(render.render_cost(payload, 90))
+    screen = cap.get()
+    assert markers.cost_view(screen)
+    assert not markers.cost_view("⏺ Done.\n❯ ")
+
+
 def test_by_name_maps_all() -> None:
     for name in (
         "reply_present",
@@ -57,6 +97,7 @@ def test_by_name_maps_all() -> None:
         "any_gate",
         "working",
         "turn_started",
+        "cost_view",
         "error",
         "idle_prompt",
     ):

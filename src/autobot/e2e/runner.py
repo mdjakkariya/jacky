@@ -158,7 +158,14 @@ def run_scenario(
     # Fresh, empty access_store so the coder jails to its launch cwd (the throwaway repo)
     # instead of restoring a persisted active folder (e.g. the user's real workspace).
     access_store = str(Path(tempfile.gettempdir()) / f"jack-e2e-access-{stamp}.json")
-    scope: dict[str, object] = {"coding_autonomy": sc.autonomy, "access_store": access_store}
+    # Isolate the usage ledger to a throwaway file so an E2E run's recorded turns never land
+    # in the user's real ~/.autobot/usage.jsonl (the daemon records via Settings.load()).
+    usage_ledger = str(Path(tempfile.gettempdir()) / f"jack-e2e-usage-{stamp}.jsonl")
+    scope: dict[str, object] = {
+        "coding_autonomy": sc.autonomy,
+        "access_store": access_store,
+        "usage_ledger_path": usage_ledger,
+    }
     # Read only the daemon log written from here on — the run's own slice, not history.
     log_path = Path(settings.log_dir).expanduser() / "autobot.log"
     log_start = observe.log_offset(log_path)
