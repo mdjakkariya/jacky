@@ -395,6 +395,33 @@ def test_turn_renders_streamed_output_lines(tmp_path: Path) -> None:
     assert "All tests passed." in text
 
 
+def test_plan_update_streams_delta_progress_lines(tmp_path: Path) -> None:
+    """plan_update events commit a ◐→☑ delta trail; the step text reaches the scrollback."""
+    sh, console = _make(
+        ["do it", None],
+        {
+            "start": [
+                {
+                    "type": "plan_update",
+                    "todos": [{"step": "run the suite", "status": "in_progress"}],
+                },
+                {
+                    "type": "plan_update",
+                    "todos": [{"step": "run the suite", "status": "done"}],
+                },
+                {"status": "done", "reply": "ok"},
+            ],
+            "answer": [],
+        },
+        tmp_path,
+    )
+    sh.run()
+    out = console.export_text()
+    assert "run the suite" in out  # the step text is rendered
+    assert "◐" in out and "☑" in out  # both delta transitions rendered
+    assert out.index("◐") < out.index("☑")  # in_progress before done (delta order)
+
+
 def test_command_activity_paints_with_the_real_spinner_still_running(tmp_path: Path) -> None:
     """Tool + output must paint with the REAL threaded spinner still running.
 

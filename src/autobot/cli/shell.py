@@ -207,6 +207,7 @@ class Shell:
         from rich.text import Text
 
         printed_activity = False
+        prev: dict[str, str] = {}
         spin_cm = self._spin(self._console, verb)
         spin_cm.__enter__()
         try:
@@ -218,6 +219,25 @@ class Shell:
                     "error",
                 ):
                     return evt, printed_activity
+                if isinstance(evt, dict) and evt.get("type") == "plan_update":
+                    for todo in evt.get("todos") or []:
+                        step = str(todo.get("step", ""))
+                        status = str(todo.get("status", ""))
+                        if (
+                            step
+                            and prev.get(step) != status
+                            and status
+                            in (
+                                "in_progress",
+                                "done",
+                                "blocked",
+                            )
+                        ):
+                            self._console.print(render.render_todo(status, step))
+                            printed_activity = True
+                        if step:
+                            prev[step] = status
+                    continue
                 seg = classify(evt)
                 if seg.kind == "tool" and evt.get("event") == "start":
                     self._console.print(render.render_tool(seg))
