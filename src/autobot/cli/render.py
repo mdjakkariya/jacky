@@ -240,11 +240,13 @@ def render_cost(payload: dict[str, Any], width: int) -> RenderableType:
     table.add_column("Window")
     table.add_column("Turns", justify="right")
     table.add_column("Tokens", justify="right")
+    table.add_column("Cache r/w", justify="right")  # cache tokens ARE billed (included in Cost)
     table.add_column("Cost", justify="right")
     for label, key in (("Today", "today"), ("Last 7 days", "last_7d"), ("All time", "all_time")):
         b = totals.get(key)
         if b:
-            table.add_row(label, f"{b['turns']:,}", f"{b['tokens']:,}", _fmt_usd(b))
+            cache = f"{b['cache_read']:,}/{b['cache_write']:,}"
+            table.add_row(label, f"{b['turns']:,}", f"{b['tokens']:,}", cache, _fmt_usd(b))
     parts.append(table)
 
     models = rollups.get("by_model") or []
@@ -253,7 +255,8 @@ def render_cost(payload: dict[str, Any], width: int) -> RenderableType:
         parts.append(Text(f"Top models: {top}", style="dim"))
     parts.append(
         Text(
-            "Estimate from recorded tokens; your provider console is authoritative. "
+            "Cache read/write tokens are billed and included in Cost. List prices "
+            "(no promo assumed — actual may be lower); the provider console is authoritative. "
             "/cost open for the full dashboard.",
             style="dim",
         )

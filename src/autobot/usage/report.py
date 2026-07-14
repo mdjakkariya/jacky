@@ -52,10 +52,12 @@ def _money(usd: float, has_unpriced: bool = False) -> str:
 
 
 def _card(label: str, bucket: dict[str, Any]) -> str:
+    cache = int(bucket.get("cache_read", 0)) + int(bucket.get("cache_write", 0))
     return (
         f'<div class="card"><div class="label">{html.escape(label)}</div>'
         f'<div class="value">{_money(bucket["usd"], bucket["has_unpriced"])}</div>'
-        f'<div class="meta">{bucket["turns"]} turns · {bucket["tokens"]:,} tokens</div></div>'
+        f'<div class="meta">{bucket["turns"]} turns · {bucket["tokens"]:,} tokens'
+        f" · {cache:,} cache</div></div>"
     )
 
 
@@ -93,13 +95,15 @@ def _group_table(title: str, rows: list[dict[str, Any]], key_label: str) -> str:
         f"<tr><td>{html.escape(str(r['key']))}</td>"
         f'<td class="num">{r["turns"]}</td>'
         f'<td class="num">{r["tokens"]:,}</td>'
+        f'<td class="num">{int(r.get("cache_read", 0)) + int(r.get("cache_write", 0)):,}</td>'
         f'<td class="num">{_money(r["usd"], r["has_unpriced"])}</td></tr>'
         for r in rows[:12]
     )
     return (
         f"<section><h2>{html.escape(title)}</h2><table><thead><tr>"
         f'<th>{html.escape(key_label)}</th><th class="num">turns</th>'
-        f'<th class="num">tokens</th><th class="num">cost</th></tr></thead>'
+        f'<th class="num">tokens</th><th class="num">cache</th>'
+        f'<th class="num">cost</th></tr></thead>'
         f"<tbody>{body}</tbody></table></section>"
     )
 
@@ -134,8 +138,10 @@ def build_html(rollups: dict[str, Any], *, now: datetime) -> str:
         '<meta name="viewport" content="width=device-width, initial-scale=1">'
         f"<title>Jack usage</title><style>{_CSS}</style></head><body>"
         "<h1>Jack — usage &amp; cost</h1>"
-        f'<p class="sub">Local estimate from recorded token counts — your provider console is '
-        f"authoritative. Local turns are $0. Generated {html.escape(stamp)}.</p>"
+        f'<p class="sub">Local estimate from recorded token counts (cache read+write '
+        f"included in cost). List prices — no promo assumed, so your actual bill may be "
+        f"lower; the provider console is authoritative. Local turns are $0. "
+        f"Generated {html.escape(stamp)}.</p>"
         f"{body}</body></html>"
     )
 
