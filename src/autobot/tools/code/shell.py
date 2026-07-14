@@ -171,10 +171,16 @@ def register_exec_tools(
                 "Run a shell command (e.g. tests, a build, git, a linter) in the working "
                 "folder and return its output. Cross-platform. Prefer the dedicated tools "
                 "(read_file/edit_file/grep/glob) over shelling out for file work. Output over "
-                "~10k chars is saved to a file and only an excerpt is returned — pipe through "
-                "grep/head/tail to narrow it. For a long-running process (e.g. a dev server) "
-                "needed by a later step, start it in the background with output redirected to a "
-                "file (e.g. `nohup <cmd> > /tmp/server.log 2>&1 &`), then continue."
+                "~10k chars is capped automatically (the full output is saved to a file and an "
+                "excerpt returned), so you do NOT need to shorten it yourself. Do NOT pipe a "
+                "long or verbose command through `| tail`/`| head`: that buffers ALL its output "
+                "until the command finishes, so nothing streams and it looks stuck. Run tests/"
+                "builds directly — their output streams live line-by-line and is budgeted for "
+                "you (use a streaming reporter for a big suite, e.g. `npx playwright test "
+                "--reporter=line`). Use `grep` only to *filter* output you truly don't need. "
+                "For a long-running process (e.g. a dev server) needed by a later step, start "
+                "it in the background with output redirected to a file (e.g. `nohup <cmd> > "
+                "/tmp/server.log 2>&1 &`), then continue."
             ),
             parameters={
                 "type": "object",
