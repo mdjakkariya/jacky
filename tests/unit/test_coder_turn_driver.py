@@ -146,12 +146,12 @@ def test_confirm_mode_asks_before_each_command() -> None:
         "(no plan in confirm mode)",
         "Tests passed.",
         act_calls=[
-            ToolCall(name="run_command", arguments={"command": "pytest -q"}),
+            ToolCall(name="run_command", arguments={"command": "bash deploy.sh"}),
         ],
     )
     d = _driver(llm, autonomy="confirm")
-    pending = list(d.start_stream("run the tests"))  # straight to act; pytest not allowlisted
-    assert pending[-1]["status"] == "pending" and "pytest" in pending[-1]["prompt"]
+    pending = list(d.start_stream("run the tests"))  # straight to act; deploy.sh isn't read-only
+    assert pending[-1]["status"] == "pending" and "deploy.sh" in pending[-1]["prompt"]
     final = list(d.reply_stream("yes"))
     assert final[-1] == {"status": "done", "reply": "Tests passed."}
 
@@ -191,12 +191,12 @@ def test_auto_routes_to_confirm_mode() -> None:
     llm = _ScriptedLLM(
         "(unused)",
         "Ran it.",
-        act_calls=[ToolCall(name="run_command", arguments={"command": "pytest -q"})],
+        act_calls=[ToolCall(name="run_command", arguments={"command": "bash deploy.sh"})],
         route="CONFIRM",
     )
     d = _driver(llm, autonomy="auto")
     pending = list(d.start_stream("run the tests"))
-    assert pending[-1]["status"] == "pending" and "pytest" in pending[-1]["prompt"]
+    assert pending[-1]["status"] == "pending" and "deploy.sh" in pending[-1]["prompt"]
     assert llm.plans == 0  # confirm route never runs a planning turn
     final = list(d.reply_stream("yes"))
     assert final[-1] == {"status": "done", "reply": "Ran it."}
@@ -291,7 +291,7 @@ def test_reclaim_close_does_not_leak_a_parked_confirm() -> None:
     llm = _ScriptedLLM(
         "(confirm mode: no plan)",
         "Tests passed.",
-        act_calls=[ToolCall(name="run_command", arguments={"command": "pytest -q"})],
+        act_calls=[ToolCall(name="run_command", arguments={"command": "bash deploy.sh"})],
     )
     d = _driver(llm, autonomy="confirm")
     pending = list(d.start_stream("run the tests"))

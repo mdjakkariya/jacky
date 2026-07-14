@@ -233,7 +233,31 @@ _ROUTE_PROMPT = (
 _CANCELLED_REPLY = "Okay, I won't make any changes."
 _ERROR_REPLY = "Something went wrong on my end, so I stopped. Nothing was changed."
 
+MAX_ACT_CONTINUES = 2  # auto-nudge the model past a narrate-then-stop, at most this many times
+_CONTINUE_NUDGE = "Continue with the remaining steps of the task."
+
+# Forward-looking, first-person cues at the tail of a reply that mean the model announced a
+# next step and then stopped (the narrate-then-stop failure mode) rather than finishing.
+_CONTINUATION_CUES = re.compile(
+    r"\b(?:"
+    r"let'?s\b|let me\b(?! know)|"
+    r"now i(?:'?ll| will)\b|next,? i(?:'?ll| will)\b|then i(?:'?ll| will)\b|"
+    r"i(?:'?ll| will) (?:now|then|run|start|create|add|update|check|install|proceed)\b"
+    r")",
+    re.IGNORECASE,
+)
+
 _TODO_LINE = re.compile(r"^\s*(?:\d+[.)]|[-*])\s+(.*\S)\s*$")
+
+
+def _is_continuation_intent(reply: str) -> bool:
+    """Whether ``reply`` looks like the model announced a next step and then stopped.
+
+    Conservative: matches forward-looking cues in the last ~200 chars only, so a completion
+    report ("Done — …") never triggers an auto-continue.
+    """
+    tail = reply[-200:] if reply else ""
+    return bool(_CONTINUATION_CUES.search(tail))
 
 
 def _extract_todo(reply: str) -> list[str]:
@@ -517,6 +541,14 @@ class CoderTurnDriver:
         )
         prompt = first_text if first_text is not None else _ACT_PROMPT
         reply: str = self._llm.run_turn(prompt, executor, on_event=channel.emit)
+        # Backstop for the narrate-then-stop failure mode: if the model announced a next
+        # step and stopped instead of finishing, nudge it to continue (capped, act-phase
+        # only) so the user doesn't have to type "continue" mid-task.
+        continues = 0
+        while continues < MAX_ACT_CONTINUES and _is_continuation_intent(reply):
+            continues += 1
+            _log.info("act auto-continue %d/%d", continues, MAX_ACT_CONTINUES)
+            reply = self._llm.run_turn(_CONTINUE_NUDGE, executor, on_event=channel.emit)
         _log.info("turn done")
         return reply
 
