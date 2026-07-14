@@ -27,6 +27,20 @@ _StreamTurn = Callable[[str, str], Iterator[dict[str, Any]]]
 _StreamAnswer = Callable[[str, str, str], Iterator[dict[str, Any]]]
 
 
+def _tail_preview(buffer: str, width: int, *, max_lines: int = 6) -> str:
+    """A bounded tail of a streaming reply, so the live preview never exceeds the viewport.
+
+    A ``rich.Live`` renderable taller than the terminal can't repaint in place — it commits
+    every refresh frame instead of overwriting, spamming the scrollback. Capping the preview
+    to roughly ``max_lines`` rows keeps the transient region small and stable; the full reply
+    is printed once when the turn completes.
+    """
+    cap = max(width, 20) * max_lines
+    if len(buffer) <= cap:
+        return buffer
+    return "…" + buffer[-cap:]
+
+
 def gather_context(cwd: str) -> dict[str, str]:
     """Best-effort status context for the banner/footer (never raises)."""
     branch = _branch(cwd)
@@ -191,7 +205,14 @@ class Shell:
 
         buffer = ""
         printed_activity = False
-        live_region = Live(console=self._console, refresh_per_second=12, transient=True)
+        # vertical_overflow="crop" + a bounded preview (see _tail_preview) keep the transient
+        # region within the viewport so it repaints in place instead of committing every frame.
+        live_region = Live(
+            console=self._console,
+            refresh_per_second=12,
+            transient=True,
+            vertical_overflow="crop",
+        )
         spin_cm = self._spin(self._console, verb)
         spin_cm.__enter__()
         spinning = True
@@ -214,7 +235,8 @@ class Shell:
                 if seg.kind == "token":
                     buffer += seg.text
                     assert live is not None
-                    live.update(Text(f"{theme.GLYPH_ASSISTANT} {buffer}", style="assistant"))
+                    preview = _tail_preview(buffer, self._console.width or 80)
+                    live.update(Text(f"{theme.GLYPH_ASSISTANT} {preview}", style="assistant"))
                 elif is_tool_start:
                     self._console.print(render.render_tool(seg))
                     printed_activity = True

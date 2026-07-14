@@ -389,3 +389,17 @@ def test_ask_hints_on_ambiguous_then_accepts(tmp_path: Path) -> None:
     out = console.export_text().lower()
     assert "answer y or n" in out
     assert "done." in out
+
+
+def test_tail_preview_bounds_the_streaming_region() -> None:
+    from autobot.cli.shell import _tail_preview
+
+    # Small buffers pass through untouched.
+    assert _tail_preview("hi there", 80) == "hi there"
+    # A long buffer is capped to ~max_lines*width chars so the live region can't overflow
+    # the viewport (the cause of the duplicated-reply spam).
+    big = "x" * 5000
+    out = _tail_preview(big, 80, max_lines=6)
+    assert out.startswith("…")
+    assert len(out) <= 80 * 6 + 1
+    assert out.endswith("x")
