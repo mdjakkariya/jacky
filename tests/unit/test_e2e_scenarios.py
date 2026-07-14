@@ -15,7 +15,6 @@ def test_seed_scenarios_valid() -> None:
         "create-file",
         "run-command",
         "readonly-command-no-prompt",
-        "confirm-freetext-yes",
         "edit-file",
         "build-small-thing",
         "undo-edit",

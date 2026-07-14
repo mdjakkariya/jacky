@@ -13,9 +13,9 @@ from collections.abc import Callable, Iterator
 from contextlib import AbstractContextManager
 from typing import Any
 
-from autobot.cli import client, coder_commands, commands, gitdiff, render, spinner, theme
+from autobot.cli import client, coder_commands, commands, gitdiff, prompt, render, spinner, theme
 from autobot.cli.classify import classify
-from autobot.cli.prompt import Answer, parse_confirm_choice, parse_plan_choice
+from autobot.cli.prompt import Answer
 from autobot.cli.theme import GLYPH_PROMPT
 from autobot.logging_setup import get_logger
 
@@ -92,6 +92,7 @@ class Shell:
         snapshot: Callable[[str], str | None] = gitdiff.snapshot,
         diff_since: Callable[[str, str | None], str | None] = gitdiff.diff_since,
         spin: _Spin = spinner.with_spinner,
+        chooser: prompt.KeyChooser = prompt.read_choice,
     ) -> None:
         """Wire the shell; all collaborators are injectable for tests."""
         self._base_url = base_url
@@ -103,6 +104,7 @@ class Shell:
         self._snapshot = snapshot
         self._diff_since = diff_since
         self._spin = spin
+        self._chooser = chooser
         self._turn_no = 0
 
     def run(self) -> None:
@@ -168,8 +170,7 @@ class Shell:
                 # or card, so tool-heavy turns read as cleanly as pure-text ones.
                 self._console.print()
             if seg.kind in ("plan", "pending"):
-                self._console.print(render.render_rich(seg))
-                ans = self._ask(seg.kind)
+                ans = self._ask(seg)
                 events = self._stream_answer(self._base_url, ans.value, ans.text)
                 continue
             # done / error
@@ -252,32 +253,29 @@ class Shell:
                 live_region.__exit__(*exc_info)
         return None, printed_activity
 
-    def _ask(self, kind: str) -> Answer:
-        """Read a plan/permission choice, re-asking until it parses; EOF/Ctrl-C → reject."""
-        parse = parse_plan_choice if kind == "plan" else parse_confirm_choice
-        while True:
-            try:
-                raw = self._reader("> ")
-            except KeyboardInterrupt:
-                return Answer("reject") if kind == "plan" else Answer("no")
-            if raw is None:
-                return Answer("reject") if kind == "plan" else Answer("no")
-            ans = parse(raw)
-            if ans is None:
-                # Unrecognized/ambiguous answer — hint instead of silently re-looping.
-                self._console.print(
-                    "Please answer y, e, or n." if kind == "plan" else "Please answer y or n."
-                )
-                continue
-            if ans.value == "refine":  # plan edit: take the follow-up as the refinement
+    def _ask(self, seg: Any) -> Answer:
+        """Resolve a plan/permission gate with a single keypress; the prompt self-erases.
+
+        Permission: ``y``/``n`` (default no). Plan: the plan is printed (it's content), then
+        ``y``/``e``/``n`` — ``e`` (edit) opens a one-line box for the refinement. A cancel
+        (Ctrl-C / Escape) declines.
+        """
+        if seg.kind == "plan":
+            self._console.print(render.render_reply(seg.text))  # the plan stays as content
+            value = self._chooser(
+                "Approve this plan?",
+                [("y", "yes", "approve"), ("e", "edit", "refine"), ("n", "no", "reject")],
+            )
+            if value == "refine":  # take the follow-up line as the refinement
                 try:
                     follow = self._reader("what should change? ")
                 except KeyboardInterrupt:
                     return Answer("reject")
-                if follow is None:
-                    return Answer("reject")
-                return Answer("refine", follow.strip())
-            return ans
+                return Answer("refine", (follow or "").strip()) if follow else Answer("reject")
+            return Answer(value or "reject")
+        # permission gate: the ⎿ activity line above already shows the command
+        value = self._chooser(seg.text, [("y", "yes", "yes"), ("n", "no", "no")])
+        return Answer(value or "no")
 
 
 def run(base_url: str, cwd: str) -> None:  # pragma: no cover - launches the interactive app

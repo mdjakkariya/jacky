@@ -49,9 +49,8 @@ class Result:
 
 
 def _approve(session: Any, log: list[dict[str, Any]]) -> None:
-    # Drive the real affordance a user sees ("[y/n]" / "[y]es · [e]dit · [n]o") — type y.
+    # The confirm/plan prompt resolves on a single keypress (no Enter) — type y.
     session.send_key("y")
-    session.send_key("enter")
     log.append({"action": "approve"})
 
 

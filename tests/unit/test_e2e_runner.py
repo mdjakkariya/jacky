@@ -58,7 +58,7 @@ def test_unattended_auto_approves_gate_then_completes(tmp_path: Path) -> None:
     screens = [
         "❯ ",  # pre-send idle
         "⠹ Working…  ·  esc to interrupt · 1s",  # turn_started (spinner)
-        "[y]es  ·  [e]dit  ·  [n]o\n> ",  # awaiting_reply — a LIVE gate
+        "Run this command?\n\n  $ x\n(y) yes   (n) no",  # awaiting_reply — a LIVE gate
         "⎿  Edited hello.py\n⠋ Working…  ·  esc to interrupt · 2s",  # act running
         "⏺ done\n❯ ",  # settled idle
     ]
@@ -77,16 +77,16 @@ def test_unattended_auto_approves_gate_then_completes(tmp_path: Path) -> None:
         judge_fn=lambda *a, **k: {"pass": True},
     )
     assert res.passed is True and Path(res.report_path).exists()
-    # The gate must be approved exactly once — not re-approved on every poll until the
-    # 50-iteration cap silently falls through (the bug this test guards against).
+    # The gate must be approved exactly once (a single keypress, no Enter) — not re-approved
+    # on every poll until the 50-iteration cap silently falls through.
     assert sess.sent.count("<y>") == 1
-    assert sess.sent.count("<enter>") == 1
+    assert sess.sent.count("<enter>") == 0
 
 
 def test_unattended_does_not_reapprove_a_stale_gate_card(tmp_path: Path) -> None:
-    # Regression: after a gate is answered, its committed "[y]es · [e]dit · [n]o" text
-    # lingers in the scrollback above the idle prompt. The driver must NOT treat that stale
-    # card as a live gate and re-approve (which used to spam the coder with the answer as chat).
+    # After a gate is answered the single-key prompt erases itself, so a stale card can't
+    # linger. This still guards that the driver approves once and settles at idle (it must
+    # not re-approve on a frame where the idle prompt hasn't repainted yet).
     sc = Scenario(
         name="t",
         autonomy="auto",
@@ -98,8 +98,8 @@ def test_unattended_does_not_reapprove_a_stale_gate_card(tmp_path: Path) -> None
     screens = [
         "❯ ",
         "⠹ Working…  ·  esc to interrupt · 1s",  # turn_started
-        "[y]es  ·  [e]dit  ·  [n]o\n> ",  # live gate → approve once
-        "[y]es  ·  [e]dit  ·  [n]o\n⏺ done\n❯ ",  # answered; card lingers, but idle
+        "Run this command?\n\n  $ x\n(y) yes   (n) no",  # live gate → approve once
+        "⏺ done\n❯ ",  # answered; the single-key prompt erased itself, settled idle
     ]
     sess = _FakeSession(screens)
 
@@ -111,8 +111,8 @@ def test_unattended_does_not_reapprove_a_stale_gate_card(tmp_path: Path) -> None
         sc, port=8999, judge_mode="manual", session_factory=factory, judge_fn=lambda *a, **k: None
     )
     assert res.passed is True
-    assert sess.sent.count("<y>") == 1  # approved exactly once — not once per lingering frame
-    assert sess.sent.count("<enter>") == 1
+    assert sess.sent.count("<y>") == 1  # approved exactly once
+    assert sess.sent.count("<enter>") == 0
 
 
 def test_bundle_captures_observability_files(tmp_path: Path) -> None:

@@ -58,8 +58,21 @@ def _streams(
     return stream_turn, stream_answer
 
 
+def _chooser_returning(value: str) -> Callable[[str, list[Any]], str]:
+    """A fake single-key chooser that always returns ``value`` (a gate answer)."""
+
+    def chooser(_body: str, _options: list[Any]) -> str:
+        return value
+
+    return chooser
+
+
 def _make(
-    lines: list[str | None], turns: dict[str, list[dict[str, Any]]], tmp_path: Path
+    lines: list[str | None],
+    turns: dict[str, list[dict[str, Any]]],
+    tmp_path: Path,
+    *,
+    chooser: Callable[[str, list[Any]], str] | None = None,
 ) -> tuple[shell.Shell, Console]:
     stream_turn, stream_answer = _streams(turns)
     console = _console()
@@ -73,13 +86,14 @@ def _make(
         snapshot=lambda _cwd: None,
         diff_since=lambda _cwd, _b: None,
         spin=_noop_spin,
+        chooser=chooser or _chooser_returning(""),
     )
     return sh, console
 
 
 def test_plan_approve_done(tmp_path: Path) -> None:
     sh, console = _make(
-        ["add retry", "1", None],
+        ["add retry", None],
         {
             "start": [
                 {
@@ -91,6 +105,7 @@ def test_plan_approve_done(tmp_path: Path) -> None:
             "answer": [{"status": "done", "reply": "Done."}],
         },
         tmp_path,
+        chooser=_chooser_returning("approve"),
     )
     sh.run()
     out = console.export_text()
@@ -99,16 +114,17 @@ def test_plan_approve_done(tmp_path: Path) -> None:
 
 def test_pending_yes_done(tmp_path: Path) -> None:
     sh, console = _make(
-        ["run tests", "1", None],
+        ["run tests", None],
         {
             "start": [{"status": "pending", "prompt": "run pytest?"}],
             "answer": [{"status": "done", "reply": "Ran."}],
         },
         tmp_path,
+        chooser=_chooser_returning("yes"),
     )
     sh.run()
     out = console.export_text()
-    assert "pytest" in out and "Ran." in out
+    assert "Ran." in out
 
 
 def test_help_command_renders_without_a_turn(tmp_path: Path) -> None:
@@ -147,14 +163,11 @@ def test_command_falls_back_to_pure_dispatch(
 
 
 def test_ask_refine_followup_ctrl_c_cancels(tmp_path: Path) -> None:
-    """Ctrl-C at refine follow-up cancels the turn instead of crashing."""
-    calls = iter(["2"])  # "2" = edit/refine; next read raises
+    """Ctrl-C at the refine follow-up cancels the turn instead of crashing."""
+    from autobot.cli.classify import Segment
 
     def reader(_prompt: str) -> str | None:
-        try:
-            return next(calls)
-        except StopIteration:
-            raise KeyboardInterrupt from None
+        raise KeyboardInterrupt  # the follow-up "what should change?" read is interrupted
 
     console = _console()
     sh = shell.Shell(
@@ -165,14 +178,15 @@ def test_ask_refine_followup_ctrl_c_cancels(tmp_path: Path) -> None:
         snapshot=lambda _cwd: None,
         diff_since=lambda _cwd, _b: None,
         spin=_noop_spin,
+        chooser=_chooser_returning("refine"),  # user picked edit; the follow-up then Ctrl-C's
     )
-    assert sh._ask("plan") == Answer("reject")
+    assert sh._ask(Segment("plan", "Here's my plan")) == Answer("reject")
 
 
 def test_stream_plan_approve_done_with_tool_line(tmp_path: Path) -> None:
     """Tool-activity events render live (before the final reply) alongside the phase cards."""
     sh, console = _make(
-        ["edit foo", "1", None],
+        ["edit foo", None],
         {
             "start": [
                 {"status": "plan", "reply": "Here's my plan:\n1. edit foo", "todo": ["edit foo"]}
@@ -183,6 +197,7 @@ def test_stream_plan_approve_done_with_tool_line(tmp_path: Path) -> None:
             ],
         },
         tmp_path,
+        chooser=_chooser_returning("approve"),
     )
     sh.run()
     out = console.export_text()
@@ -375,20 +390,6 @@ def test_turn_renders_streamed_output_lines(tmp_path: Path) -> None:
     assert "PASS a.spec.ts" in text
     assert "PASS b.spec.ts" in text
     assert "All tests passed." in text
-
-
-def test_ask_hints_on_ambiguous_then_accepts(tmp_path: Path) -> None:
-    # An unrecognized confirm answer prints a hint (not a silent re-loop), then a valid
-    # answer proceeds.
-    turns = {
-        "start": [{"status": "pending", "prompt": "Run this command?\n\n  $ npm i"}],
-        "answer": [{"status": "done", "reply": "Done."}],
-    }
-    sh, console = _make(["install deps", "huh?", "y", None], turns, tmp_path)
-    sh.run()
-    out = console.export_text().lower()
-    assert "answer y or n" in out
-    assert "done." in out
 
 
 def test_tail_preview_bounds_the_streaming_region() -> None:

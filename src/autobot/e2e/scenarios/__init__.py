@@ -67,21 +67,6 @@ ALL: tuple[Scenario, ...] = (
         checks=(ScreenContains("e2e-readonly-ok"),),
     ),
     Scenario(
-        name="confirm-freetext-yes",
-        autonomy="confirm",
-        strategy="scripted",
-        task="run this shell command to make a folder: mkdir e2e_freetext",
-        success_criteria="Asked before the command, accepted the natural-language 'go ahead' "
-        "as a yes, then ran it and created the folder.",
-        steps=(
-            Send("run this shell command to make a folder: mkdir e2e_freetext"),
-            Expect("permission_card", _TURN),
-            Send("go ahead"),  # free-text intent (not 1/y) must resolve to yes
-            Expect("idle_prompt", _TURN),
-        ),
-        checks=(FileExists("e2e_freetext"),),
-    ),
-    Scenario(
         name="edit-file",
         autonomy="auto",
         strategy="unattended",
