@@ -163,6 +163,11 @@ class Settings:
     # "pytest*") are trusted to run with less friction. Empty = baseline + gate only.
     command_allowlist: list[str] = field(default_factory=list)
     command_blocklist: list[str] = field(default_factory=list)
+    # Max characters of a command's output handed to the model inline. Larger output is
+    # spilled to .jack/command-output/<id>.log and only a tail-biased excerpt + the path is
+    # returned — the human still sees the full stream live. Protects the model's context
+    # (output is re-sent every turn, so it costs disproportionately) without losing detail.
+    command_output_model_cap: int = 10_000
     # Which agent this process is: "assistant" (voice/chat helper, default) or "coder"
     # (a code-editing agent — swaps in the code tools + a coding system prompt). Set by the
     # daemon's --profile flag or settings.json; the jack CLI runs a coder-profile daemon.
