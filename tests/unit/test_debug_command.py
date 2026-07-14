@@ -35,9 +35,15 @@ def _usage() -> dict[str, Any]:
 
 
 def test_debug_command_writes_bundle_and_prints_copy_hint(tmp_path: Path) -> None:
+    from datetime import datetime
+
     _seed_session(tmp_path)
     log = tmp_path / "autobot.log"
-    log.write_text("2026-07-14 20:15:21 INFO    [coder] planning steps=2", encoding="utf-8")
+    # Timestamp the log line at "now": the bundle scopes the log to the transcript's mtime
+    # (≈ now) + a grace window, so a hardcoded date would be dropped when the machine clock is
+    # earlier than it (a real cross-platform CI flake). Only future-of-cutoff lines are dropped.
+    ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    log.write_text(f"{ts} INFO    [coder] planning steps=2", encoding="utf-8")
     settings = SimpleNamespace(
         log_dir=str(tmp_path), coding_autonomy="auto", llm_provider="anthropic"
     )

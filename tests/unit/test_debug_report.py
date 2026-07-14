@@ -143,10 +143,15 @@ def test_context_line_with_and_without_usage() -> None:
 
 
 def test_build_bundle_has_all_sections(tmp_path: Path) -> None:
+    from datetime import datetime
+
     transcript = tmp_path / "s.jsonl"
     _write_transcript(transcript)
     log = tmp_path / "autobot.log"
-    log.write_text("2026-07-14 20:15:21 INFO    [coder] did a thing", encoding="utf-8")
+    # "now" timestamp: the bundle scopes the log to the transcript mtime (≈ now) + grace, so a
+    # hardcoded date flakes when the machine clock is earlier than it (a real CI failure).
+    ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    log.write_text(f"{ts} INFO    [coder] did a thing", encoding="utf-8")
     bundle = debug_report.build_bundle(
         transcript=transcript,
         log_path=log,
