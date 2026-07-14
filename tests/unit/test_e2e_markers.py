@@ -26,25 +26,25 @@ def test_working_and_turn_started() -> None:
     # A turn has visibly started on a spinner, a tool line, or a gate — but not at idle.
     assert markers.turn_started(spinner)
     assert markers.turn_started("  ⎿  Read foo.py")
-    assert markers.turn_started("Proceed?   [1] Yes   [2] Edit")
+    assert markers.turn_started("[y]es  ·  [e]dit  ·  [n]o")
     assert not markers.turn_started("⏺ Done.\n❯ ")
 
 
 def test_awaiting_reply_is_the_live_gate_prompt() -> None:
     # A LIVE gate shows the '>' answer prompt as the last line.
-    assert markers.awaiting_reply("Proceed?   [1] Yes   [2] Edit\n> ")
-    assert markers.awaiting_reply("Run `pytest`?\nProceed?   [1] Yes, run it   [2] No\n>")
-    # An ANSWERED gate whose committed 'Proceed?' text lingers above the idle prompt is NOT
+    assert markers.awaiting_reply("[y]es  ·  [e]dit  ·  [n]o\n> ")
+    assert markers.awaiting_reply("Run this command?\n\n  $ mkdir x\n[y/n]\n>")
+    # An ANSWERED gate whose committed choice text lingers above the idle prompt is NOT
     # live — this is the stale-card case that used to trigger spurious re-approvals.
-    assert not markers.awaiting_reply("Proceed?   [1] Yes   [2] Edit\n⏺ Done.\n❯ ")
+    assert not markers.awaiting_reply("[y]es  ·  [e]dit  ·  [n]o\n⏺ Done.\n❯ ")
     assert not markers.awaiting_reply("⏺ Done.\n❯ ")
     assert not markers.awaiting_reply("⠹ Working…  ·  esc to interrupt · 2s")
     assert "awaiting_reply" in markers.BY_NAME
 
 
 def test_plan_vs_permission_gate() -> None:
-    plan = "Here's my plan\nProceed?   [1] Yes   [2] Edit   [3] No\n> "
-    perm = "Run `pytest`?\nProceed?   [1] Yes, run it   [2] No\n> "
+    plan = "Here's my plan\n[y]es  ·  [e]dit  ·  [n]o\n> "
+    perm = "Run this command?\n\n  $ mkdir x\n[y/n]\n> "
     assert markers.plan_card(plan) and not markers.permission_card(plan)
     assert markers.permission_card(perm) and not markers.plan_card(perm)
     assert markers.any_gate(plan) and markers.any_gate(perm)

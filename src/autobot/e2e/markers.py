@@ -1,8 +1,9 @@
 """Predicates over the `pyte`-rendered screen text — the harness's sync vocabulary.
 
 Derived from the CLI's glyphs/cards (`autobot.cli.theme` / `cli.render`), so they track
-the real TUI: ``⏺`` reply, ``⎿`` tool line, the ``Proceed?`` gate cards, and the ``❯``
-idle prompt. All are pure ``str -> bool`` so they unit-test against canned screens.
+the real TUI: ``⏺`` reply, ``⎿`` tool line, the ``[y/n]`` / ``[y]es · [e]dit · [n]o`` gate
+cards, and the ``❯`` idle prompt. All are pure ``str -> bool`` so they unit-test against
+canned screens.
 """
 
 from __future__ import annotations
@@ -25,13 +26,13 @@ def tool_line(screen: str) -> bool:
 
 
 def plan_card(screen: str) -> bool:
-    """The plan-approval card (``Proceed?`` + an ``Edit`` option)."""
-    return "Proceed?" in screen and "Edit" in screen
+    """The plan-approval card (the ``[y]es · [e]dit · [n]o`` choice line)."""
+    return "[y]es" in screen and "[e]dit" in screen
 
 
 def permission_card(screen: str) -> bool:
-    """The command-permission card (``Proceed?`` + ``run it``)."""
-    return "Proceed?" in screen and "run it" in screen
+    """The command-permission card (the ``[y/n]`` choice line)."""
+    return "[y/n]" in screen
 
 
 def any_gate(screen: str) -> bool:
@@ -53,10 +54,10 @@ def awaiting_reply(screen: str) -> bool:
     """A gate is *live* — the ``>`` answer prompt is the last line, waiting for a choice.
 
     This is the reliable "a gate needs answering now" signal, distinct from :func:`any_gate`
-    (a plain substring match for ``Proceed?``). The plan/permission card is committed to the
-    scrollback, so its ``Proceed?`` text lingers long after it's answered; only the ``>``
-    input prompt tells you a gate is *currently* awaiting input. Distinct from the ``❯`` REPL
-    prompt (:func:`idle_prompt`).
+    (a plain substring match for the card's choice line). The plan/permission card is
+    committed to the scrollback, so its choice text lingers long after it's answered; only
+    the ``>`` input prompt tells you a gate is *currently* awaiting input. Distinct from the
+    ``❯`` REPL prompt (:func:`idle_prompt`).
     """
     lines = [ln for ln in screen.splitlines() if ln.strip()]
     if not lines:
