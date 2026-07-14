@@ -21,6 +21,7 @@ COMMANDS: dict[str, str] = {
     "/sessions": "list sessions (or /sessions resume <id>)",
     "/new": "start a fresh session",
     "/cost": "show usage & cost (/cost open for the dashboard)",
+    "/debug": "write a shareable debug report of this session (to paste for help)",
     "/exit": "quit jack",
 }
 

@@ -14,7 +14,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
-from autobot.cli import client, gitdiff, render
+from autobot.cli import client, debug_report, gitdiff, render
 from autobot.config import Settings
 from autobot.logging_setup import get_logger
 
@@ -23,7 +23,9 @@ if TYPE_CHECKING:
 
 _log = get_logger("cli")
 
-_DAEMON_CMDS = frozenset({"/diff", "/undo", "/model", "/autonomy", "/sessions", "/new", "/cost"})
+_DAEMON_CMDS = frozenset(
+    {"/diff", "/undo", "/model", "/autonomy", "/sessions", "/new", "/cost", "/debug"}
+)
 _AUTONOMY = ("plan", "confirm", "auto")
 
 
@@ -34,6 +36,20 @@ def _open_report_default(rollups: dict[str, Any]) -> str:
     from autobot.usage.report import write_and_open
 
     return str(write_and_open(rollups, now=datetime.now()))
+
+
+def _log_report_default() -> str:
+    """Fallback debug report built from the on-disk log when the daemon is unreachable."""
+    from pathlib import Path
+
+    from autobot.diagnostics import build_report
+
+    try:
+        settings = Settings.load()
+        log_path = Path(settings.log_dir).expanduser() / "autobot.log"
+        return build_report(settings, log_path=log_path)
+    except Exception:  # a debug helper must not itself fail
+        return ""
 
 
 @dataclass(frozen=True, slots=True)
@@ -51,6 +67,8 @@ class Deps:
     load_settings: Callable[[], Any] = Settings.load
     get_usage: Callable[[str], dict[str, Any]] = client.get_usage
     open_report: Callable[[dict[str, Any]], str] = _open_report_default
+    get_report: Callable[[str], str] = client.get_report
+    report_fallback: Callable[[], str] = _log_report_default
 
 
 def handle(
@@ -81,7 +99,25 @@ def handle(
         return _new(base_url, deps)
     if name == "/cost":
         return _cost(args, base_url, width, deps)
+    if name == "/debug":
+        return _debug(base_url, cwd, deps)
     return None
+
+
+def _debug(base_url: str, cwd: str, deps: Deps) -> str:
+    """Write a shareable session debug bundle and tell the user how to copy it.
+
+    Assembles the daemon's redacted log report (falling back to a log-file report if the
+    daemon is unreachable) + the session's transcript path + token/cost summary, writes it to
+    ``<cwd>/.jack/debug-report.md``, and returns copy/paste instructions.
+    """
+    report = deps.get_report(base_url) or deps.report_fallback()
+    cost = debug_report.cost_line(deps.get_usage(base_url))
+    transcript = debug_report.newest_transcript(cwd)
+    bundle = debug_report.build_bundle(report, transcript=transcript, cost=cost)
+    path = debug_report.write_bundle(bundle, cwd)
+    _log.info("debug report written path=%s", path)
+    return debug_report.share_hint(path, transcript)
 
 
 def _diff(cwd: str, width: int, deps: Deps) -> RenderableType | str:

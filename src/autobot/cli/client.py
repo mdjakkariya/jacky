@@ -110,6 +110,18 @@ def list_sessions(
     return data if isinstance(data, list) else []
 
 
+def get_report(
+    base_url: str, *, concise: bool = True, get: Callable[[str, float], Any] = _get_json
+) -> str:
+    """Fetch the daemon's redacted debug report (``GET /report[/concise]``); ``""`` on failure."""
+    path = "/report/concise" if concise else "/report"
+    try:
+        data = get(f"{base_url}{path}", 15.0)
+    except (OSError, urllib.error.URLError):
+        return ""
+    return str(data.get("report", "")) if isinstance(data, dict) else ""
+
+
 def get_usage(base_url: str, *, get: Callable[[str, float], Any] = _get_json) -> dict[str, Any]:
     """Fetch live session usage + rollups (``GET /coder/usage``); ``{}`` on any failure."""
     try:

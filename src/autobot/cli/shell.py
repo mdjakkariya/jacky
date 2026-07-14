@@ -17,6 +17,7 @@ from autobot.cli import (
     client,
     coder_commands,
     commands,
+    debug_report,
     gitdiff,
     mentions,
     prompt,
@@ -123,6 +124,28 @@ class Shell:
                 continue
             self._turn(line)
             self._turn_no += 1
+        self._print_session_footer()
+
+    def _print_session_footer(self) -> None:
+        """On exit, point at the transcript + how to get a shareable debug report.
+
+        Only after real work (≥1 turn) — so just opening and quitting stays quiet. Gives the
+        user something to copy/share when a session got stuck or misbehaved.
+        """
+        if self._turn_no == 0:
+            return
+        from rich.text import Text
+
+        transcript = debug_report.newest_transcript(self._cwd)
+        self._console.print()
+        if transcript is not None:
+            self._console.print(Text(f"session transcript: {transcript}", style="dim"))
+        self._console.print(
+            Text(
+                "stuck or something off? run  jack debug  here for a shareable report to paste.",
+                style="dim",
+            )
+        )
 
     def _command(self, name: str, args: str) -> bool:
         """Run a command; return True to exit the loop.
