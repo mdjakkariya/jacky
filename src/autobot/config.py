@@ -297,6 +297,11 @@ class Settings:
     meeting_overlap_s: float = 3.0
     # "dual_stream" (you/participants) today; a finer per-speaker mode can be added here.
     meeting_diarization: str = "dual_stream"
+    # --- usage / cost tracking ---
+    # Usage/cost tracking: append one row per turn to a global JSONL ledger. Off disables
+    # all recording. usage_ledger_path is empty -> the default ~/.autobot/usage.jsonl.
+    usage_tracking: bool = True
+    usage_ledger_path: str = ""
     # --- debugging / logging ---
     session_log: bool = True
     session_dir: str = _DEFAULT_SESSION_DIR
