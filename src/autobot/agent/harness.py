@@ -22,6 +22,7 @@ from collections.abc import Callable
 from dataclasses import replace
 from typing import TYPE_CHECKING, Any
 
+from autobot.core.streaming import output_sink
 from autobot.core.types import ToolCall, ToolResult
 from autobot.logging_setup import get_logger
 
@@ -157,7 +158,18 @@ class AgentHarness:
                             "label": tool_label(call),
                         }
                     )
-                    result = execute(call)  # through the permission gate
+
+                    # Expose a live output sink for the duration of this tool call so a
+                    # streaming tool (run_command) can surface each line to the CLI as it
+                    # runs; reset after so nothing leaks between calls.
+                    def _emit_output(line: str, _name: str = call.name) -> None:
+                        emit({"type": "output", "text": line, "name": _name})
+
+                    sink_token = output_sink.set(_emit_output)
+                    try:
+                        result = execute(call)  # through the permission gate
+                    finally:
+                        output_sink.reset(sink_token)
                     out, ok = result.content, result.ok
                     emit(
                         {

@@ -72,3 +72,27 @@ def test_run_turn_without_on_event_is_unchanged(tmp_path: Any) -> None:
     harness = AgentHarness(_FakeModel(), store, cwd=".", model_name="fake")
     reply = harness.run_turn("do it", lambda c: ToolResult(name=c.name, content="ok", ok=True))
     assert reply == "done"  # no on_event: same result, no error
+
+
+def test_output_sink_emits_output_events_during_execute(tmp_path: Any) -> None:
+    from pathlib import Path
+
+    from autobot.core.streaming import output_sink
+
+    store = SessionStore(str(Path(tmp_path) / "sessions"))
+    harness = AgentHarness(_FakeModel(), store, cwd=".", model_name="fake")
+    events: list[dict[str, Any]] = []
+
+    def execute(call: ToolCall) -> ToolResult:
+        sink = output_sink.get()  # the harness sets this for the duration of the call
+        assert sink is not None
+        sink("first line")
+        sink("second line")
+        return ToolResult(name=call.name, content="ok", ok=True)
+
+    harness.run_turn("do it", execute, on_event=events.append)
+
+    outputs = [e for e in events if e.get("type") == "output"]
+    assert [e["text"] for e in outputs] == ["first line", "second line"]
+    assert all(e["name"] == "read_file" for e in outputs)  # bound to the executing tool
+    assert output_sink.get() is None  # reset after the turn
