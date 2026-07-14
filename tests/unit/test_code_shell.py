@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from pathlib import Path
 
 from autobot.tools.access import AccessBroker, AccessPolicy
@@ -27,7 +28,12 @@ def _broker(tmp_path: Path, *, grant: bool = True) -> AccessBroker:
 
 
 def _fake_runner(rc: int, out: str, timed_out: bool = False) -> CommandRunner:
-    def run(command: str, cwd: str, timeout: float) -> tuple[int, str, bool]:
+    def run(
+        command: str, cwd: str, timeout: float, on_output: Callable[[str], None] | None = None
+    ) -> tuple[int, str, bool]:
+        if on_output is not None:
+            for line in out.splitlines():
+                on_output(line)
         return rc, out, timed_out
 
     return run
@@ -53,11 +59,30 @@ def test_run_command_timeout(tmp_path: Path) -> None:
     assert "partial" in out
 
 
-def test_run_command_output_is_capped(tmp_path: Path) -> None:
-    big = "x" * 50_000
-    out = run_command("gen", _broker(tmp_path), str(tmp_path), runner=_fake_runner(0, big))
-    assert "truncated" in out.lower()
-    assert len(out) < 40_000
+def test_run_command_large_output_is_budgeted(tmp_path: Path) -> None:
+    big = "\n".join(f"row {i}" for i in range(5_000))
+    out = run_command(
+        "gen",
+        _broker(tmp_path),
+        str(tmp_path),
+        runner=_fake_runner(0, big),
+        output_model_cap=2_000,
+    )
+    assert ".jack/command-output/" in out  # full output spilled to disk
+    assert "row 4999" in out  # tail preserved
+    assert len(out) < 3_000  # model-facing result bounded
+
+
+def test_run_command_streams_lines_to_sink(tmp_path: Path) -> None:
+    from autobot.core.streaming import output_sink
+
+    seen: list[str] = []
+    token = output_sink.set(seen.append)
+    try:
+        run_command("gen", _broker(tmp_path), str(tmp_path), runner=_fake_runner(0, "a\nb\nc\n"))
+    finally:
+        output_sink.reset(token)
+    assert seen == ["a", "b", "c"]  # each line streamed live to the human
 
 
 def test_run_command_empty(tmp_path: Path) -> None:
@@ -76,7 +101,9 @@ def test_run_command_timeout_is_clamped(tmp_path: Path) -> None:
     # A caller asking for 10_000s must be clamped to the max; the runner sees the clamp.
     seen: list[float] = []
 
-    def run(command: str, cwd: str, timeout: float) -> tuple[int, str, bool]:
+    def run(
+        command: str, cwd: str, timeout: float, on_output: Callable[[str], None] | None = None
+    ) -> tuple[int, str, bool]:
         seen.append(timeout)
         return 0, "ok", False
 
@@ -87,7 +114,9 @@ def test_run_command_timeout_is_clamped(tmp_path: Path) -> None:
 def test_run_command_blocks_dangerous_command_without_running_it(tmp_path: Path) -> None:
     calls: list[str] = []
 
-    def run(command: str, cwd: str, timeout: float) -> tuple[int, str, bool]:
+    def run(
+        command: str, cwd: str, timeout: float, on_output: Callable[[str], None] | None = None
+    ) -> tuple[int, str, bool]:
         calls.append(command)
         return 0, "should not run", False
 
@@ -112,7 +141,9 @@ def test_run_command_runs_normally_with_empty_allow_and_blocklists(tmp_path: Pat
 def test_run_command_blocks_command_matching_user_blocklist(tmp_path: Path) -> None:
     calls: list[str] = []
 
-    def run(command: str, cwd: str, timeout: float) -> tuple[int, str, bool]:
+    def run(
+        command: str, cwd: str, timeout: float, on_output: Callable[[str], None] | None = None
+    ) -> tuple[int, str, bool]:
         calls.append(command)
         return 0, "should not run", False
 

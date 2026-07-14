@@ -180,6 +180,7 @@ def register_code_tools(
     broker: AccessBroker,
     allowlist: list[str] | None = None,
     blocklist: list[str] | None = None,
+    output_model_cap: int = 10_000,
 ) -> None:
     """Register the coder-profile code tools (read/write/edit/multi_edit).
 
@@ -194,6 +195,8 @@ def register_code_tools(
             ``run_command`` via :func:`register_exec_tools`.
         blocklist: Commands always blocked, forwarded to ``run_command`` via
             :func:`register_exec_tools`.
+        output_model_cap: Max chars of command output returned to the model inline,
+            forwarded to ``run_command`` via :func:`register_exec_tools`.
     """
     registry.register(
         ToolSpec(
@@ -306,5 +309,11 @@ def register_code_tools(
     )
     _log.info("code tools registered (read_file/write_file/edit_file/multi_edit)")
     register_nav_tools(registry, broker)
-    register_exec_tools(registry, broker, allowlist=allowlist, blocklist=blocklist)
+    register_exec_tools(
+        registry,
+        broker,
+        allowlist=allowlist,
+        blocklist=blocklist,
+        output_model_cap=output_model_cap,
+    )
     register_repomap_tool(registry, broker)

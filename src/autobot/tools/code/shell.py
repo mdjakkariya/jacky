@@ -14,39 +14,90 @@ from __future__ import annotations
 import sys
 from collections.abc import Callable
 
+from autobot.core.streaming import output_sink
 from autobot.core.types import Risk
 from autobot.logging_setup import get_logger
 from autobot.tools.access import AccessBroker, AccessDeniedError
 from autobot.tools.code.command_policy import classify_command
+from autobot.tools.code.output_budget import budget_output
 from autobot.tools.registry import ToolRegistry, ToolSpec
 
 _log = get_logger("coder")
 
 _DEFAULT_TIMEOUT = 120.0  # seconds
 _MAX_TIMEOUT = 600.0
-_OUTPUT_CAP = 30_000  # max chars of combined output returned
 
-# (command, cwd, timeout) -> (returncode, combined_output, timed_out). Injectable for tests.
-CommandRunner = Callable[[str, str, float], tuple[int, str, bool]]
+# (command, cwd, timeout, on_output) -> (returncode, combined_output, timed_out). The
+# ``on_output`` sink (if any) is called with each output line as it arrives, so the CLI can
+# stream progress live. Injectable for tests.
+CommandRunner = Callable[[str, str, float, "Callable[[str], None] | None"], tuple[int, str, bool]]
 
 
-def _default_runner(  # pragma: no cover - the real OS boundary; tests inject a fake runner
-    command: str, cwd: str, timeout: float
+def _streaming_runner(  # pragma: no cover - the real OS boundary; tests inject a fake runner
+    command: str, cwd: str, timeout: float, on_output: Callable[[str], None] | None
 ) -> tuple[int, str, bool]:
-    """Run ``command`` in the platform shell, capturing combined output (never raises)."""
+    """Run ``command`` in the platform shell, streaming each output line to ``on_output``.
+
+    Reads combined stdout/stderr on a reader thread so a deadline can enforce the timeout
+    and kill the whole process group (dev servers spawn children). Never raises.
+    """
+    import subprocess
+    import threading
+
+    if sys.platform == "win32":
+        proc = subprocess.Popen(
+            ["cmd", "/c", command],
+            cwd=cwd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            creationflags=subprocess.CREATE_NEW_PROCESS_GROUP,
+        )
+    else:
+        proc = subprocess.Popen(
+            ["/bin/sh", "-c", command],
+            cwd=cwd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            start_new_session=True,
+        )
+    lines: list[str] = []
+
+    def _read() -> None:
+        assert proc.stdout is not None
+        for line in proc.stdout:
+            lines.append(line)
+            if on_output is not None:
+                on_output(line.rstrip("\n"))
+
+    reader = threading.Thread(target=_read, daemon=True)
+    reader.start()
+    timed_out = False
+    try:
+        proc.wait(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        timed_out = True
+        _kill_tree(proc)
+        proc.wait()
+    reader.join(timeout=1.0)
+    return (124 if timed_out else proc.returncode), "".join(lines), timed_out
+
+
+def _kill_tree(proc: object) -> None:  # pragma: no cover - the real OS boundary
+    """Kill a process and its children (POSIX process group / Windows tree). Never raises."""
+    import os
+    import signal
     import subprocess
 
-    argv = ["cmd", "/c", command] if sys.platform == "win32" else ["/bin/sh", "-c", command]
+    pid = proc.pid  # type: ignore[attr-defined]
     try:
-        proc = subprocess.run(
-            argv, cwd=cwd, capture_output=True, text=True, timeout=timeout, check=False
-        )
-    except subprocess.TimeoutExpired as exc:
-        out = exc.stdout if isinstance(exc.stdout, str) else ""
-        err = exc.stderr if isinstance(exc.stderr, str) else ""
-        return 124, out + err, True
-    combined = proc.stdout + (("\n" + proc.stderr) if proc.stderr else "")
-    return proc.returncode, combined, False
+        if sys.platform == "win32":
+            subprocess.run(["taskkill", "/pid", str(pid), "/T", "/F"], check=False)
+        else:
+            os.killpg(os.getpgid(pid), signal.SIGKILL)
+    except (OSError, ProcessLookupError):
+        pass
 
 
 def run_command(
@@ -57,6 +108,7 @@ def run_command(
     runner: CommandRunner | None = None,
     allowlist: list[str] | None = None,
     blocklist: list[str] | None = None,
+    output_model_cap: int = 10_000,
 ) -> str:
     """Run a shell ``command`` in a jailed ``cwd`` (gated), returning bounded output.
 
@@ -79,13 +131,16 @@ def run_command(
     if not workdir.is_dir():
         return f"'{workdir.name}' is not a folder to run in."
     limit = max(1.0, min(timeout or _DEFAULT_TIMEOUT, _MAX_TIMEOUT))
-    run = runner or _default_runner
+    run = runner or _streaming_runner
+    sink = output_sink.get()  # set by the harness for the duration of this tool call
     try:
-        rc, out, timed_out = run(command, str(workdir), limit)
+        rc, out, timed_out = run(command, str(workdir), limit, sink)
     except OSError as exc:  # spawn failure (missing shell, etc.)
         return f"I couldn't run that command: {exc}"
-    body = out if len(out) <= _OUTPUT_CAP else out[:_OUTPUT_CAP] + "\n…(output truncated)"
     _log.info("run_command rc=%d timed_out=%s chars=%d", rc, timed_out, len(out))
+    # The human already saw the full output live (via the sink); hand the model a bounded,
+    # tail-biased result, spilling anything large to a file it can read_file/grep.
+    body = budget_output(out, cwd=workdir, cap=output_model_cap)
     if timed_out:
         return f"Command timed out after {int(limit)}s (partial output):\n{body}"
     status = "ok" if rc == 0 else f"exit {rc}"
@@ -97,6 +152,7 @@ def register_exec_tools(
     broker: AccessBroker,
     allowlist: list[str] | None = None,
     blocklist: list[str] | None = None,
+    output_model_cap: int = 10_000,
 ) -> None:
     """Register the execution tool (run_command). Destructive → the gate confirms it.
 
@@ -105,6 +161,8 @@ def register_exec_tools(
         broker: Access broker enforcing the workspace jail.
         allowlist: Commands pre-approved by the user to run without confirmation.
         blocklist: Commands the user has pre-refused; always blocked.
+        output_model_cap: Max chars of output returned to the model inline (larger output
+            is spilled to a file and only an excerpt + path is returned).
     """
     registry.register(
         ToolSpec(
@@ -112,8 +170,11 @@ def register_exec_tools(
             description=(
                 "Run a shell command (e.g. tests, a build, git, a linter) in the working "
                 "folder and return its output. Cross-platform. Prefer the dedicated tools "
-                "(read_file/edit_file/grep/glob) over shelling out for file work. Long-running "
-                "or interactive commands aren't supported; keep it to commands that finish."
+                "(read_file/edit_file/grep/glob) over shelling out for file work. Output over "
+                "~10k chars is saved to a file and only an excerpt is returned — pipe through "
+                "grep/head/tail to narrow it. For a long-running process (e.g. a dev server) "
+                "needed by a later step, start it in the background with output redirected to a "
+                "file (e.g. `nohup <cmd> > /tmp/server.log 2>&1 &`), then continue."
             ),
             parameters={
                 "type": "object",
@@ -128,7 +189,13 @@ def register_exec_tools(
                 "required": ["command"],
             },
             handler=lambda command="", cwd=".", timeout=_DEFAULT_TIMEOUT: run_command(
-                command, broker, cwd, timeout, allowlist=allowlist, blocklist=blocklist
+                command,
+                broker,
+                cwd,
+                timeout,
+                allowlist=allowlist,
+                blocklist=blocklist,
+                output_model_cap=output_model_cap,
             ),
             risk=Risk.DESTRUCTIVE,
             ack="Running that command.",

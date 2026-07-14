@@ -762,6 +762,7 @@ def build(
             broker,
             allowlist=settings.command_allowlist,
             blocklist=settings.command_blocklist,
+            output_model_cap=settings.command_output_model_cap,
         )
         log.info("coder profile ENABLED (code tools only)")
     else:
