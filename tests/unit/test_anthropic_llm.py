@@ -567,6 +567,44 @@ def test_estimate_cost_usd_prices_sonnet_and_opus() -> None:
     assert estimate_cost_usd("claude-opus-4-8", 1_000_000, 1_000_000) == 30.0
 
 
+def test_log_usage_records_a_ledger_row_with_raw_input(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from datetime import datetime, timezone
+
+    from autobot.usage import ledger as _ledger
+
+    p = tmp_path / "usage.jsonl"
+    monkeypatch.setattr(_ledger, "default_path", lambda: p)
+    # Freeze the clock inside the provider so the intro rate applies deterministically.
+    import autobot.llm.anthropic_llm as mod
+
+    monkeypatch.setattr(mod, "_now", lambda: datetime(2026, 7, 14, tzinfo=timezone.utc))
+
+    model = AnthropicLanguageModel(
+        Settings(llm_provider="anthropic", anthropic_model="claude-sonnet-5"),
+        _registry(),
+        client=FakeClient([]),
+    )
+    session = Session(id="sess1", cwd="/work/proj", model="claude-sonnet-5")
+    # turn_in is RAW fresh input; cache_write must NOT be folded into the recorded "in".
+    model._log_usage(
+        session,
+        turn_in=1_000_000,
+        turn_out=1_000_000,
+        cache_read=0,
+        cache_write=400_000,
+        prompt_total=1_400_000,
+    )
+
+    rows = _ledger.read(path=p)
+    assert len(rows) == 1
+    assert rows[0].in_tokens == 1_000_000  # raw, not 1_400_000
+    assert rows[0].cache_write == 400_000
+    assert rows[0].session_id == "sess1" and rows[0].workspace == "/work/proj"
+    assert rows[0].priced is True
+
+
 def test_context_usage_reports_session_price_for_priced_model(tmp_path: Path) -> None:
     # Default model (claude-haiku-4-5) is in the pricing table: 1M in @ $1 + 1M out @ $5 = $6.
     resp = SimpleNamespace(
