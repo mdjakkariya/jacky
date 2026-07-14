@@ -122,6 +122,37 @@ adds no runtime dependency, matching the project's on-device, minimal-dependency
 ethos. See `docs/superpowers/specs/2026-06-28-ui-architecture-design.md` for the
 research basis (GitHub Catalyst, GOV.UK Frontend, the "HTML web components" canon).
 
+## Async tasks (background execution → multi-agent)
+
+Work that runs *off* a turn goes through one primitive in `src/autobot/tasks/`, so the
+same shape serves two features: a backgrounded command today (`kind="command"`) and,
+later, concurrent subagents (`kind="agent"`). Both reduce to *a unit of work that runs off
+the main turn and whose completion is delivered back as a notification that re-engages the
+agent* — build it once, add the second kind later without a rewrite.
+
+Two decoupled pieces:
+
+- **`TaskRegistry`** — a thread-safe, process-global store of task rows
+  (`running → done/failed`). It lives in the daemon, so a task started in one turn is still
+  tracked in the next. It only records state; it never spawns work or decides who is told.
+- **`NotificationInbox`** — a per-session FIFO of completion notes (plain strings, so it
+  carries a command result now and a subagent's return later the same way).
+
+Flow for a backgrounded `run_command(run_in_background=True)`: the tool reads the running
+session id from the `active_session_id` context var, registers a `command` task, and spawns
+a daemon thread that streams output to `<cwd>/.jack/tasks/<id>.log`. When the process exits,
+that thread marks the registry and pushes a note to the session's inbox. `AgentHarness`
+drains its session's inbox at the top of every turn and folds any notes into the model's
+context — so the result arrives on the **next turn** with no polling. This keeps the
+no-sleep-poll guidance honest: the model is *told* to background long work and *told* the
+result later, rather than blocking or re-checking.
+
+Not yet built (future phases): **auto-resume** (a persistent `GET /coder/events` stream +
+a daemon-initiated continuation turn, so a result surfaces while the user is idle instead of
+on their next message) and **subagents** (`kind="agent"` = an `AgentHarness` on its own
+`Session` with a scoped broker, fanned out by a coordinator). The registry/inbox are already
+kind-agnostic, so those add on top rather than replacing this.
+
 ## Reference projects to study
 
 - **Home Assistant voice pipeline + Wyoming protocol** — an existing open standard
