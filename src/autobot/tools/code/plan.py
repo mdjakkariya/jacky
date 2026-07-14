@@ -41,9 +41,13 @@ def register_plan_tool(registry: ToolRegistry) -> None:
             description=(
                 "Track your task checklist so the user sees progress. Call this right after the "
                 "plan is approved to mark the first step 'in_progress', then again each time you "
-                "finish a step (mark it 'done' and the next 'in_progress'), and once more when all "
-                "steps are 'done'. Pass the FULL list every time. Statuses: pending, in_progress, "
-                "done, blocked. This is how the turn knows the task is complete — keep it current."
+                "finish a step, and once more when all steps are settled. Pass the FULL list "
+                "every time. Statuses: pending, in_progress, done, blocked. Rules: keep EXACTLY "
+                "ONE step 'in_progress' at a time; mark a step 'done' the moment it's finished "
+                "(don't batch several at the end); NEVER mark a step 'done' if its check failed, "
+                "the work is only partial, or an error is unresolved — use 'blocked' (and say why "
+                "in your reply) instead. This is how the turn knows the task is complete — keep it "
+                "current and honest."
             ),
             parameters={
                 "type": "object",

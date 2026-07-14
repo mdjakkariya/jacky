@@ -37,3 +37,17 @@ def test_coder_prompt_has_continuation_principle() -> None:
     low = system_prompt("chat", coder=True).lower()
     assert "step" in low
     assert "without stopping" in low or "do not stop" in low or "don't stop" in low
+
+
+def test_coder_prompt_forbids_sleep_polling_long_commands() -> None:
+    # The observed "stuck" pattern was running a long test suite behind a sleep/tail poll,
+    # which blocks with no output. The prompt must steer to running it directly.
+    low = system_prompt("chat", coder=True).lower()
+    assert "sleep" in low and "poll" in low
+
+
+def test_coder_prompt_requires_verify_and_honest_reporting() -> None:
+    # Verify before claiming done, and never manufacture a green result.
+    low = system_prompt("chat", coder=True).lower()
+    assert "verify" in low
+    assert "honest" in low or "never say tests pass" in low
