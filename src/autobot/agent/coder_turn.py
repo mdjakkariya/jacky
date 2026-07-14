@@ -17,7 +17,7 @@ from typing import Any
 from autobot.config import Settings
 from autobot.core.types import Risk, ToolCall, ToolExecutor, ToolResult
 from autobot.logging_setup import get_logger
-from autobot.tools.code.command_policy import classify_command
+from autobot.tools.code.command_policy import classify_command, is_read_only_command
 from autobot.tools.permission import PermissionGate
 
 _log = get_logger("coder")
@@ -167,9 +167,11 @@ def act_executor(
 
     ``before_mutation`` is fired exactly once, just before the first tool that actually
     changes the workspace runs — a file-mutating edit (``Risk.WRITE`` and up) or a
-    non-blocked ``run_command``. This is the workspace-checkpoint hook: a plan phase (which
-    only reads) or a conversational/read-only act never triggers it, so a checkpoint is
-    taken only when there is a real change to snapshot.
+    non-blocked, non-read-only ``run_command`` (a read-only command like ``git status`` or
+    the test suite does not change the workspace, so it never triggers a checkpoint). This
+    is the workspace-checkpoint hook: a plan phase (which only reads) or a
+    conversational/read-only act never triggers it, so a checkpoint is taken only when
+    there is a real change to snapshot.
     """
     fired = False
 
@@ -191,7 +193,8 @@ def act_executor(
                     content=f"That command is blocked for safety ({reason}).",
                     ok=False,
                 )
-            snapshot_once()  # a command will run — snapshot the pre-change state first
+            if not is_read_only_command(command):
+                snapshot_once()  # a mutating command will run — snapshot pre-change state first
             if decision == "allow" or (decision == "confirm" and not ask_on_confirm):
                 _log.info("command auto-run cmd=%s", logged_command)
                 return gate.execute(call, pre_authorized=True)
