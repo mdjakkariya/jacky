@@ -102,6 +102,53 @@ def test_eviction_drops_oldest_settled_but_keeps_running() -> None:
     assert reg.get("task-3") is not None
 
 
+def test_listener_fires_on_settle_with_the_updated_task() -> None:
+    reg = TaskRegistry(now=_Clock())
+    seen: list[Task] = []
+    reg.add_listener(seen.append)
+    reg.add(kind="command", session_id="s1", label="pytest")
+    assert seen == []  # not fired on add
+    reg.mark_done("task-1", result="ok", returncode=0)
+    assert len(seen) == 1
+    assert seen[0].id == "task-1" and seen[0].status == "done" and seen[0].returncode == 0
+
+
+def test_listener_fires_on_failure_too() -> None:
+    reg = TaskRegistry(now=_Clock())
+    seen: list[str] = []
+    reg.add_listener(lambda t: seen.append(t.status))
+    reg.add(kind="command", session_id="s1", label="build")
+    reg.mark_failed("task-1", result="boom", returncode=1)
+    assert seen == ["failed"]
+
+
+def test_unsubscribe_stops_delivery() -> None:
+    reg = TaskRegistry(now=_Clock())
+    seen: list[Task] = []
+    unsubscribe = reg.add_listener(seen.append)
+    reg.add(kind="command", session_id="s1", label="a")
+    reg.add(kind="command", session_id="s1", label="b")
+    reg.mark_done("task-1", result="ok", returncode=0)
+    unsubscribe()
+    reg.mark_done("task-2", result="ok", returncode=0)
+    assert [t.id for t in seen] == ["task-1"]  # task-2 not delivered after unsubscribe
+
+
+def test_a_raising_listener_never_breaks_the_update() -> None:
+    reg = TaskRegistry(now=_Clock())
+    good: list[str] = []
+
+    def boom(_task: Task) -> None:
+        raise RuntimeError("listener blew up")
+
+    reg.add_listener(boom)
+    reg.add_listener(lambda t: good.append(t.id))
+    reg.add(kind="command", session_id="s1", label="a")
+    done = reg.mark_done("task-1", result="ok", returncode=0)
+    assert done is not None and done.status == "done"  # update still applied
+    assert good == ["task-1"]  # the second listener still ran
+
+
 def test_task_is_frozen() -> None:
     task = Task(id="task-1", kind="command", session_id="s1", label="x")
     try:

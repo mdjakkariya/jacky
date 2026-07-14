@@ -967,6 +967,9 @@ def build(
     # /meeting/* HTTP actions to it — same pattern as mcp_provider above.
     orch.meeting_recorder = _meeting_recorder
     orch.coder_driver = coder_driver
+    # Expose the async-task registry so the daemon's /coder/events stream can push a task's
+    # completion to an idle CLI (auto-resume). Only meaningful in the coder profile.
+    orch.coder_task_registry = task_registry if coder else None
     return orch
 
 

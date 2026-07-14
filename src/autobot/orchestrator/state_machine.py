@@ -20,6 +20,7 @@ from typing import TYPE_CHECKING, Any
 if TYPE_CHECKING:
     from autobot.agent.coder_turn import CoderTurnDriver
     from autobot.mcp.provider import McpProvider
+    from autobot.tasks import Task, TaskRegistry
 
 import numpy as np
 
@@ -398,6 +399,9 @@ class Orchestrator:
         # Set by app.build() in the coder profile; None for the assistant. Backs the
         # daemon's /coder/turn + /coder/reply endpoints (plan → approve → act).
         self.coder_driver: CoderTurnDriver | None = None
+        # Set by app.build() in the coder profile; None for the assistant. The process-global
+        # async-task registry, whose settle events back the daemon's /coder/events stream.
+        self.coder_task_registry: TaskRegistry | None = None
 
     def _greeting(self) -> str:
         """The reply to a bare wake word — name-aware, and a first hello if new."""
@@ -1062,6 +1066,32 @@ class Orchestrator:
     def new_coder_session(self) -> bool:
         """Start a fresh coder session through the driver's lock (coder profile only)."""
         return self.coder_driver.new_session() if self.coder_driver is not None else False
+
+    def subscribe_coder_events(
+        self, callback: Callable[[dict[str, Any]], None]
+    ) -> Callable[[], None]:
+        """Push a compact event to ``callback`` whenever a background task settles.
+
+        Backs the daemon's persistent ``/coder/events`` stream: each finished
+        :class:`~autobot.tasks.Task` becomes a ``{"type": "task", ...}`` dict so an idle CLI
+        can pick the result up (auto-resume). Returns an unsubscribe; a no-op returning a
+        no-op when there's no task registry (assistant profile).
+        """
+        if self.coder_task_registry is None:
+            return lambda: None
+
+        def on_task(task: Task) -> None:
+            callback(
+                {
+                    "type": "task",
+                    "id": task.id,
+                    "status": task.status,
+                    "label": task.label,
+                    "returncode": task.returncode,
+                }
+            )
+
+        return self.coder_task_registry.add_listener(on_task)
 
     def run(self) -> None:
         """Run the interaction loop until interrupted with Ctrl-C."""

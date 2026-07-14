@@ -17,7 +17,7 @@ import asyncio
 import contextlib
 import json
 import threading
-from collections.abc import Iterable, Iterator
+from collections.abc import AsyncIterator, Iterable, Iterator
 from typing import TYPE_CHECKING, Any
 
 # Imported at module top (not lazily) on purpose: with ``from __future__ import
@@ -108,6 +108,7 @@ def create_app(
     on_coder_undo: Any | None = None,
     on_coder_checkpoints: Any | None = None,
     on_usage: Any | None = None,
+    on_coder_events: Any | None = None,
 ) -> Any:
     """Build the FastAPI app: the event stream plus the Settings-view API.
 
@@ -158,6 +159,10 @@ def create_app(
         on_usage: Optional callback (() -> dict) returning the live session usage
             plus ledger rollups; wired to the orchestrator's ``coder_usage``. When
             ``None``, ``GET /coder/usage`` returns ``{}``.
+        on_coder_events: Optional subscribe function ``(cb) -> unsubscribe`` that calls
+            ``cb(event_dict)`` when a background task settles; wired to the orchestrator's
+            ``subscribe_coder_events`` and streamed over ``GET /coder/events``. When
+            ``None``, that stream is empty.
 
     Returns:
         A FastAPI app: ``/healthz``, WebSocket ``/ws``, the settings API, and
@@ -395,6 +400,44 @@ def create_app(
             return {}
         result = await asyncio.to_thread(on_usage)
         return result if isinstance(result, dict) else {}
+
+    async def get_coder_events(request: Request) -> Any:
+        """Persistent SSE of background-task completions (for the CLI's auto-resume).
+
+        A long-lived stream: the CLI keeps it open between turns so a task finishing while
+        the user is idle can be picked up automatically. Each settle event is one
+        ``data: {json}`` frame; a ``: ping`` comment every 15s keeps the connection warm and
+        lets us notice a disconnected client and drop its subscription.
+        """
+        if on_coder_events is None:
+            return StreamingResponse(_sse_frames(iter([])), media_type="text/event-stream")
+        loop = asyncio.get_running_loop()
+        queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
+
+        def push(evt: dict[str, Any]) -> None:  # fired on a background (task) thread
+            loop.call_soon_threadsafe(queue.put_nowait, evt)
+
+        unsubscribe = on_coder_events(push)
+
+        async def gen() -> AsyncIterator[str]:
+            try:
+                while True:
+                    try:
+                        evt = await asyncio.wait_for(queue.get(), timeout=15.0)
+                    except TimeoutError:
+                        if await request.is_disconnected():
+                            break
+                        yield ": ping\n\n"
+                        continue
+                    try:
+                        payload = json.dumps(evt)
+                    except (TypeError, ValueError):
+                        continue
+                    yield f"data: {payload}\n\n"
+            finally:
+                unsubscribe()
+
+        return StreamingResponse(gen(), media_type="text/event-stream")
 
     async def post_new_session() -> dict[str, Any]:
         """Start a fresh chat session — discard the engine's conversation history.
@@ -729,6 +772,7 @@ def create_app(
     app.add_api_route("/coder/undo", post_coder_undo, methods=["POST"])
     app.add_api_route("/coder/checkpoints", get_coder_checkpoints, methods=["GET"])
     app.add_api_route("/coder/usage", get_coder_usage, methods=["GET"])
+    app.add_api_route("/coder/events", get_coder_events, methods=["GET"])
     app.add_api_route("/session/new", post_new_session, methods=["POST"])
     app.add_api_route("/sessions", get_sessions, methods=["GET"])
     app.add_api_route("/sessions/resume", post_sessions_resume, methods=["POST"])
@@ -829,6 +873,7 @@ def run_daemon(
     on_coder_undo: Any | None = None,
     on_coder_checkpoints: Any | None = None,
     on_usage: Any | None = None,
+    on_coder_events: Any | None = None,
     idle_timeout: float | None = None,
 ) -> None:
     """Run the daemon server (blocking) on ``host:port``.
@@ -867,6 +912,7 @@ def run_daemon(
         on_coder_undo=on_coder_undo,
         on_coder_checkpoints=on_coder_checkpoints,
         on_usage=on_usage,
+        on_coder_events=on_coder_events,
     )
     if idle_timeout and idle_timeout > 0:
         _install_idle_shutdown(app, idle_timeout)

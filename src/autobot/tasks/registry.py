@@ -14,6 +14,7 @@ internal lock, so background completion threads and the turn thread can touch it
 
 from __future__ import annotations
 
+import contextlib
 import threading
 import time
 from collections.abc import Callable
@@ -67,6 +68,24 @@ class TaskRegistry:
         self._lock = threading.Lock()
         self._tasks: dict[str, Task] = {}
         self._counter = 0
+        self._listeners: list[Callable[[Task], None]] = []
+
+    def add_listener(self, listener: Callable[[Task], None]) -> Callable[[], None]:
+        """Call ``listener(task)`` each time a task *settles* (done/failed); return unsubscribe.
+
+        Used by the daemon to push a completion event onto the persistent ``/coder/events``
+        stream so an idle CLI can pick the result up. Listeners fire on the completing
+        (background) thread, outside the registry lock, and their exceptions are swallowed —
+        a bad listener can never wedge the registry or lose a task update.
+        """
+        with self._lock:
+            self._listeners.append(listener)
+
+        def unsubscribe() -> None:
+            with self._lock, contextlib.suppress(ValueError):
+                self._listeners.remove(listener)
+
+        return unsubscribe
 
     def add(self, *, kind: TaskKind, session_id: str, label: str) -> Task:
         """Register a new ``running`` task and return it (with its freshly-minted id)."""
@@ -131,7 +150,11 @@ class TaskRegistry:
                 finished=self._now(),
             )
             self._tasks[task_id] = updated
-            return updated
+            listeners = list(self._listeners)  # snapshot under lock, fire outside it
+        for listener in listeners:
+            with contextlib.suppress(Exception):  # a bad listener must not lose the update
+                listener(updated)
+        return updated
 
     def _evict_locked(self) -> None:
         """Drop oldest *settled* rows while over the cap. Caller holds ``self._lock``."""
