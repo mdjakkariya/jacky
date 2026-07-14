@@ -145,10 +145,14 @@ class Shell:
             # Breathing room ABOVE the loading region: print the gap before the spinner
             # starts, so it's there during loading — not popped in after the reply arrives.
             self._console.print()
-            phase = self._consume_until_phase(events, verb)
+            phase, printed_activity = self._consume_until_phase(events, verb)
             if phase is None:
                 return
             seg = classify(phase)
+            if printed_activity:
+                # One blank line separates the ⎿ tool/output activity block from the reply
+                # or card, so tool-heavy turns read as cleanly as pure-text ones.
+                self._console.print()
             if seg.kind in ("plan", "pending"):
                 self._console.print(render.render_rich(seg))
                 ans = self._ask(seg.kind)
@@ -164,7 +168,7 @@ class Shell:
             self._console.print()
             return
 
-    def _consume_until_phase(self, events: Any, verb: str) -> dict[str, Any] | None:
+    def _consume_until_phase(self, events: Any, verb: str) -> tuple[dict[str, Any] | None, bool]:
         """Drain streaming (token/tool) events — rendering them live — and return the phase event.
 
         The spinner runs alone until the *first* streaming event (token or tool) arrives —
@@ -177,12 +181,16 @@ class Shell:
         the caller then prints ``render.render_rich(seg)`` (the finalized markdown reply), so
         the live preview and the finalized text never both linger in the scrollback.
 
-        Returns the phase dict, or None if the stream ended without one.
+        Returns ``(phase_dict, printed_activity)`` — the phase event (or ``None`` if the
+        stream ended without one), and whether any tool/output activity line was committed
+        to the scrollback (so the caller can insert one separating blank line before the
+        reply).
         """
         from rich.live import Live
         from rich.text import Text
 
         buffer = ""
+        printed_activity = False
         live_region = Live(console=self._console, refresh_per_second=12, transient=True)
         spin_cm = self._spin(self._console, verb)
         spin_cm.__enter__()
@@ -196,10 +204,10 @@ class Shell:
                     "done",
                     "error",
                 ):
-                    return evt
+                    return evt, printed_activity
                 seg = classify(evt)
                 is_tool_start = seg.kind == "tool" and evt.get("event") == "start"
-                if (seg.kind == "token" or is_tool_start) and spinning:
+                if (seg.kind in ("token", "output") or is_tool_start) and spinning:
                     spin_cm.__exit__(None, None, None)
                     spinning = False
                     live = live_region.__enter__()
@@ -209,13 +217,18 @@ class Shell:
                     live.update(Text(f"{theme.GLYPH_ASSISTANT} {buffer}", style="assistant"))
                 elif is_tool_start:
                     self._console.print(render.render_tool(seg))
+                    printed_activity = True
+                elif seg.kind == "output":
+                    # Command output, streamed live under the ⎿ tool line (dim), as it arrives.
+                    self._console.print(Text(seg.text, style="tool"))
+                    printed_activity = True
         finally:
             exc_info = sys.exc_info()
             if spinning:
                 spin_cm.__exit__(*exc_info)
             elif live is not None:
                 live_region.__exit__(*exc_info)
-        return None
+        return None, printed_activity
 
     def _ask(self, kind: str) -> Answer:
         """Read a plan/permission choice, re-asking until it parses; EOF/Ctrl-C → reject."""

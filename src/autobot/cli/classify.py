@@ -26,6 +26,8 @@ def classify(event: dict[str, Any]) -> Segment:
         return Segment("token", str(event.get("text", "")))
     if etype == "tool":
         return Segment("tool", str(event.get("label", event.get("name", ""))))
+    if etype == "output":
+        return Segment("output", str(event.get("text", "")))
     status = event.get("status", "")
     if status == "plan":
         todo = tuple(str(s) for s in (event.get("todo") or []))

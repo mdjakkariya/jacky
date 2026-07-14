@@ -355,3 +355,23 @@ def test_stream_tokens_paint_with_the_real_spinner(tmp_path: Path) -> None:
     out = console.export_text()
     assert "Done." in out  # the finalized phase reply always prints
     assert "Hello!" in out  # the live-streamed buffer must have actually painted too
+
+
+def test_turn_renders_streamed_output_lines(tmp_path: Path) -> None:
+    # A run_command turn: tool start, two live output lines, then done. All three must
+    # reach the scrollback, and the streamed output shows before the reply.
+    turns = {
+        "start": [
+            {"type": "tool", "event": "start", "name": "run_command", "label": "$ npm test"},
+            {"type": "output", "text": "PASS a.spec.ts"},
+            {"type": "output", "text": "PASS b.spec.ts"},
+            {"status": "done", "reply": "All tests passed."},
+        ],
+        "answer": [],
+    }
+    sh, console = _make([None], turns, tmp_path)
+    sh._turn("run the tests")
+    text = console.export_text()
+    assert "PASS a.spec.ts" in text
+    assert "PASS b.spec.ts" in text
+    assert "All tests passed." in text
