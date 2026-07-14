@@ -62,6 +62,8 @@ def tool_label(call: ToolCall) -> str:
         return f"$ {str(args.get('command', ''))[:80]}"
     if call.name in ("write_file", "edit_file", "multi_edit"):
         return f"Edited {args.get('path', '')}".strip()
+    if call.name == "spawn_agent":
+        return f"Spawned subagent: {str(args.get('label') or args.get('task', ''))[:70]}".strip()
     return call.name
 
 

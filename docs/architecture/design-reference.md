@@ -157,10 +157,19 @@ continuation turn on its own — reusing the normal `/coder/turn` path, so the h
 the result in exactly as above. It never interrupts mid-typing: the waker fires only on an
 empty, running prompt; otherwise the result waits for the next real turn.
 
-Not yet built: **subagents** (`kind="agent"` = an `AgentHarness` on its own `Session` with a
-scoped broker, fanned out by a coordinator). The registry/inbox/stream are already
-kind-agnostic, so subagents add on top — a coordinator spawns `agent` tasks and picks up
-their results through the same inbox + auto-resume path.
+**Subagents** are the `kind="agent"` instance of the same primitive (`agent/subagent.py`).
+The coordinator's `spawn_agent` tool fans out focused, READ-ONLY research agents that run in
+parallel: each is a fresh, *isolated* `AgentHarness` (its own model + `Session` — the model
+adapters keep per-turn state, so a subagent can never share the coordinator's — with a
+tighter turn budget), driven through `subagent_executor`, which refuses anything at or above
+`Risk.WRITE` and refuses `spawn_agent` itself (so a subagent can't mutate the workspace or
+recurse). A subagent runs as an `agent` task off the turn; on completion its findings are
+pushed to the *parent* session's inbox, so the coordinator picks them up through the same
+auto-resume path — no polling. Concurrency is capped; per-agent cost falls out of the usage
+ledger's `session_id` tagging. Safety composes: a subagent is never more privileged than the
+coordinator, and (being read-only) it can't spawn processes, so there are no orphaned tasks
+to reap. Write-capable subagents (git-worktree isolation for parallel edits) are a future
+extension; today the coordinator does the edits itself using subagents' findings.
 
 ## Reference projects to study
 

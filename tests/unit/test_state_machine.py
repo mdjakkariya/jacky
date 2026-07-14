@@ -948,7 +948,14 @@ def test_subscribe_coder_events_maps_settle_to_a_task_event() -> None:
     reg.add(kind="command", session_id="s1", label="$ pytest")
     reg.mark_done("task-1", result="ok", returncode=0)
     assert seen == [
-        {"type": "task", "id": "task-1", "status": "done", "label": "$ pytest", "returncode": 0}
+        {
+            "type": "task",
+            "id": "task-1",
+            "kind": "command",
+            "status": "done",
+            "label": "$ pytest",
+            "returncode": 0,
+        }
     ]
 
     unsubscribe()

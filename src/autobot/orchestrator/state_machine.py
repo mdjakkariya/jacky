@@ -1085,6 +1085,7 @@ class Orchestrator:
                 {
                     "type": "task",
                     "id": task.id,
+                    "kind": task.kind,
                     "status": task.status,
                     "label": task.label,
                     "returncode": task.returncode,

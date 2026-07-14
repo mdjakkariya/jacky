@@ -90,6 +90,15 @@ def test_running_count_scoped() -> None:
     assert reg.running_count(session_id="s1") == 1
 
 
+def test_running_count_scoped_by_kind() -> None:
+    reg = TaskRegistry(now=_Clock())
+    reg.add(kind="command", session_id="s1", label="cmd")
+    reg.add(kind="agent", session_id="s1", label="sub-a")
+    reg.add(kind="agent", session_id="s1", label="sub-b")
+    assert reg.running_count(kind="agent") == 2
+    assert reg.running_count(kind="command") == 1
+
+
 def test_eviction_drops_oldest_settled_but_keeps_running() -> None:
     reg = TaskRegistry(now=_Clock(), max_tasks=2)
     reg.add(kind="command", session_id="s1", label="a")  # task-1

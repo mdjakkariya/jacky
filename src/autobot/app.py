@@ -316,6 +316,7 @@ def _build_llm(
     transcript: Transcript,
     memory: MemoryStore | None,
     inbox: NotificationInbox | None = None,
+    max_rounds: int | None = None,
 ) -> AgentHarness:
     """Pick the LLM backend: local Ollama (default), Anthropic, or an OpenAI-compatible endpoint.
 
@@ -323,8 +324,10 @@ def _build_llm(
     the missing ``cloud`` extra falls back to local rather than failing startup. Every backend
     is wrapped in an :class:`AgentHarness`, which owns the conversation `Session` (history,
     summary, delivery mode, usage) — the adapters themselves are stateless across turns.
+    ``max_rounds`` overrides the per-turn round cap (used to give a subagent a tighter budget).
     """
     settings = _apply_profile_overrides(settings)
+    rounds = max_rounds if max_rounds is not None else settings.max_tool_rounds
     log = get_logger("app")
 
     from autobot.tools.access import active_policy
@@ -366,7 +369,7 @@ def _build_llm(
                 store,
                 cwd=cwd,
                 model_name=settings.anthropic_model,
-                max_rounds=settings.max_tool_rounds,
+                max_rounds=rounds,
                 redact=lambda t: redact_secrets(t)[0],
                 inbox=inbox,
             )
@@ -402,7 +405,7 @@ def _build_llm(
             store,
             cwd=cwd,
             model_name=settings.llm_model,
-            max_rounds=settings.max_tool_rounds,
+            max_rounds=rounds,
             redact=lambda t: redact_secrets(t)[0],
             inbox=inbox,
         )
@@ -415,7 +418,7 @@ def _build_llm(
         store,
         cwd=cwd,
         model_name=settings.llm_model,
-        max_rounds=settings.max_tool_rounds,
+        max_rounds=rounds,
         redact=lambda t: redact_secrets(t)[0],
         inbox=inbox,
     )
@@ -817,6 +820,32 @@ def build(
             inbox=task_inbox,
         )
     )
+
+    if coder:
+        # Subagents (kind="agent"): the coordinator can fan out read-only research agents.
+        # Each gets its OWN isolated harness (fresh model + session — the adapters keep
+        # per-turn state, so it can't share the coordinator's), built via the same _build_llm
+        # path with NO inbox (a subagent doesn't fold the parent's notifications). Its result
+        # is pushed to the parent session's inbox → auto-resume re-engages the coordinator.
+        from autobot.agent.subagent import (
+            SUBAGENT_MAX_ROUNDS,
+            SubagentRunner,
+            register_subagent_tool,
+        )
+
+        def _make_subagent_harness() -> AgentHarness:
+            return _build_llm(
+                replace(Settings.load(), profile=settings.profile),
+                registry,
+                transcript,
+                memory,
+                max_rounds=SUBAGENT_MAX_ROUNDS,
+            )
+
+        register_subagent_tool(
+            registry,
+            SubagentRunner(_make_subagent_harness, gate, task_registry, task_inbox),
+        )
 
     coder_driver: CoderTurnDriver | None = None
     if coder and suspending is not None:

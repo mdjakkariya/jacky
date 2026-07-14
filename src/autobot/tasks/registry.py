@@ -126,13 +126,15 @@ class TaskRegistry:
             tasks = [t for t in tasks if t.session_id == session_id]
         return sorted(tasks, key=lambda t: t.started, reverse=True)
 
-    def running_count(self, *, session_id: str | None = None) -> int:
-        """How many tasks are still running (optionally scoped to ``session_id``)."""
+    def running_count(self, *, session_id: str | None = None, kind: TaskKind | None = None) -> int:
+        """How many tasks are still running (optionally scoped to ``session_id`` / ``kind``)."""
         with self._lock:
             return sum(
                 1
                 for t in self._tasks.values()
-                if t.status == "running" and (session_id is None or t.session_id == session_id)
+                if t.status == "running"
+                and (session_id is None or t.session_id == session_id)
+                and (kind is None or t.kind == kind)
             )
 
     def _finish(

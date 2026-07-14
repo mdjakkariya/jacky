@@ -100,7 +100,8 @@ def render_task_pickup(events: list[dict[str, Any]]) -> RenderableType:
     ids = ", ".join(str(e.get("id", "task")) for e in events)
     ok = all(e.get("status") == "done" for e in events)
     mark = "✓" if ok else "✕"
-    text = f"⚑ background {ids} finished {mark} — picking it up…"
+    noun = "subagent" if all(e.get("kind") == "agent" for e in events) else "background"
+    text = f"⚑ {noun} {ids} finished {mark} — picking it up…"
     return Text(text, style="teal" if ok else "amber")
 
 
