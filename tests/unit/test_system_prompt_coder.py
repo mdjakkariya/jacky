@@ -29,3 +29,11 @@ def test_coder_prompt_handles_unactionable_input_with_a_capability_hint() -> Non
     low = system_prompt("chat", coder=True).lower()
     assert "vague" in low or "unclear" in low
     assert "help with" in low
+
+
+def test_coder_prompt_has_continuation_principle() -> None:
+    # The coder must carry a task to completion in one go rather than narrate a next step
+    # and stop (the observed mid-task stall) — kept as a general principle, no incident text.
+    low = system_prompt("chat", coder=True).lower()
+    assert "step" in low
+    assert "without stopping" in low or "do not stop" in low or "don't stop" in low
