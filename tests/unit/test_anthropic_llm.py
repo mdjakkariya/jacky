@@ -25,7 +25,10 @@ from autobot.llm.anthropic_llm import (
     assemble_anthropic_tools,
     cloud_error_reply,
     estimate_cost_usd,
+    is_auth_error,
+    is_rate_limited_error,
     is_too_long_error,
+    is_usage_limit_error,
     parse_tool_uses,
     partition_tools,
     text_from_content,
@@ -513,6 +516,48 @@ def test_cloud_error_reply_is_calm_and_never_speaks_raw_api_text() -> None:
     assert "isn't responding" in reply
     assert "try again" in reply and "Settings" in reply
     assert "404" not in reply and "claude-3-5-haiku" not in reply  # nothing raw spoken
+
+
+def test_cloud_error_reply_usage_limit_names_the_reset_date_not_retry() -> None:
+    # The real 400 body jack keeps hitting: a hard workspace usage cap with a reset date.
+    err = RuntimeError(
+        "Error code: 400 - {'type': 'error', 'error': {'type': 'invalid_request_error', "
+        "'message': 'You have reached your specified workspace API usage limits. You will "
+        "regain access on 2026-08-01 at 00:00 UTC.'}}"
+    )
+    assert is_usage_limit_error(err)
+    reply = cloud_error_reply(err)
+    assert "usage limit" in reply.lower()
+    assert "2026-08-01 at 00:00 UTC" in reply  # the concrete reset date, surfaced
+    assert "in a little while" not in reply  # NOT the misleading transient-outage line
+    assert "400" not in reply  # nothing raw spoken
+
+
+def test_cloud_error_reply_auth_error_points_at_the_key() -> None:
+    err = RuntimeError(
+        "Error code: 401 - {'type': 'error', 'error': {'type': 'authentication_error', "
+        "'message': 'invalid x-api-key'}}"
+    )
+    assert is_auth_error(err)
+    reply = cloud_error_reply(err)
+    assert "key" in reply.lower() and "Settings" in reply
+    assert "usage limit" not in reply.lower()
+
+
+def test_cloud_error_reply_rate_limit_says_retry_soon() -> None:
+    err = RuntimeError("Error code: 429 - {'type': 'error', 'error': {'type': 'rate_limit_error'}}")
+    assert is_rate_limited_error(err)
+    reply = cloud_error_reply(err)
+    assert "rate-limited" in reply.lower()
+
+
+def test_error_classifiers_are_mutually_exclusive_for_generic_errors() -> None:
+    # A plain outage matches none of the specific classes -> the generic reply stands.
+    err = RuntimeError("Error code: 500 internal")
+    assert not is_usage_limit_error(err)
+    assert not is_auth_error(err)
+    assert not is_rate_limited_error(err)
+    assert "isn't responding" in cloud_error_reply(err)
 
 
 def test_run_turn_returns_calm_reply_on_api_error(tmp_path: Path) -> None:

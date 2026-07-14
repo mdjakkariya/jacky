@@ -105,6 +105,42 @@ def is_too_long_error(exc: Exception) -> bool:
     return "prompt is too long" in s or "too many tokens" in s or "context window" in s
 
 
+# Anthropic error-type tokens appear verbatim in the SDK exception's string (e.g.
+# ``'type': 'authentication_error'``), so we classify on those stable tokens rather than
+# bare HTTP status numbers — a request_id or a token count could otherwise false-match a
+# "401"/"429". The reset date is pulled from the usage-limit body when present.
+_REGAIN_RE = re.compile(r"regain access on (\d{4}-\d{2}-\d{2}(?: at [0-9:]+ ?UTC)?)", re.IGNORECASE)
+
+
+def is_usage_limit_error(exc: Exception) -> bool:
+    """True if the cloud rejected the request due to a workspace usage/spend limit.
+
+    This is a *hard* block (billing/limit layer, after the key authenticates), not a
+    transient outage — so the reply must not tell the user to "try again in a little
+    while." Detected on the distinctive phrasing of the ``invalid_request_error`` body.
+    """
+    s = str(exc).lower()
+    return "usage limit" in s or "regain access" in s
+
+
+def usage_limit_regain(exc: Exception) -> str:
+    """The 'YYYY-MM-DD at HH:MM UTC' access-returns date from a usage-limit error, or ''."""
+    match = _REGAIN_RE.search(str(exc))
+    return match.group(1) if match else ""
+
+
+def is_auth_error(exc: Exception) -> bool:
+    """True if the cloud rejected the API key itself (missing/invalid/expired)."""
+    s = str(exc).lower()
+    return "authentication_error" in s or "invalid x-api-key" in s or "permission_error" in s
+
+
+def is_rate_limited_error(exc: Exception) -> bool:
+    """True if the cloud is momentarily rate-limited or overloaded (a real retry-soon)."""
+    s = str(exc).lower()
+    return "rate_limit_error" in s or "overloaded_error" in s
+
+
 def too_long_reply() -> str:
     """Calm reply when even after trimming the turn won't fit (e.g. one giant message)."""
     return (
@@ -277,13 +313,34 @@ def text_from_content(content: Any) -> str:
     return " ".join(p.strip() for p in parts if p.strip()).strip()
 
 
-def cloud_error_reply(_exc: Exception) -> str:
-    """A short, calm spoken reply when the cloud model can't be reached.
+def cloud_error_reply(exc: Exception) -> str:
+    """A short, calm reply when the cloud model can't be reached, tailored to the cause.
 
-    The real cause (usage limit, bad key, outage) is logged by the caller; we
-    deliberately do **not** speak the raw API error — read aloud it's long, noisy,
-    and unhelpful. The user just needs to know it's temporary and what to do now.
+    The generic transient-outage line is actively misleading for a *hard* block: a hit
+    usage limit won't clear "in a little while" (it clears on a fixed date), and a bad
+    key never will — telling the user to retry sends them in circles. So classify the
+    common, actionable failures (usage limit, auth, rate limit) and say precisely what's
+    wrong and what to do. The raw API error is still logged by the caller and never
+    spoken — read aloud it's long, noisy, and unhelpful.
     """
+    if is_usage_limit_error(exc):
+        when = usage_limit_regain(exc)
+        window = f" Access returns on {when}." if when else ""
+        return (
+            "You've reached your Anthropic workspace usage limit." + window + " Raise the "
+            "limit in your Anthropic Console, switch to a key on a workspace with room, or "
+            "use a local model in Settings to keep working."
+        )
+    if is_auth_error(exc):
+        return (
+            "Your Anthropic API key was rejected. Add a valid key in Settings (or run "
+            "'jack config set-key anthropic'), then try again."
+        )
+    if is_rate_limited_error(exc):
+        return (
+            "The cloud model is busy right now (rate-limited). Try again in a moment, or "
+            "switch to a local model in Settings."
+        )
     return (
         "The cloud model isn't responding right now. You can try again in a little "
         "while, or switch to the local model in Settings for an immediate response."
