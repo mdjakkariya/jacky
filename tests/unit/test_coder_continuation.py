@@ -37,6 +37,18 @@ def test_is_continuation_intent_ignores_completion_reports() -> None:
         assert not _is_continuation_intent(reply), reply
 
 
+def test_is_continuation_intent_ignores_long_summaries() -> None:
+    # A substantial summary that merely ends with forward-looking words is NOT a stall —
+    # re-running after it (the observed false-positive) burns turns.
+    long_summary = (
+        "Found your Playwright suite — 36 tests across example, google-search, home, and "
+        "shopzone specs. I noticed a test-results folder with retries for T017, T015, T006, "
+        "and the home page title test — let me actually run them now to see pass/fail status."
+    )
+    assert len(long_summary) > 200
+    assert not _is_continuation_intent(long_summary)
+
+
 class _ScriptedLLM:
     """Returns queued act replies in order (extra calls repeat the last), counting calls."""
 

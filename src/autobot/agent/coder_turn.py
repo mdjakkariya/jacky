@@ -251,13 +251,17 @@ _TODO_LINE = re.compile(r"^\s*(?:\d+[.)]|[-*])\s+(.*\S)\s*$")
 
 
 def _is_continuation_intent(reply: str) -> bool:
-    """Whether ``reply`` looks like the model announced a next step and then stopped.
+    """Whether ``reply`` is a brief "I'll do X next" narration the model stopped on.
 
-    Conservative: matches forward-looking cues in the last ~200 chars only, so a completion
-    report ("Done — …") never triggers an auto-continue.
+    Conservative on two axes so it never re-runs after real work: it must be *short* (a
+    genuine mid-task stall is a one-liner, not a substantial summary that merely ends with
+    forward-looking words) AND contain a first-person forward cue. A completion report or a
+    long summary never triggers an auto-continue.
     """
-    tail = reply[-200:] if reply else ""
-    return bool(_CONTINUATION_CUES.search(tail))
+    text = reply.strip()
+    if not text or len(text) > 200:
+        return False
+    return bool(_CONTINUATION_CUES.search(text))
 
 
 def _extract_todo(reply: str) -> list[str]:
