@@ -88,6 +88,41 @@ def test_coder_log_tail_keeps_coder_and_warnings_drops_voice(tmp_path: Path) -> 
     assert "[toggles]" not in tail and "[listening]" not in tail  # voice noise dropped
 
 
+def test_coder_log_tail_scopes_to_session_and_drops_test_noise(tmp_path: Path) -> None:
+    from datetime import datetime
+
+    log = tmp_path / "autobot.log"
+    log.write_text(
+        "\n".join(
+            [
+                "2026-07-14 19:53:10 INFO    [coder] run_command rc=0",  # in-session
+                "2026-07-14 20:15:21 INFO    [coder] planning steps=3",  # AFTER the session (noise)
+                "2026-07-14 19:53:11 INFO    [gate] allowed tool=run_command "
+                "args={'path': '/private/var/folders/x/pytest-of-me/adir'}",  # test-tmp line
+            ]
+        ),
+        encoding="utf-8",
+    )
+    # Session ended ~20:00; the 20:15 line is later noise and must be excluded.
+    tail = debug_report.coder_log_tail(log, before=datetime(2026, 7, 14, 20, 0, 0))
+    assert "run_command rc=0" in tail  # the real in-session line
+    assert "planning steps=3" not in tail  # dropped: after the session
+    assert "pytest-of" not in tail  # dropped: residual test noise
+
+
+def test_transcript_model_reads_meta(tmp_path: Path) -> None:
+    path = tmp_path / "s.jsonl"
+    _write_transcript(path)  # meta row carries model=claude-sonnet-5
+    assert debug_report.transcript_model(path) == "claude-sonnet-5"
+    assert debug_report.transcript_model(None) is None
+
+
+def test_context_line_falls_back_to_meta_model_and_settings_provider() -> None:
+    # No live usage (standalone jack debug): model from the transcript meta, provider from settings.
+    line = debug_report.context_line({}, "auto", model="claude-sonnet-5", provider="anthropic")
+    assert "claude-sonnet-5 (anthropic)" in line and "autonomy auto" in line
+
+
 def test_context_line_with_and_without_usage() -> None:
     usage: dict[str, Any] = {
         "model": "claude-sonnet-5",

@@ -100,6 +100,7 @@ def _debug(base_url: str, cwd: str, deps: Deps) -> str:
     settings = deps.load_settings()
     log_path = Path(getattr(settings, "log_dir", "~/.autobot/logs")).expanduser() / "autobot.log"
     autonomy = str(getattr(settings, "coding_autonomy", "?"))
+    provider = getattr(settings, "llm_provider", None)
     transcript = debug_report.newest_transcript(cwd)
     bundle = debug_report.build_bundle(
         transcript=transcript,
@@ -107,6 +108,7 @@ def _debug(base_url: str, cwd: str, deps: Deps) -> str:
         cwd=cwd,
         usage=deps.get_usage(base_url),
         autonomy=autonomy,
+        provider=provider,
     )
     path = debug_report.write_bundle(bundle, cwd)
     _log.info("debug report written path=%s", path)
