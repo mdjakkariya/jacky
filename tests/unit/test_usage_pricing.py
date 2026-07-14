@@ -6,28 +6,20 @@ from datetime import datetime, timezone
 
 from autobot.usage.pricing import price_usd
 
-_BEFORE = datetime(2026, 7, 14, tzinfo=timezone.utc)  # within the Sonnet-5 intro window
-_AFTER = datetime(2026, 9, 1, tzinfo=timezone.utc)  # after the intro window ends
+_BEFORE = datetime(2026, 7, 14, tzinfo=timezone.utc)  # was inside the (now-unapplied) promo window
+_AFTER = datetime(2026, 9, 1, tzinfo=timezone.utc)
 
 
-def test_sonnet5_uses_intro_rate_before_the_cutoff() -> None:
-    # Intro $2/$10 per MTok: 1M in + 1M out = $2 + $10 = $12.
-    assert (
-        price_usd(
-            "anthropic", "claude-sonnet-5", in_tokens=1_000_000, out_tokens=1_000_000, at=_BEFORE
-        )
-        == 12.0
+def test_sonnet5_always_uses_list_rate_no_promo_discount() -> None:
+    # Safe side: we price at the published LIST rate ($3/$15) and never apply the intro
+    # promo, so the figure is identical before and after the old promo cutoff. 1M + 1M = $18.
+    before = price_usd(
+        "anthropic", "claude-sonnet-5", in_tokens=1_000_000, out_tokens=1_000_000, at=_BEFORE
     )
-
-
-def test_sonnet5_uses_standard_rate_after_the_cutoff() -> None:
-    # Standard $3/$15: 1M + 1M = $18.
-    assert (
-        price_usd(
-            "anthropic", "claude-sonnet-5", in_tokens=1_000_000, out_tokens=1_000_000, at=_AFTER
-        )
-        == 18.0
+    after = price_usd(
+        "anthropic", "claude-sonnet-5", in_tokens=1_000_000, out_tokens=1_000_000, at=_AFTER
     )
+    assert before == after == 18.0
 
 
 def test_prefix_match_picks_point_release() -> None:

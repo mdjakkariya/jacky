@@ -25,7 +25,7 @@ def test_records_a_priced_anthropic_row(tmp_path: Path) -> None:
     )
     rows = read(path=p)
     assert len(rows) == 1
-    assert rows[0].priced is True and rows[0].usd == 12.0  # intro rate
+    assert rows[0].priced is True and rows[0].usd == 18.0  # list rate $3/$15 (no promo assumed)
 
 
 def test_records_local_turn_as_zero(tmp_path: Path) -> None:

@@ -1,11 +1,19 @@
 """Provider-agnostic price book: USD cost for a turn's tokens (or None if unknown).
 
-A local estimate, not billing — the provider's console stays authoritative. Prices are
-list rates per million tokens, keyed by ``provider`` then a model-id **prefix** (so 4.x
-point releases match one entry). Prompt-cache tokens are priced on the input rate with
-per-provider multipliers. Unknown ``(provider, model)`` returns ``None`` (tokens are still
-recorded, just without a dollar figure) — never a fabricated ``$0``. Local providers price
-to a real ``$0`` so "local, free" is distinct from "price unknown".
+A local estimate, not billing — the provider's console stays authoritative. Prices are the
+published **list** rates per million tokens (verified against the claude-api skill's pricing
+tables), keyed by ``provider`` then a model-id **prefix** (so 4.x point releases match one
+entry). We deliberately do **not** apply time-boxed promotional discounts (e.g. Sonnet 5's
+intro rate): a promo is a conditional discount an account may not have, so pricing at the
+list rate is the *conservative, safe-side* estimate — if a promo does apply, the real bill is
+only ever **lower** than shown. The dormant intro fields keep that machinery available if we
+ever want to opt in.
+
+Prompt-cache tokens are priced on the input rate with per-provider multipliers (Anthropic:
+5-minute cache write ``1.25x``, cache read ``0.1x`` — jack uses the default 5-minute
+``ephemeral`` TTL, so ``1.25x`` is exact). Unknown ``(provider, model)`` returns ``None``
+(tokens are still recorded, just without a dollar figure) — never a fabricated ``$0``. Local
+providers price to a real ``$0`` so "local, free" is distinct from "price unknown".
 """
 
 from __future__ import annotations
@@ -16,7 +24,12 @@ from datetime import datetime, timezone
 
 @dataclass(frozen=True, slots=True)
 class Price:
-    """List price for one model family (USD per 1M tokens), plus cache + intro rates."""
+    """List price for one model family (USD per 1M tokens), plus cache multipliers.
+
+    ``intro_*`` support a time-boxed promotional rate but are left unset on every entry —
+    pricing at the list rate is the conservative, safe-side estimate (see the module
+    docstring). The machinery stays so a promo can be opted into later if desired.
+    """
 
     input: float
     output: float
@@ -28,15 +41,18 @@ class Price:
 
 
 # Prefix-keyed, most-specific match wins. Extend as pricing changes; unknown -> None.
+# Rates are published LIST prices (claude-api skill). No promo discounts applied (safe side).
 _PRICES: dict[str, dict[str, Price]] = {
     "anthropic": {
-        "claude-sonnet-5": Price(
-            3.0, 15.0, intro_input=2.0, intro_output=10.0, intro_until="2026-08-31"
-        ),
+        # Sonnet 5 lists at $3/$15 (a $2/$10 intro promo runs through 2026-08-31, NOT applied
+        # here — see the module docstring; the safe-side estimate assumes no discount).
+        "claude-sonnet-5": Price(3.0, 15.0),
         "claude-sonnet-4-6": Price(3.0, 15.0),
+        "claude-sonnet-4-5": Price(3.0, 15.0),
         "claude-haiku-4-5": Price(1.0, 5.0),
-        "claude-opus-4": Price(5.0, 25.0),
+        "claude-opus-4": Price(5.0, 25.0),  # 4.5/4.6/4.7/4.8 all list at $5/$25
         "claude-fable-5": Price(10.0, 50.0),
+        "claude-mythos-5": Price(10.0, 50.0),
     },
     # Local: any model is free. The empty prefix matches every model id.
     "ollama": {"": Price(0.0, 0.0)},
@@ -74,9 +90,10 @@ def price_usd(
 ) -> float | None:
     """USD cost for one turn's token usage, or None when the model's price isn't known.
 
-    Prices fresh input + output at the model's rate (the promotional rate when ``at`` falls
-    on or before the entry's ``intro_until`` date), plus prompt-cache tokens at the cache
-    multipliers on the input rate. ``at`` is the turn's timestamp (naive is treated as UTC).
+    Prices fresh input + output at the model's **list** rate, plus prompt-cache tokens at the
+    cache multipliers on the input rate. ``at`` is the turn's timestamp; it only matters if an
+    entry sets a time-boxed promo rate (none do — see the module docstring), so today it never
+    lowers the figure. A naive ``at`` is treated as UTC.
     """
     price = _lookup(provider, model)
     if price is None:
