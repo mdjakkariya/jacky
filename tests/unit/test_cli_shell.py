@@ -13,7 +13,7 @@ from rich.console import Console
 
 from autobot.cli import shell, spinner
 from autobot.cli.prompt import Answer
-from autobot.cli.theme import GLYPH_ASSISTANT, jack_theme
+from autobot.cli.theme import jack_theme
 
 
 def _console() -> Console:
@@ -58,8 +58,21 @@ def _streams(
     return stream_turn, stream_answer
 
 
+def _chooser_returning(value: str) -> Callable[[str, list[Any]], str]:
+    """A fake single-key chooser that always returns ``value`` (a gate answer)."""
+
+    def chooser(_body: str, _options: list[Any]) -> str:
+        return value
+
+    return chooser
+
+
 def _make(
-    lines: list[str | None], turns: dict[str, list[dict[str, Any]]], tmp_path: Path
+    lines: list[str | None],
+    turns: dict[str, list[dict[str, Any]]],
+    tmp_path: Path,
+    *,
+    chooser: Callable[[str, list[Any]], str] | None = None,
 ) -> tuple[shell.Shell, Console]:
     stream_turn, stream_answer = _streams(turns)
     console = _console()
@@ -73,13 +86,14 @@ def _make(
         snapshot=lambda _cwd: None,
         diff_since=lambda _cwd, _b: None,
         spin=_noop_spin,
+        chooser=chooser or _chooser_returning(""),
     )
     return sh, console
 
 
 def test_plan_approve_done(tmp_path: Path) -> None:
     sh, console = _make(
-        ["add retry", "1", None],
+        ["add retry", None],
         {
             "start": [
                 {
@@ -91,6 +105,7 @@ def test_plan_approve_done(tmp_path: Path) -> None:
             "answer": [{"status": "done", "reply": "Done."}],
         },
         tmp_path,
+        chooser=_chooser_returning("approve"),
     )
     sh.run()
     out = console.export_text()
@@ -99,16 +114,17 @@ def test_plan_approve_done(tmp_path: Path) -> None:
 
 def test_pending_yes_done(tmp_path: Path) -> None:
     sh, console = _make(
-        ["run tests", "1", None],
+        ["run tests", None],
         {
             "start": [{"status": "pending", "prompt": "run pytest?"}],
             "answer": [{"status": "done", "reply": "Ran."}],
         },
         tmp_path,
+        chooser=_chooser_returning("yes"),
     )
     sh.run()
     out = console.export_text()
-    assert "pytest" in out and "Ran." in out
+    assert "Ran." in out
 
 
 def test_help_command_renders_without_a_turn(tmp_path: Path) -> None:
@@ -147,14 +163,11 @@ def test_command_falls_back_to_pure_dispatch(
 
 
 def test_ask_refine_followup_ctrl_c_cancels(tmp_path: Path) -> None:
-    """Ctrl-C at refine follow-up cancels the turn instead of crashing."""
-    calls = iter(["2"])  # "2" = edit/refine; next read raises
+    """Ctrl-C at the refine follow-up cancels the turn instead of crashing."""
+    from autobot.cli.classify import Segment
 
     def reader(_prompt: str) -> str | None:
-        try:
-            return next(calls)
-        except StopIteration:
-            raise KeyboardInterrupt from None
+        raise KeyboardInterrupt  # the follow-up "what should change?" read is interrupted
 
     console = _console()
     sh = shell.Shell(
@@ -165,14 +178,15 @@ def test_ask_refine_followup_ctrl_c_cancels(tmp_path: Path) -> None:
         snapshot=lambda _cwd: None,
         diff_since=lambda _cwd, _b: None,
         spin=_noop_spin,
+        chooser=_chooser_returning("refine"),  # user picked edit; the follow-up then Ctrl-C's
     )
-    assert sh._ask("plan") == Answer("reject")
+    assert sh._ask(Segment("plan", "Here's my plan")) == Answer("reject")
 
 
 def test_stream_plan_approve_done_with_tool_line(tmp_path: Path) -> None:
     """Tool-activity events render live (before the final reply) alongside the phase cards."""
     sh, console = _make(
-        ["edit foo", "1", None],
+        ["edit foo", None],
         {
             "start": [
                 {"status": "plan", "reply": "Here's my plan:\n1. edit foo", "todo": ["edit foo"]}
@@ -183,6 +197,7 @@ def test_stream_plan_approve_done_with_tool_line(tmp_path: Path) -> None:
             ],
         },
         tmp_path,
+        chooser=_chooser_returning("approve"),
     )
     sh.run()
     out = console.export_text()
@@ -221,10 +236,14 @@ def test_loading_gap_is_printed_before_output_not_after_reply(tmp_path: Path) ->
         diff_since=lambda _c, _b: None,
         spin=_noop_spin,
     ).run()
-    # log[0] is the welcome banner; the turn's prints follow. The first must be the blank
-    # gap, then the tool line, then the reply — with no blank wedged between tool and reply.
+    # log[0] is the welcome banner; the turn's prints follow. Cluster-C spacing: the loading
+    # GAP comes first (blank, so it shows during loading — not popped in after the reply),
+    # then the tool line, then exactly ONE separating blank between the tool-activity block
+    # and the reply, then the reply. (Previously the tool line opened the token Live, whose
+    # redirect machinery injected extra artifact prints; keeping the spinner up instead of
+    # opening that Live for tool activity removes the noise — this is the clean sequence.)
     turn = console.prints[1:]
-    assert turn[:3] == [False, True, True]
+    assert turn[:4] == [False, True, False, True]
 
 
 def test_stream_error_event_renders_in_red(tmp_path: Path) -> None:
@@ -265,10 +284,13 @@ class _FakeLive:
         self.updates.append(str(renderable))
 
 
-def test_stream_tokens_render_live_then_markdown(
+def test_streamed_tokens_are_consumed_but_not_shown_live(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Token events repaint a live preview buffer; the ``done`` phase finalizes as markdown."""
+    """Calm streaming: tokens are drained but not painted live; only the final reply renders.
+
+    No token Live region is opened; the spinner covers liveness.
+    """
     fakes: list[_FakeLive] = []
 
     def make_fake(*args: object, **kwargs: object) -> _FakeLive:
@@ -280,9 +302,9 @@ def test_stream_tokens_render_live_then_markdown(
 
     turns = {
         "start": [
-            {"type": "token", "text": "Hel"},
-            {"type": "token", "text": "lo!"},
-            {"status": "done", "reply": "Hello!"},
+            {"type": "token", "text": "strea"},
+            {"type": "token", "text": "ming"},
+            {"status": "done", "reply": "Final reply."},
         ],
     }
 
@@ -293,7 +315,7 @@ def test_stream_tokens_render_live_then_markdown(
         return iter([])
 
     console = _console()
-    sh = shell.Shell(
+    shell.Shell(
         "http://x",
         str(tmp_path),
         stream_turn=stream_turn,
@@ -303,26 +325,23 @@ def test_stream_tokens_render_live_then_markdown(
         snapshot=lambda _c: None,
         diff_since=lambda _c, _b: None,
         spin=_noop_spin,
-    )
-    sh.run()
+    ).run()
 
-    assert len(fakes) == 1  # one Live region for the one turn
-    assert fakes[0].updates == [f"{GLYPH_ASSISTANT} Hel", f"{GLYPH_ASSISTANT} Hello!"]
+    assert fakes == []  # no token Live region is opened any more (calm streaming)
     out = console.export_text()
-    assert "Hello!" in out  # the done phase's markdown reply is what persists
+    assert "Final reply." in out  # the finalized reply renders
+    assert "streaming" not in out  # the streamed tokens are not shown live
 
 
-def test_stream_tokens_paint_with_the_real_spinner(tmp_path: Path) -> None:
-    """Regression test: the spinner and the token Live must never both be active.
+def test_reply_renders_with_the_real_spinner_tokens_not_shown(tmp_path: Path) -> None:
+    """Streamed tokens aren't shown; the finalized reply renders (real threaded spinner).
 
-    Uses the REAL ``spinner.with_spinner`` (not the no-op fake the other tests inject)
-    so this exercises actual nested-``Live`` semantics. If the token ``Live`` is opened
-    while the spinner's ``Live`` is still active, ``rich`` marks it "nested"; a nested,
-    transient ``Live`` never paints its content on ``stop()`` — so the streamed buffer
-    text would never reach the console at all, only the finalized phase reply would.
-    The phase's reply is deliberately distinct from the buffered tokens so the two
-    sources can't be confused: this test fails against a nested structure and passes
-    once the spinner is torn down before the token Live starts.
+    With the real spinner running the whole turn, streamed tokens are NOT displayed and the
+    finalized reply renders once after the spinner tears down.
+    Uses the real ``spinner.with_spinner`` so this exercises the actual threaded ``Live``:
+    the reply text is deliberately distinct from the streamed tokens so the two can't be
+    confused. It passes only if the tokens are dropped from the display and the finalized
+    phase reply is what reaches the scrollback.
     """
     turns = {
         "start": [
@@ -339,7 +358,7 @@ def test_stream_tokens_paint_with_the_real_spinner(tmp_path: Path) -> None:
         return iter([])
 
     console = _console()
-    sh = shell.Shell(
+    shell.Shell(
         "http://x",
         str(tmp_path),
         stream_turn=stream_turn,
@@ -349,9 +368,207 @@ def test_stream_tokens_paint_with_the_real_spinner(tmp_path: Path) -> None:
         snapshot=lambda _c: None,
         diff_since=lambda _c, _b: None,
         spin=spinner.with_spinner,  # the real, threaded spinner — not the no-op fake
-    )
-    sh.run()
+    ).run()
 
     out = console.export_text()
-    assert "Done." in out  # the finalized phase reply always prints
-    assert "Hello!" in out  # the live-streamed buffer must have actually painted too
+    assert "Done." in out  # the finalized phase reply renders
+    assert "Hello!" not in out  # streamed tokens are NOT shown live (calm streaming)
+
+
+def test_turn_renders_streamed_output_lines(tmp_path: Path) -> None:
+    # A run_command turn: tool start, two live output lines, then done. All three must
+    # reach the scrollback, and the streamed output shows before the reply.
+    turns = {
+        "start": [
+            {"type": "tool", "event": "start", "name": "run_command", "label": "$ npm test"},
+            {"type": "output", "text": "PASS a.spec.ts"},
+            {"type": "output", "text": "PASS b.spec.ts"},
+            {"status": "done", "reply": "All tests passed."},
+        ],
+        "answer": [],
+    }
+    sh, console = _make([None], turns, tmp_path)
+    sh._turn("run the tests")
+    text = console.export_text()
+    assert "PASS a.spec.ts" in text
+    assert "PASS b.spec.ts" in text
+    assert "All tests passed." in text
+
+
+def test_plan_update_streams_delta_progress_lines(tmp_path: Path) -> None:
+    """plan_update events commit a ◐→☑ delta trail; the step text reaches the scrollback."""
+    sh, console = _make(
+        ["do it", None],
+        {
+            "start": [
+                {
+                    "type": "plan_update",
+                    "todos": [{"step": "run the suite", "status": "in_progress"}],
+                },
+                {
+                    "type": "plan_update",
+                    "todos": [{"step": "run the suite", "status": "done"}],
+                },
+                {"status": "done", "reply": "ok"},
+            ],
+            "answer": [],
+        },
+        tmp_path,
+    )
+    sh.run()
+    out = console.export_text()
+    assert "run the suite" in out  # the step text is rendered
+    assert "◐" in out and "☑" in out  # both delta transitions rendered
+    assert out.index("◐") < out.index("☑")  # in_progress before done (delta order)
+
+
+def test_command_activity_paints_with_the_real_spinner_still_running(tmp_path: Path) -> None:
+    """Tool + output must paint with the REAL threaded spinner still running.
+
+    The spinner's Live is only torn down when reply tokens start, so this guards that
+    printing above the running spinner works — the fix for a command that looks 'stuck'
+    because it emits nothing until it finishes.
+    """
+    turns = {
+        "start": [
+            {"type": "tool", "event": "start", "name": "run_command", "label": "$ npm test"},
+            {"type": "output", "text": "PASS a.spec.ts"},
+            {"status": "done", "reply": "Done."},
+        ],
+        "answer": [],
+    }
+
+    def stream_turn(_b: str, _t: str) -> Iterator[dict[str, Any]]:
+        return iter(turns["start"])
+
+    def stream_answer(_b: str, _v: str, _t: str = "") -> Iterator[dict[str, Any]]:
+        return iter([])
+
+    console = _console()
+    shell.Shell(
+        "http://x",
+        str(tmp_path),
+        stream_turn=stream_turn,
+        stream_answer=stream_answer,
+        reader=_scripted_reader(["run tests", None]),
+        console=console,
+        snapshot=lambda _c: None,
+        diff_since=lambda _c, _b: None,
+        spin=spinner.with_spinner,  # the real, threaded spinner
+    ).run()
+    out = console.export_text()
+    assert "$ npm test" in out and "PASS a.spec.ts" in out and "Done." in out
+
+
+class _FakeEvents:
+    """A scripted background-events source: successive polls return the queued batches."""
+
+    def __init__(self, batches: list[list[dict[str, Any]]]) -> None:
+        self._batches = list(batches)
+
+    def poll_completed(self) -> list[dict[str, Any]]:
+        return self._batches.pop(0) if self._batches else []
+
+
+def test_auto_continue_picks_up_a_finished_task_when_idle(tmp_path: Path) -> None:
+    """An AUTO_CONTINUE from the reader runs a continuation turn with the nudge prompt."""
+    from autobot.cli.prompt import AUTO_CONTINUE
+
+    sent: list[str] = []
+
+    def stream_turn(_b: str, text: str) -> Iterator[dict[str, Any]]:
+        sent.append(text)
+        return iter([{"status": "done", "reply": "Picked up — all green."}])
+
+    def stream_answer(_b: str, _v: str, _t: str = "") -> Iterator[dict[str, Any]]:
+        return iter([])
+
+    console = _console()
+    shell.Shell(
+        "http://x",
+        str(tmp_path),
+        stream_turn=stream_turn,
+        stream_answer=stream_answer,
+        reader=_scripted_reader([AUTO_CONTINUE, None]),
+        console=console,
+        snapshot=lambda _c: None,
+        diff_since=lambda _c, _b: None,
+        spin=_noop_spin,
+        events=_FakeEvents([[{"id": "task-3", "status": "done"}]]),
+    ).run()
+    out = console.export_text()
+    assert "task-3" in out  # the pickup notice
+    assert "Picked up — all green." in out  # the continuation turn's reply
+    assert sent == [shell._CONTINUATION_PROMPT]  # the continuation used the nudge prompt
+
+
+def test_auto_continue_is_a_noop_when_nothing_pending(tmp_path: Path) -> None:
+    """A wake with nothing actually queued (a benign race) runs no turn."""
+    from autobot.cli.prompt import AUTO_CONTINUE
+
+    sent: list[str] = []
+
+    def stream_turn(_b: str, text: str) -> Iterator[dict[str, Any]]:
+        sent.append(text)
+        return iter([{"status": "done", "reply": "should not run"}])
+
+    def stream_answer(_b: str, _v: str, _t: str = "") -> Iterator[dict[str, Any]]:
+        return iter([])
+
+    console = _console()
+    shell.Shell(
+        "http://x",
+        str(tmp_path),
+        stream_turn=stream_turn,
+        stream_answer=stream_answer,
+        reader=_scripted_reader([AUTO_CONTINUE, None]),
+        console=console,
+        snapshot=lambda _c: None,
+        diff_since=lambda _c, _b: None,
+        spin=_noop_spin,
+        events=_FakeEvents([[]]),  # nothing pending
+    ).run()
+    assert sent == []  # no continuation turn ran
+    assert "should not run" not in console.export_text()
+
+
+def test_spinner_stays_up_through_a_command_and_tears_down_after(tmp_path: Path) -> None:
+    """The spinner is NOT torn down on tool/output events — only at the end (no tokens here).
+
+    By its teardown the command's tool + output lines are already committed, proving the
+    spinner kept ticking during the command (the liveness the 'looks stuck' bug lacked).
+    """
+    console = _console()
+    seen_at_exit: list[str] = []
+
+    @contextlib.contextmanager
+    def recording_spin(_c: Console, _verb: str) -> Iterator[None]:
+        try:
+            yield
+        finally:
+            seen_at_exit.append(console.export_text())  # console text at teardown time
+
+    turns = {
+        "start": [
+            {"type": "tool", "event": "start", "name": "run_command", "label": "$ slow-cmd"},
+            {"type": "output", "text": "still working"},
+            {"status": "done", "reply": "Finished."},
+        ],
+        "answer": [],
+    }
+    stream_turn, stream_answer = _streams(turns)
+    sh = shell.Shell(
+        "http://x",
+        str(tmp_path),
+        stream_turn=stream_turn,
+        stream_answer=stream_answer,
+        reader=_scripted_reader([None]),
+        console=console,
+        snapshot=lambda _c: None,
+        diff_since=lambda _c, _b: None,
+        spin=recording_spin,
+    )
+    sh._turn("run a slow command")
+    assert len(seen_at_exit) == 1  # torn down exactly once, at the end of the turn
+    # By teardown the command line + its output were already on screen (spinner was live).
+    assert "$ slow-cmd" in seen_at_exit[0] and "still working" in seen_at_exit[0]

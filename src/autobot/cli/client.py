@@ -110,6 +110,15 @@ def list_sessions(
     return data if isinstance(data, list) else []
 
 
+def get_usage(base_url: str, *, get: Callable[[str, float], Any] = _get_json) -> dict[str, Any]:
+    """Fetch live session usage + rollups (``GET /coder/usage``); ``{}`` on any failure."""
+    try:
+        data = get(f"{base_url}/coder/usage", 10.0)
+    except (OSError, urllib.error.URLError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
 def resume_session(
     base_url: str, session_id: str, *, post: Callable[..., dict[str, Any]] = _post
 ) -> dict[str, Any]:
@@ -190,6 +199,36 @@ def stream_answer(
 ) -> Iterator[dict[str, Any]]:
     """Answer a parked turn; yield the next phase's SSE events."""
     return _stream(base_url, "/coder/reply", {"value": value, "text": text}, open_stream)
+
+
+GetStream = Callable[[str], Iterator[str]]
+
+
+def _open_get_stream(url: str) -> Iterator[str]:  # pragma: no cover - real persistent network
+    """GET ``url`` and yield decoded response lines from a long-lived SSE stream.
+
+    No read timeout: the stream stays open between turns (the daemon sends a keepalive
+    comment every ~15s), so a finite timeout would tear it down during quiet periods.
+    """
+    req = urllib.request.Request(url)
+    resp = urllib.request.urlopen(req, timeout=None)  # persistent loopback SSE
+    for raw in resp:
+        yield raw.decode("utf-8", errors="replace").rstrip("\n")
+
+
+def stream_events(
+    base_url: str, *, open_stream: GetStream = _open_get_stream
+) -> Iterator[dict[str, Any]]:
+    """Yield background-task events from the persistent ``GET /coder/events`` stream.
+
+    Long-lived: iterate it on a background thread. Transport errors (daemon gone, stream
+    dropped) end the iterator quietly rather than raising — the caller just reconnects or
+    stops.
+    """
+    try:
+        yield from _parse_sse(open_stream(f"{base_url}/coder/events"))
+    except (OSError, urllib.error.URLError):
+        return
 
 
 def _prompt_user(resp: dict[str, Any]) -> dict[str, str]:  # pragma: no cover - terminal I/O

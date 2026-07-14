@@ -11,6 +11,7 @@ are pure functions so they can be unit-tested without a live Ollama server.
 from __future__ import annotations
 
 import json
+from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
@@ -104,12 +105,28 @@ CODER_SYSTEM_PROMPT = (
     "Use the tools to inspect and change files: read a file (line-numbered) before you "
     "edit it, search with grep/glob, get an overview with repo_map, and run commands "
     "(tests, build, git) with run_command. Prefer the dedicated file tools over shelling "
-    "out. Make the smallest change that satisfies the request, keep edits consistent with "
-    "the surrounding code, and verify your work (run the tests) when practical. If a tool "
-    "reports a failure, read the message and adjust rather than repeating the same call. "
+    "out. Make the smallest change that satisfies the request and keep edits consistent "
+    "with the surrounding code. "
+    # Verify + report honestly.
+    "Before you report a task complete, verify it actually works — run the test or command "
+    "and check the output; if you cannot verify, say so plainly rather than claiming "
+    "success. Report results honestly: never say tests pass when the output shows failures, "
+    "and never skip, suppress, or weaken a failing check to force a green result. "
+    # Diagnose, don't thrash.
+    "If a tool reports a failure, read the message and diagnose the cause before adjusting — "
+    "don't repeat the same call blindly. "
+    # Don't block on long commands / no sleep-poll.
+    "Run tests and builds directly and let their output stream — do NOT wrap a long command "
+    "in a `sleep`/`tail` polling loop, and do NOT start it in the background and then poll "
+    "it; that just blocks with no output and looks stuck. "
+    # Unactionable input.
     "If an input is unclear, too vague to act on, or not a real request at all, don't guess "
     "and don't just ask what they mean — reply once, briefly, with what you can help with "
-    "(editing files, running commands, explaining code) and invite a concrete request."
+    "(editing files, running commands, explaining code) and invite a concrete request. "
+    # Carry the task to completion.
+    "When carrying out a task, work through all of its steps in one go without stopping to "
+    "narrate what you are about to do next — just do it, then report once at the end. Stop "
+    "only when the task is done, you are blocked, or you are waiting on a required confirmation."
 )
 
 
@@ -587,6 +604,18 @@ class OllamaLanguageModel:
         if not self._last_prompt_tokens or not ctx:
             session.last_usage = None
             return
+        from autobot.usage.record import record_turn
+
+        record_turn(
+            provider=self._settings.llm_provider,
+            model=self._settings.llm_model,
+            workspace=session.cwd,
+            session_id=session.id,
+            in_tokens=self._last_prompt_tokens,
+            out_tokens=self._last_eval_tokens,
+            at=datetime.now(timezone.utc),
+            enabled=self._settings.usage_tracking,
+        )
         session.last_usage = {
             "used": self._last_prompt_tokens,
             "window": ctx,

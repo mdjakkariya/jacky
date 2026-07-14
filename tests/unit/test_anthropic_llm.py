@@ -25,7 +25,10 @@ from autobot.llm.anthropic_llm import (
     assemble_anthropic_tools,
     cloud_error_reply,
     estimate_cost_usd,
+    is_auth_error,
+    is_rate_limited_error,
     is_too_long_error,
+    is_usage_limit_error,
     parse_tool_uses,
     partition_tools,
     text_from_content,
@@ -515,6 +518,48 @@ def test_cloud_error_reply_is_calm_and_never_speaks_raw_api_text() -> None:
     assert "404" not in reply and "claude-3-5-haiku" not in reply  # nothing raw spoken
 
 
+def test_cloud_error_reply_usage_limit_names_the_reset_date_not_retry() -> None:
+    # The real 400 body jack keeps hitting: a hard workspace usage cap with a reset date.
+    err = RuntimeError(
+        "Error code: 400 - {'type': 'error', 'error': {'type': 'invalid_request_error', "
+        "'message': 'You have reached your specified workspace API usage limits. You will "
+        "regain access on 2026-08-01 at 00:00 UTC.'}}"
+    )
+    assert is_usage_limit_error(err)
+    reply = cloud_error_reply(err)
+    assert "usage limit" in reply.lower()
+    assert "2026-08-01 at 00:00 UTC" in reply  # the concrete reset date, surfaced
+    assert "in a little while" not in reply  # NOT the misleading transient-outage line
+    assert "400" not in reply  # nothing raw spoken
+
+
+def test_cloud_error_reply_auth_error_points_at_the_key() -> None:
+    err = RuntimeError(
+        "Error code: 401 - {'type': 'error', 'error': {'type': 'authentication_error', "
+        "'message': 'invalid x-api-key'}}"
+    )
+    assert is_auth_error(err)
+    reply = cloud_error_reply(err)
+    assert "key" in reply.lower() and "Settings" in reply
+    assert "usage limit" not in reply.lower()
+
+
+def test_cloud_error_reply_rate_limit_says_retry_soon() -> None:
+    err = RuntimeError("Error code: 429 - {'type': 'error', 'error': {'type': 'rate_limit_error'}}")
+    assert is_rate_limited_error(err)
+    reply = cloud_error_reply(err)
+    assert "rate-limited" in reply.lower()
+
+
+def test_error_classifiers_are_mutually_exclusive_for_generic_errors() -> None:
+    # A plain outage matches none of the specific classes -> the generic reply stands.
+    err = RuntimeError("Error code: 500 internal")
+    assert not is_usage_limit_error(err)
+    assert not is_auth_error(err)
+    assert not is_rate_limited_error(err)
+    assert "isn't responding" in cloud_error_reply(err)
+
+
 def test_run_turn_returns_calm_reply_on_api_error(tmp_path: Path) -> None:
     err = RuntimeError("Error code: 404")
     err.body = {"error": {"message": "model: claude-3-5-haiku-latest"}}  # type: ignore[attr-defined]
@@ -565,6 +610,44 @@ def test_estimate_cost_usd_prices_sonnet_and_opus() -> None:
     # instead of showing "n/a". Sonnet $3/$15, Opus $5/$25 per MTok.
     assert estimate_cost_usd("claude-sonnet-4-6", 1_000_000, 1_000_000) == 18.0
     assert estimate_cost_usd("claude-opus-4-8", 1_000_000, 1_000_000) == 30.0
+
+
+def test_log_usage_records_a_ledger_row_with_raw_input(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from datetime import datetime, timezone
+
+    from autobot.usage import ledger as _ledger
+
+    p = tmp_path / "usage.jsonl"
+    monkeypatch.setattr(_ledger, "default_path", lambda: p)
+    # Freeze the clock inside the provider so the intro rate applies deterministically.
+    import autobot.llm.anthropic_llm as mod
+
+    monkeypatch.setattr(mod, "_now", lambda: datetime(2026, 7, 14, tzinfo=timezone.utc))
+
+    model = AnthropicLanguageModel(
+        Settings(llm_provider="anthropic", anthropic_model="claude-sonnet-5"),
+        _registry(),
+        client=FakeClient([]),
+    )
+    session = Session(id="sess1", cwd="/work/proj", model="claude-sonnet-5")
+    # turn_in is RAW fresh input; cache_write must NOT be folded into the recorded "in".
+    model._log_usage(
+        session,
+        turn_in=1_000_000,
+        turn_out=1_000_000,
+        cache_read=0,
+        cache_write=400_000,
+        prompt_total=1_400_000,
+    )
+
+    rows = _ledger.read(path=p)
+    assert len(rows) == 1
+    assert rows[0].in_tokens == 1_000_000  # raw, not 1_400_000
+    assert rows[0].cache_write == 400_000
+    assert rows[0].session_id == "sess1" and rows[0].workspace == "/work/proj"
+    assert rows[0].priced is True
 
 
 def test_context_usage_reports_session_price_for_priced_model(tmp_path: Path) -> None:

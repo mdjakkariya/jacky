@@ -68,3 +68,24 @@ def test_get_models_unwraps() -> None:
         return {"models": ["qwen3:8b", "llama3"]}
 
     assert client.get_models("http://x", get=fake_get) == ["qwen3:8b", "llama3"]
+
+
+def test_stream_events_parses_task_frames() -> None:
+    def fake_open(url: str):  # type: ignore[no-untyped-def]
+        assert url == "http://x/coder/events"
+        yield ": ping"  # keepalive comment — ignored
+        yield 'data: {"type": "task", "id": "task-1", "status": "done"}'
+        yield ""
+        yield 'data: {"type": "task", "id": "task-2", "status": "failed"}'
+
+    events = list(client.stream_events("http://x", open_stream=fake_open))
+    assert [e["id"] for e in events] == ["task-1", "task-2"]
+    assert events[0]["status"] == "done"
+
+
+def test_stream_events_empty_on_transport_error() -> None:
+    def boom(url: str):  # type: ignore[no-untyped-def]
+        raise OSError("stream dropped")
+        yield  # pragma: no cover - unreachable, makes this a generator
+
+    assert list(client.stream_events("http://x", open_stream=boom)) == []

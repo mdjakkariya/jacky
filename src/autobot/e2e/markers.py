@@ -1,8 +1,9 @@
 """Predicates over the `pyte`-rendered screen text — the harness's sync vocabulary.
 
-Derived from the CLI's glyphs/cards (`autobot.cli.theme` / `cli.render`), so they track
-the real TUI: ``⏺`` reply, ``⎿`` tool line, the ``Proceed?`` gate cards, and the ``❯``
-idle prompt. All are pure ``str -> bool`` so they unit-test against canned screens.
+Derived from the CLI's glyphs/prompts (`autobot.cli.theme` / `cli.prompt`), so they track
+the real TUI: ``⏺`` reply, ``⎿`` tool line, the single-key confirm/plan prompts
+(``(y) yes  (n) no`` / ``… (e) edit …``), and the ``❯`` idle prompt. All are pure
+``str -> bool`` so they unit-test against canned screens.
 """
 
 from __future__ import annotations
@@ -25,13 +26,13 @@ def tool_line(screen: str) -> bool:
 
 
 def plan_card(screen: str) -> bool:
-    """The plan-approval card (``Proceed?`` + an ``Edit`` option)."""
-    return "Proceed?" in screen and "Edit" in screen
+    """The plan-approval single-key prompt (its ``(e) edit`` option distinguishes it)."""
+    return "(e) edit" in screen
 
 
 def permission_card(screen: str) -> bool:
-    """The command-permission card (``Proceed?`` + ``run it``)."""
-    return "Proceed?" in screen and "run it" in screen
+    """The command-permission single-key prompt (``(y) yes  (n) no``, no edit option)."""
+    return "(y) yes" in screen and "(n) no" in screen and "(e) edit" not in screen
 
 
 def any_gate(screen: str) -> bool:
@@ -50,19 +51,19 @@ def turn_started(screen: str) -> bool:
 
 
 def awaiting_reply(screen: str) -> bool:
-    """A gate is *live* — the ``>`` answer prompt is the last line, waiting for a choice.
+    """A gate is *live* — its single-key prompt is on screen, waiting for a choice.
 
-    This is the reliable "a gate needs answering now" signal, distinct from :func:`any_gate`
-    (a plain substring match for ``Proceed?``). The plan/permission card is committed to the
-    scrollback, so its ``Proceed?`` text lingers long after it's answered; only the ``>``
-    input prompt tells you a gate is *currently* awaiting input. Distinct from the ``❯`` REPL
-    prompt (:func:`idle_prompt`).
+    The confirm/plan prompt is a transient single-key region (``erase_when_done``): it is on
+    screen *only* while awaiting an answer and vanishes the instant it's answered. So — unlike
+    the old committed ``Proceed?`` card that lingered in scrollback — the mere presence of the
+    gate's choice line IS the reliable "awaiting now" signal, with no stale-card problem.
     """
-    lines = [ln for ln in screen.splitlines() if ln.strip()]
-    if not lines:
-        return False
-    last = lines[-1].rstrip()
-    return last == ">" or last.startswith("> ")
+    return any_gate(screen)
+
+
+def cost_view(screen: str) -> bool:
+    """The ``/cost`` usage summary is on screen (its per-window ``Today`` + ``All time`` rows)."""
+    return "Today" in screen and "All time" in screen
 
 
 def error(screen: str) -> bool:
@@ -94,6 +95,7 @@ BY_NAME: dict[str, Marker] = {
     "awaiting_reply": awaiting_reply,
     "working": working,
     "turn_started": turn_started,
+    "cost_view": cost_view,
     "error": error,
     "idle_prompt": idle_prompt,
 }

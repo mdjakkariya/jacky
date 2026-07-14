@@ -15,6 +15,7 @@ read from the keyring; audio never leaves the device.
 from __future__ import annotations
 
 import json
+from datetime import datetime, timezone
 from types import SimpleNamespace
 from typing import TYPE_CHECKING, Any
 
@@ -332,6 +333,18 @@ class OpenAICompatibleModel:
         if not self._last_prompt_tokens or not self._context_tokens:
             session.last_usage = None
             return new
+        from autobot.usage.record import record_turn
+
+        record_turn(
+            provider=self._settings.llm_provider,
+            model=self._settings.llm_model,
+            workspace=session.cwd,
+            session_id=session.id,
+            in_tokens=self._last_prompt_tokens,
+            out_tokens=self._last_eval_tokens,
+            at=datetime.now(timezone.utc),
+            enabled=self._settings.usage_tracking,
+        )
         session.last_usage = {
             "used": self._last_prompt_tokens,
             "window": self._context_tokens,

@@ -43,6 +43,7 @@ if TYPE_CHECKING:
     from autobot.io.listening import FrameSource
     from autobot.mcp.manager import McpManager
     from autobot.memory.store import MemoryStore
+    from autobot.tasks import NotificationInbox
 
 
 def _build_mic_source(settings: Settings) -> FrameSource:
@@ -294,14 +295,17 @@ def _apply_profile_overrides(settings: Settings) -> Settings:
     truncate at the assistant's small default. Both the local (``llm_max_tokens``) and the
     cloud (``anthropic_max_tokens``) budgets are raised — otherwise a cloud coder is silently
     capped at the tiny assistant default and large edits fail with "too many steps". The
-    OpenAI-compatible provider sends no max-tokens cap, so it needs no override. All other
-    profiles are returned unchanged.
+    OpenAI-compatible provider sends no max-tokens cap, so it needs no override. The coder also
+    gets a much larger ``max_tool_rounds`` (the plan→tool→result cap per turn) so a real
+    multi-step task finishes in one turn instead of stopping early at "I hit my step limit".
+    All other profiles are returned unchanged.
     """
     if settings.profile == "coder":
         return replace(
             settings,
             llm_max_tokens=settings.coder_llm_max_tokens,
             anthropic_max_tokens=settings.coder_llm_max_tokens,
+            max_tool_rounds=settings.coder_max_tool_rounds,
         )
     return settings
 
@@ -311,6 +315,8 @@ def _build_llm(
     registry: ToolRegistry,
     transcript: Transcript,
     memory: MemoryStore | None,
+    inbox: NotificationInbox | None = None,
+    max_rounds: int | None = None,
 ) -> AgentHarness:
     """Pick the LLM backend: local Ollama (default), Anthropic, or an OpenAI-compatible endpoint.
 
@@ -318,8 +324,10 @@ def _build_llm(
     the missing ``cloud`` extra falls back to local rather than failing startup. Every backend
     is wrapped in an :class:`AgentHarness`, which owns the conversation `Session` (history,
     summary, delivery mode, usage) — the adapters themselves are stateless across turns.
+    ``max_rounds`` overrides the per-turn round cap (used to give a subagent a tighter budget).
     """
     settings = _apply_profile_overrides(settings)
+    rounds = max_rounds if max_rounds is not None else settings.max_tool_rounds
     log = get_logger("app")
 
     from autobot.tools.access import active_policy
@@ -361,7 +369,9 @@ def _build_llm(
                 store,
                 cwd=cwd,
                 model_name=settings.anthropic_model,
+                max_rounds=rounds,
                 redact=lambda t: redact_secrets(t)[0],
+                inbox=inbox,
             )
         except ImportError:
             log.warning("cloud LLM extra missing, falling back to local")
@@ -395,7 +405,9 @@ def _build_llm(
             store,
             cwd=cwd,
             model_name=settings.llm_model,
+            max_rounds=rounds,
             redact=lambda t: redact_secrets(t)[0],
+            inbox=inbox,
         )
     from autobot.tools.selection import build_tool_selector
 
@@ -406,7 +418,9 @@ def _build_llm(
         store,
         cwd=cwd,
         model_name=settings.llm_model,
+        max_rounds=rounds,
         redact=lambda t: redact_secrets(t)[0],
+        inbox=inbox,
     )
 
 
@@ -753,6 +767,14 @@ def build(
 
     broker = AccessBroker(access_policy, confirmer)
 
+    # Process-global async-task primitive (lives as long as the daemon). The coder's
+    # run_command uses it to background a command; its completion note is delivered to the
+    # session's next turn via the harness (both share these instances).
+    from autobot.tasks import NotificationInbox, TaskRegistry
+
+    task_registry = TaskRegistry()
+    task_inbox = NotificationInbox()
+
     if coder:
         # Lean code-tool registry: read_file/write_file/edit_file/multi_edit, nav
         # (glob/grep), run_command, repo_map — no fileio/filesystem/workspace tools
@@ -762,6 +784,9 @@ def build(
             broker,
             allowlist=settings.command_allowlist,
             blocklist=settings.command_blocklist,
+            output_model_cap=settings.command_output_model_cap,
+            task_registry=task_registry,
+            task_inbox=task_inbox,
         )
         log.info("coder profile ENABLED (code tools only)")
     else:
@@ -788,9 +813,39 @@ def build(
 
     llm = ReloadableLanguageModel(
         lambda: _build_llm(
-            replace(Settings.load(), profile=settings.profile), registry, transcript, memory
+            replace(Settings.load(), profile=settings.profile),
+            registry,
+            transcript,
+            memory,
+            inbox=task_inbox,
         )
     )
+
+    if coder:
+        # Subagents (kind="agent"): the coordinator can fan out read-only research agents.
+        # Each gets its OWN isolated harness (fresh model + session — the adapters keep
+        # per-turn state, so it can't share the coordinator's), built via the same _build_llm
+        # path with NO inbox (a subagent doesn't fold the parent's notifications). Its result
+        # is pushed to the parent session's inbox → auto-resume re-engages the coordinator.
+        from autobot.agent.subagent import (
+            SUBAGENT_MAX_ROUNDS,
+            SubagentRunner,
+            register_subagent_tool,
+        )
+
+        def _make_subagent_harness() -> AgentHarness:
+            return _build_llm(
+                replace(Settings.load(), profile=settings.profile),
+                registry,
+                transcript,
+                memory,
+                max_rounds=SUBAGENT_MAX_ROUNDS,
+            )
+
+        register_subagent_tool(
+            registry,
+            SubagentRunner(_make_subagent_harness, gate, task_registry, task_inbox),
+        )
 
     coder_driver: CoderTurnDriver | None = None
     if coder and suspending is not None:
@@ -941,6 +996,9 @@ def build(
     # /meeting/* HTTP actions to it — same pattern as mcp_provider above.
     orch.meeting_recorder = _meeting_recorder
     orch.coder_driver = coder_driver
+    # Expose the async-task registry so the daemon's /coder/events stream can push a task's
+    # completion to an idle CLI (auto-resume). Only meaningful in the coder profile.
+    orch.coder_task_registry = task_registry if coder else None
     return orch
 
 

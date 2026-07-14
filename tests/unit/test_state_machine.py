@@ -934,3 +934,39 @@ def test_voice_cue_dedupes_repeated_phrases_within_a_turn() -> None:
     # Two identical-tool steps must not speak the same cue twice back-to-back.
     cues = tts.spoken[:-1]  # drop the final reply ("done")
     assert all(a != b for a, b in itertools.pairwise(cues))
+
+
+def test_subscribe_coder_events_maps_settle_to_a_task_event() -> None:
+    from autobot.tasks import TaskRegistry
+
+    orch = _orchestrator("hi", _RecordingGate())
+    reg = TaskRegistry()
+    orch.coder_task_registry = reg
+    seen: list[dict[str, object]] = []
+    unsubscribe = orch.subscribe_coder_events(seen.append)
+
+    reg.add(kind="command", session_id="s1", label="$ pytest")
+    reg.mark_done("task-1", result="ok", returncode=0)
+    assert seen == [
+        {
+            "type": "task",
+            "id": "task-1",
+            "kind": "command",
+            "status": "done",
+            "label": "$ pytest",
+            "returncode": 0,
+        }
+    ]
+
+    unsubscribe()
+    reg.add(kind="command", session_id="s1", label="$ build")
+    reg.mark_failed("task-2", result="boom", returncode=1)
+    assert len(seen) == 1  # unsubscribed: no further events
+
+
+def test_subscribe_coder_events_is_a_noop_without_a_registry() -> None:
+    orch = _orchestrator("hi", _RecordingGate())
+    orch.coder_task_registry = None
+    # Returns a no-op unsubscribe and never raises (assistant profile).
+    unsubscribe = orch.subscribe_coder_events(lambda _evt: None)
+    unsubscribe()

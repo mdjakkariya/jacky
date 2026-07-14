@@ -35,3 +35,9 @@ def test_classify_token_event() -> None:
 def test_classify_tool_event() -> None:
     seg = classify({"type": "tool", "event": "start", "name": "read_file", "label": "Read a.py"})
     assert seg.kind == "tool" and "Read a.py" in seg.text
+
+
+def test_classify_output_event() -> None:
+    seg = classify({"type": "output", "text": "PASS foo.spec.ts"})
+    assert seg.kind == "output"
+    assert seg.text == "PASS foo.spec.ts"

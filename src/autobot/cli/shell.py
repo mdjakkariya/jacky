@@ -11,11 +11,22 @@ import subprocess
 import sys
 from collections.abc import Callable, Iterator
 from contextlib import AbstractContextManager
-from typing import Any
+from typing import Any, Protocol
 
-from autobot.cli import client, coder_commands, commands, gitdiff, render, spinner, theme
+from autobot.cli import (
+    client,
+    coder_commands,
+    commands,
+    debug_report,
+    gitdiff,
+    mentions,
+    prompt,
+    render,
+    spinner,
+    theme,
+)
 from autobot.cli.classify import classify
-from autobot.cli.prompt import Answer, parse_confirm_choice, parse_plan_choice
+from autobot.cli.prompt import Answer
 from autobot.cli.theme import GLYPH_PROMPT
 from autobot.logging_setup import get_logger
 
@@ -25,6 +36,21 @@ _Reader = Callable[[str], str | None]
 _Spin = Callable[[Any, str], AbstractContextManager[None]]
 _StreamTurn = Callable[[str, str], Iterator[dict[str, Any]]]
 _StreamAnswer = Callable[[str, str, str], Iterator[dict[str, Any]]]
+
+# The user_text sent for an auto-resumed turn. The harness prepends the actual task result
+# (from the notification inbox), so this just tells the model to act on what's above.
+_CONTINUATION_PROMPT = (
+    "A background task you started has finished (its result is included above). Continue the "
+    "task using that result; if everything is now complete, briefly confirm what happened."
+)
+
+
+class _TaskEvents(Protocol):
+    """What the shell needs from the background-events listener (for auto-resume)."""
+
+    def poll_completed(self) -> list[dict[str, Any]]:
+        """Drain and return finished-task events collected while idle."""
+        ...
 
 
 def gather_context(cwd: str) -> dict[str, str]:
@@ -78,6 +104,8 @@ class Shell:
         snapshot: Callable[[str], str | None] = gitdiff.snapshot,
         diff_since: Callable[[str, str | None], str | None] = gitdiff.diff_since,
         spin: _Spin = spinner.with_spinner,
+        chooser: prompt.KeyChooser = prompt.read_choice,
+        events: _TaskEvents | None = None,
     ) -> None:
         """Wire the shell; all collaborators are injectable for tests."""
         self._base_url = base_url
@@ -89,6 +117,8 @@ class Shell:
         self._snapshot = snapshot
         self._diff_since = diff_since
         self._spin = spin
+        self._chooser = chooser
+        self._events = events
         self._turn_no = 0
 
     def run(self) -> None:
@@ -101,6 +131,9 @@ class Shell:
                 continue  # Ctrl-C at idle clears the line
             if line is None:
                 break  # EOF / Ctrl-D
+            if line == prompt.AUTO_CONTINUE:
+                self._continue_turn()  # a background task finished while idle — pick it up
+                continue
             line = line.strip()
             if not line:
                 continue
@@ -111,6 +144,44 @@ class Shell:
                 continue
             self._turn(line)
             self._turn_no += 1
+        self._print_session_footer()
+
+    def _print_session_footer(self) -> None:
+        """On exit, point at the transcript + how to get a shareable debug report.
+
+        Only after real work (≥1 turn) — so just opening and quitting stays quiet. Gives the
+        user something to copy/share when a session got stuck or misbehaved.
+        """
+        if self._turn_no == 0:
+            return
+        from rich.text import Text
+
+        transcript = debug_report.newest_transcript(self._cwd)
+        self._console.print()
+        if transcript is not None:
+            self._console.print(Text(f"session transcript: {transcript}", style="dim"))
+        self._console.print(
+            Text(
+                "stuck or something off? run  jack debug  here for a shareable report to paste.",
+                style="dim",
+            )
+        )
+
+    def _continue_turn(self) -> None:
+        """Auto-resume: a backgrounded task finished while idle — pick up its result.
+
+        Drains the finished-task events (for the notice), prints it, and runs a normal turn
+        with a continuation prompt; the daemon-side harness folds the actual task result into
+        that turn. A no-op if nothing is actually pending (a benign wake race).
+        """
+        done = self._events.poll_completed() if self._events is not None else []
+        if not done:
+            return
+        _log.info("auto-continue picking up %d finished task(s)", len(done))
+        self._console.print()
+        self._console.print(render.render_task_pickup(done))
+        self._turn(_CONTINUATION_PROMPT)
+        self._turn_no += 1
 
     def _command(self, name: str, args: str) -> bool:
         """Run a command; return True to exit the loop.
@@ -139,19 +210,29 @@ class Shell:
         """Drive a turn from the event stream: render tool lines live, cards, reply, diff."""
         snap = self._snapshot(self._cwd)
         verb = spinner.verb_for(self._turn_no)
-        _log.info("turn start")
+        # Expand @path mentions into bounded file context so the model can use them directly.
+        attached = mentions.find_mentions(text)
+        if attached:
+            self._console.print(
+                f"{theme.GLYPH_TOOL}  attached: {', '.join(attached)}", style="tool"
+            )
+            text = mentions.resolve_mentions(text, self._cwd)
+        _log.info("turn start attached=%d", len(attached))
         events = self._stream_turn(self._base_url, text)
         while True:
             # Breathing room ABOVE the loading region: print the gap before the spinner
             # starts, so it's there during loading — not popped in after the reply arrives.
             self._console.print()
-            phase = self._consume_until_phase(events, verb)
+            phase, printed_activity = self._consume_until_phase(events, verb)
             if phase is None:
                 return
             seg = classify(phase)
+            if printed_activity:
+                # One blank line separates the ⎿ tool/output activity block from the reply
+                # or card, so tool-heavy turns read as cleanly as pure-text ones.
+                self._console.print()
             if seg.kind in ("plan", "pending"):
-                self._console.print(render.render_rich(seg))
-                ans = self._ask(seg.kind)
+                ans = self._ask(seg)
                 events = self._stream_answer(self._base_url, ans.value, ans.text)
                 continue
             # done / error
@@ -164,30 +245,30 @@ class Shell:
             self._console.print()
             return
 
-    def _consume_until_phase(self, events: Any, verb: str) -> dict[str, Any] | None:
-        """Drain streaming (token/tool) events — rendering them live — and return the phase event.
+    def _consume_until_phase(self, events: Any, verb: str) -> tuple[dict[str, Any] | None, bool]:
+        """Drain streaming events, keeping the spinner up, and return the phase event.
 
-        The spinner runs alone until the *first* streaming event (token or tool) arrives —
-        it and the token ``rich.Live`` region must never be active at once, since both drive
-        their own ``Live`` on the same console and a nested one simply never paints. On that
-        first event the spinner is torn down and the token ``Live`` takes over for the rest
-        of the phase: reply tokens accumulate into ``buffer`` and repaint the transient region
-        as plain text (``⏺ <buffer>``); tool ``start`` events print as dim ``⎿`` lines above
-        it. Because the region is transient, it clears the instant a phase event arrives —
-        the caller then prints ``render.render_rich(seg)`` (the finalized markdown reply), so
-        the live preview and the finalized text never both linger in the scrollback.
+        The spinner (its own threaded ``Live``, with a ticking ``Working… · Ns`` byline) runs
+        for the WHOLE phase — through tool activity, command output, *and* reply generation —
+        so there's always calm, non-jittery liveness (no frozen screen even on a long or silent
+        command). Reply *tokens* are consumed but deliberately **not** painted live: repainting
+        a growing, wrapping buffer in a terminal jitters, and the spinner already signals
+        progress — so the finalized markdown reply is rendered once by the caller when the phase
+        event arrives, instead of a shaky word-by-word preview. Tool ``start`` events and dim
+        ``⎿`` command-output lines are committed with ``console.print``, which ``rich`` draws
+        *above* the running spinner.
 
-        Returns the phase dict, or None if the stream ended without one.
+        Returns ``(phase_dict, printed_activity)`` — the phase event (or ``None`` if the
+        stream ended without one), and whether any tool/output activity line was committed
+        to the scrollback (so the caller can insert one separating blank line before the
+        reply).
         """
-        from rich.live import Live
         from rich.text import Text
 
-        buffer = ""
-        live_region = Live(console=self._console, refresh_per_second=12, transient=True)
+        printed_activity = False
+        prev: dict[str, str] = {}
         spin_cm = self._spin(self._console, verb)
         spin_cm.__enter__()
-        spinning = True
-        live: Live | None = None
         try:
             for evt in events:
                 if isinstance(evt, dict) and evt.get("status") in (
@@ -196,65 +277,89 @@ class Shell:
                     "done",
                     "error",
                 ):
-                    return evt
+                    return evt, printed_activity
+                if isinstance(evt, dict) and evt.get("type") == "plan_update":
+                    for todo in evt.get("todos") or []:
+                        step = str(todo.get("step", ""))
+                        status = str(todo.get("status", ""))
+                        if (
+                            step
+                            and prev.get(step) != status
+                            and status
+                            in (
+                                "in_progress",
+                                "done",
+                                "blocked",
+                            )
+                        ):
+                            self._console.print(render.render_todo(status, step))
+                            printed_activity = True
+                        if step:
+                            prev[step] = status
+                    continue
                 seg = classify(evt)
-                is_tool_start = seg.kind == "tool" and evt.get("event") == "start"
-                if (seg.kind == "token" or is_tool_start) and spinning:
-                    spin_cm.__exit__(None, None, None)
-                    spinning = False
-                    live = live_region.__enter__()
-                if seg.kind == "token":
-                    buffer += seg.text
-                    assert live is not None
-                    live.update(Text(f"{theme.GLYPH_ASSISTANT} {buffer}", style="assistant"))
-                elif is_tool_start:
+                if seg.kind == "tool" and evt.get("event") == "start":
                     self._console.print(render.render_tool(seg))
+                    printed_activity = True
+                elif seg.kind == "output":
+                    # Command output, streamed live under the ⎿ tool line (dim), as it arrives.
+                    self._console.print(Text(seg.text, style="tool"))
+                    printed_activity = True
+                # token (and any other) events are consumed but not displayed — the spinner
+                # covers liveness; the finalized reply is rendered by the caller (see above).
         finally:
-            exc_info = sys.exc_info()
-            if spinning:
-                spin_cm.__exit__(*exc_info)
-            elif live is not None:
-                live_region.__exit__(*exc_info)
-        return None
+            spin_cm.__exit__(*sys.exc_info())
+        return None, printed_activity
 
-    def _ask(self, kind: str) -> Answer:
-        """Read a plan/permission choice, re-asking until it parses; EOF/Ctrl-C → reject."""
-        parse = parse_plan_choice if kind == "plan" else parse_confirm_choice
-        while True:
-            try:
-                raw = self._reader("> ")
-            except KeyboardInterrupt:
-                return Answer("reject") if kind == "plan" else Answer("no")
-            if raw is None:
-                return Answer("reject") if kind == "plan" else Answer("no")
-            ans = parse(raw)
-            if ans is None:
-                continue
-            if ans.value == "refine":  # plan edit: take the follow-up as the refinement
+    def _ask(self, seg: Any) -> Answer:
+        """Resolve a plan/permission gate with a single keypress; the prompt self-erases.
+
+        Permission: ``y``/``n`` (default no). Plan: the plan is printed (it's content), then
+        ``y``/``e``/``n`` — ``e`` (edit) opens a one-line box for the refinement. A cancel
+        (Ctrl-C / Escape) declines.
+        """
+        if seg.kind == "plan":
+            self._console.print(render.render_reply(seg.text))  # the plan stays as content
+            value = self._chooser(
+                "Approve this plan?",
+                [("y", "yes", "approve"), ("e", "edit", "refine"), ("n", "no", "reject")],
+            )
+            if value == "refine":  # take the follow-up line as the refinement
                 try:
                     follow = self._reader("what should change? ")
                 except KeyboardInterrupt:
                     return Answer("reject")
-                if follow is None:
-                    return Answer("reject")
-                return Answer("refine", follow.strip())
-            return ans
+                return Answer("refine", (follow or "").strip()) if follow else Answer("reject")
+            return Answer(value or "reject")
+        # permission gate: the ⎿ activity line above already shows the command
+        value = self._chooser(seg.text, [("y", "yes", "yes"), ("n", "no", "no")])
+        return Answer(value or "no")
 
 
 def run(base_url: str, cwd: str) -> None:  # pragma: no cover - launches the interactive app
     """Launch the inline REPL against ``base_url`` for the project at ``cwd``."""
     from rich.console import Console
 
-    from autobot.cli.prompt import make_reader, make_session
+    from autobot.cli.autoresume import BackgroundEvents
+    from autobot.cli.prompt import make_auto_reader, make_session
     from autobot.cli.theme import jack_theme
 
     console = Console(theme=jack_theme())
-    reader = make_reader(make_session(cwd, commands.COMMANDS))
-    Shell(
-        base_url,
-        cwd,
-        stream_turn=client.stream_turn,
-        stream_answer=client.stream_answer,
-        reader=reader,
-        console=console,
-    ).run()
+    session = make_session(cwd, commands.COMMANDS)
+    # Hold the daemon's /coder/events stream open so a background task finishing while the
+    # prompt is idle wakes it and auto-resumes (make_auto_reader returns AUTO_CONTINUE).
+    events = BackgroundEvents(base_url)
+    events.start()
+    reader = make_auto_reader(session, events)
+    try:
+        Shell(
+            base_url,
+            cwd,
+            stream_turn=client.stream_turn,
+            stream_answer=client.stream_answer,
+            reader=reader,
+            console=console,
+            events=events,
+        ).run()
+    finally:
+        events.close()

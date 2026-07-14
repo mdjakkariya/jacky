@@ -72,3 +72,75 @@ def test_run_turn_without_on_event_is_unchanged(tmp_path: Any) -> None:
     harness = AgentHarness(_FakeModel(), store, cwd=".", model_name="fake")
     reply = harness.run_turn("do it", lambda c: ToolResult(name=c.name, content="ok", ok=True))
     assert reply == "done"  # no on_event: same result, no error
+
+
+def test_output_sink_emits_output_events_during_execute(tmp_path: Any) -> None:
+    from pathlib import Path
+
+    from autobot.core.streaming import output_sink
+
+    store = SessionStore(str(Path(tmp_path) / "sessions"))
+    harness = AgentHarness(_FakeModel(), store, cwd=".", model_name="fake")
+    events: list[dict[str, Any]] = []
+
+    def execute(call: ToolCall) -> ToolResult:
+        sink = output_sink.get()  # the harness sets this for the duration of the call
+        assert sink is not None
+        sink("first line")
+        sink("second line")
+        return ToolResult(name=call.name, content="ok", ok=True)
+
+    harness.run_turn("do it", execute, on_event=events.append)
+
+    outputs = [e for e in events if e.get("type") == "output"]
+    assert [e["text"] for e in outputs] == ["first line", "second line"]
+    assert all(e["name"] == "read_file" for e in outputs)  # bound to the executing tool
+    assert output_sink.get() is None  # reset after the turn
+
+
+class _FlailingModel:
+    """Issues a NEW distinct tool call every round (never a repeat) that always fails."""
+
+    def __init__(self) -> None:
+        self.rounds = 0
+
+    def begin_turn(self, session: Any, user_text: str) -> None: ...
+    def record_results(self, session: Any, results: list[tuple[ToolCall, ToolResult]]) -> None: ...
+    def handle_discovery(self, session: Any, call: ToolCall) -> str | None:
+        return None
+
+    def finalize_turn(self, session: Any) -> list[dict[str, Any]]:
+        return []
+
+    def final_answer_no_tools(self, session: Any) -> str:
+        return "forced final answer"
+
+    def complete(self, prompt: str, *, temperature: float = 0.0) -> str:
+        return ""
+
+    def send(self, session: Any, on_event: Any = None) -> ChatResponse:
+        self.rounds += 1
+        # A fresh, distinct command each round -> not a doom-repeat and not all-repeat, but
+        # it never succeeds, so the diminishing-returns guard is what must stop the turn.
+        return ChatResponse(
+            text="",
+            tool_calls=[ToolCall(name="run_command", arguments={"command": f"try-{self.rounds}"})],
+        )
+
+
+def test_run_turn_stops_after_unproductive_rounds(tmp_path: Any) -> None:
+    from pathlib import Path
+
+    store = SessionStore(str(Path(tmp_path) / "sessions"))
+    model = _FlailingModel()
+    # A high backstop so it's the diminishing-returns guard (not max_rounds) that stops us.
+    harness = AgentHarness(
+        model, store, cwd=".", model_name="fake", max_rounds=50, max_unproductive=3
+    )
+
+    def execute(call: ToolCall) -> ToolResult:
+        return ToolResult(name=call.name, content="boom", ok=False)  # always fails
+
+    reply = harness.run_turn("do it", execute)
+    assert model.rounds == 3  # stopped at max_unproductive, NOT at max_rounds (50)
+    assert "boom" in reply  # surfaces the last failure, not a generic "step limit"

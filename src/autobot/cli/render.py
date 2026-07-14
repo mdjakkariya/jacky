@@ -8,14 +8,13 @@ the input-prompt line the shell already leaves in the scrollback, so it isn't re
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from autobot.cli import theme
 from autobot.cli.classify import Segment
 
 if TYPE_CHECKING:
     from rich.console import RenderableType
-    from rich.text import Text
 
 
 def render_plain(seg: Segment) -> str:
@@ -74,20 +73,40 @@ def render_tool(seg: Segment) -> RenderableType:
     return Text(f"{theme.GLYPH_TOOL}  {seg.text}", style="tool")
 
 
-def _proceed(*labels: str) -> Text:
-    """A ``Proceed?   [1] … [2] …`` choice line with teal-numbered options."""
+def render_todo(status: str, step: str) -> RenderableType:
+    """A single todo progress line: a status glyph + the step text.
+
+    ``done`` → ``☑`` (teal), ``in_progress`` → ``◐`` (dim), ``blocked`` → ``⊘`` (amber),
+    anything else (e.g. ``pending``) → ``☐`` (dim).
+    """
     from rich.text import Text
 
-    line = Text("Proceed?", style="bold")
-    for i, label in enumerate(labels, 1):
-        line.append("   ")
-        line.append(f"[{i}]", style="teal")
-        line.append(f" {label}")
-    return line
+    glyph, style = {
+        "done": ("☑", "teal"),
+        "in_progress": ("◐", "dim"),
+        "blocked": ("⊘", "amber"),
+    }.get(status, ("☐", "dim"))
+    return Text(f"{glyph} {step}", style=style)
+
+
+def render_task_pickup(events: list[dict[str, Any]]) -> RenderableType:
+    """A notice that finished background task(s) are being auto-picked-up (auto-resume).
+
+    Shown when the REPL was idle and a backgrounded command completed: the agent continues
+    on its own with the result. Teal ``✓`` if all succeeded, amber ``✕`` if any failed.
+    """
+    from rich.text import Text
+
+    ids = ", ".join(str(e.get("id", "task")) for e in events)
+    ok = all(e.get("status") == "done" for e in events)
+    mark = "✓" if ok else "✕"
+    noun = "subagent" if all(e.get("kind") == "agent" for e in events) else "background"
+    text = f"⚑ {noun} {ids} finished {mark} — picking it up…"
+    return Text(text, style="teal" if ok else "amber")
 
 
 def render_plan_card(reply: str) -> RenderableType:
-    """The plan: the assistant's numbered plan, then the approve / edit / cancel choices.
+    """The plan: the assistant's numbered plan, then the ``[y]es · [e]dit · [n]o`` choices.
 
     The reply already contains the numbered steps, so they are shown once (via the reply)
     and never re-listed.
@@ -95,15 +114,23 @@ def render_plan_card(reply: str) -> RenderableType:
     from rich.console import Group
     from rich.text import Text
 
-    return Group(render_reply(reply), Text(""), _proceed("Yes", "Edit", "No"))
+    choices = Text()
+    choices.append("[y]es", style="teal")
+    choices.append("  ·  ")
+    choices.append("[e]dit", style="teal")
+    choices.append("  ·  ")
+    choices.append("[n]o", style="teal")
+    return Group(render_reply(reply), Text(""), choices)
 
 
 def render_permission_card(prompt_text: str) -> RenderableType:
-    """The permission prompt: the (amber) request, then the run / decline choices."""
+    """The permission prompt: the (amber) request, then a plain ``[y/n]`` choice line."""
     from rich.console import Group
     from rich.text import Text
 
-    return Group(Text(prompt_text, style="amber"), Text(""), _proceed("Yes, run it", "No"))
+    choices = Text()
+    choices.append("[y/n]", style="teal")
+    return Group(Text(prompt_text, style="amber"), Text(""), choices)
 
 
 def render_welcome(ctx: dict[str, str]) -> RenderableType:
@@ -206,3 +233,64 @@ def render_checkpoints(rows: list[dict[str, str]]) -> RenderableType:
         if i < len(rows) - 1:
             out.append("\n")
     return out
+
+
+def _fmt_usd(bucket: dict[str, Any]) -> str:
+    """`$X.XXXX`, prefixed `≥` when some rows were unpriced."""
+    usd = float(bucket.get("usd", 0.0) or 0.0)
+    prefix = "≥ " if bucket.get("has_unpriced") else ""
+    return f"{prefix}${usd:.4f}"
+
+
+def render_cost(payload: dict[str, Any], width: int) -> RenderableType:
+    """A compact usage summary: this session + today/7d/all-time + top models/workspaces."""
+    from rich.console import Group
+    from rich.table import Table
+    from rich.text import Text
+
+    rollups = payload.get("rollups") or {}
+    totals = rollups.get("totals") or {}
+    if not totals or totals.get("all_time", {}).get("turns", 0) == 0:
+        return Text("No usage recorded yet. Run a turn, then try /cost again.", style="dim")
+
+    parts: list[RenderableType] = []
+    session = rollups.get("session")
+    model = payload.get("model") or "?"
+    provider = payload.get("provider") or "?"
+    if session:
+        parts.append(
+            Text(
+                f"This session · {model} ({provider}) · {session['turns']} turns · "
+                f"in {session['in']:,} / out {session['out']:,} · "
+                f"cache r {session['cache_read']:,} / w {session['cache_write']:,} · "
+                f"{_fmt_usd(session)}",
+                style="teal",
+            )
+        )
+
+    table = Table(show_header=True, header_style="dim", expand=False, pad_edge=False)
+    table.add_column("Window")
+    table.add_column("Turns", justify="right")
+    table.add_column("Tokens", justify="right")
+    table.add_column("Cache r/w", justify="right")  # cache tokens ARE billed (included in Cost)
+    table.add_column("Cost", justify="right")
+    for label, key in (("Today", "today"), ("Last 7 days", "last_7d"), ("All time", "all_time")):
+        b = totals.get(key)
+        if b:
+            cache = f"{b['cache_read']:,}/{b['cache_write']:,}"
+            table.add_row(label, f"{b['turns']:,}", f"{b['tokens']:,}", cache, _fmt_usd(b))
+    parts.append(table)
+
+    models = rollups.get("by_model") or []
+    if models:
+        top = "  ".join(f"{m['key']} {_fmt_usd(m)}" for m in models[:3])
+        parts.append(Text(f"Top models: {top}", style="dim"))
+    parts.append(
+        Text(
+            "Cache read/write tokens are billed and included in Cost. List prices "
+            "(no promo assumed — actual may be lower); the provider console is authoritative. "
+            "/cost open for the full dashboard.",
+            style="dim",
+        )
+    )
+    return Group(*parts)

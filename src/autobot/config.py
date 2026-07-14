@@ -163,6 +163,11 @@ class Settings:
     # "pytest*") are trusted to run with less friction. Empty = baseline + gate only.
     command_allowlist: list[str] = field(default_factory=list)
     command_blocklist: list[str] = field(default_factory=list)
+    # Max characters of a command's output handed to the model inline. Larger output is
+    # spilled to .jack/command-output/<id>.log and only a tail-biased excerpt + the path is
+    # returned — the human still sees the full stream live. Protects the model's context
+    # (output is re-sent every turn, so it costs disproportionately) without losing detail.
+    command_output_model_cap: int = 10_000
     # Which agent this process is: "assistant" (voice/chat helper, default) or "coder"
     # (a code-editing agent — swaps in the code tools + a coding system prompt). Set by the
     # daemon's --profile flag or settings.json; the jack CLI runs a coder-profile daemon.
@@ -171,6 +176,14 @@ class Settings:
     # is far too small for code — a coder plan or reply would truncate — so the coder build
     # raises it via _apply_profile_overrides. The assistant's budget is left untouched.
     coder_llm_max_tokens: int = 4096
+    # How many plan→tool→result rounds one turn may run before the harness forces a final
+    # answer. The assistant default is small (short voice turns); the coder profile raises it
+    # via _apply_profile_overrides so a real multi-step task (explore → run tests → diagnose →
+    # fix → re-run) finishes in one turn instead of stopping at "I hit my step limit". The
+    # harness's doom-loop + consecutive-failure guards still stop genuine spinning, and prompt
+    # caching keeps the extra rounds cheap (the re-sent prefix is a cache read at 0.1x).
+    max_tool_rounds: int = 8
+    coder_max_tool_rounds: int = 50
     # A per-workspace coder daemon shuts itself down after this many seconds with no
     # requests, so daemons for projects you've stopped using don't pile up. 0 disables it.
     coder_idle_timeout_s: int = 1200
@@ -297,6 +310,11 @@ class Settings:
     meeting_overlap_s: float = 3.0
     # "dual_stream" (you/participants) today; a finer per-speaker mode can be added here.
     meeting_diarization: str = "dual_stream"
+    # --- usage / cost tracking ---
+    # Usage/cost tracking: append one row per turn to a global JSONL ledger. Off disables
+    # all recording. usage_ledger_path is empty -> the default ~/.autobot/usage.jsonl.
+    usage_tracking: bool = True
+    usage_ledger_path: str = ""
     # --- debugging / logging ---
     session_log: bool = True
     session_dir: str = _DEFAULT_SESSION_DIR

@@ -122,6 +122,55 @@ adds no runtime dependency, matching the project's on-device, minimal-dependency
 ethos. See `docs/superpowers/specs/2026-06-28-ui-architecture-design.md` for the
 research basis (GitHub Catalyst, GOV.UK Frontend, the "HTML web components" canon).
 
+## Async tasks (background execution → multi-agent)
+
+Work that runs *off* a turn goes through one primitive in `src/autobot/tasks/`, so the
+same shape serves two features: a backgrounded command today (`kind="command"`) and,
+later, concurrent subagents (`kind="agent"`). Both reduce to *a unit of work that runs off
+the main turn and whose completion is delivered back as a notification that re-engages the
+agent* — build it once, add the second kind later without a rewrite.
+
+Two decoupled pieces:
+
+- **`TaskRegistry`** — a thread-safe, process-global store of task rows
+  (`running → done/failed`). It lives in the daemon, so a task started in one turn is still
+  tracked in the next. It only records state; it never spawns work or decides who is told.
+- **`NotificationInbox`** — a per-session FIFO of completion notes (plain strings, so it
+  carries a command result now and a subagent's return later the same way).
+
+Flow for a backgrounded `run_command(run_in_background=True)`: the tool reads the running
+session id from the `active_session_id` context var, registers a `command` task, and spawns
+a daemon thread that streams output to `<cwd>/.jack/tasks/<id>.log`. When the process exits,
+that thread marks the registry and pushes a note to the session's inbox. `AgentHarness`
+drains its session's inbox at the top of every turn and folds any notes into the model's
+context — so the result is available on the next turn with no polling. This keeps the
+no-sleep-poll guidance honest: the model is *told* to background long work and *told* the
+result later, rather than blocking or re-checking.
+
+**Auto-resume** closes the loop so the result surfaces even while the user is idle, not just
+on their next message. The registry has an `add_listener` seam that fires when a task
+settles; the daemon exposes those as a persistent `GET /coder/events` SSE
+(`Orchestrator.subscribe_coder_events`). The CLI keeps that stream open on a background
+thread (`cli/autoresume.py`); when a task finishes while the prompt is idle it wakes the
+prompt (the auto-reader returns an `AUTO_CONTINUE` sentinel) and the shell runs a
+continuation turn on its own — reusing the normal `/coder/turn` path, so the harness folds
+the result in exactly as above. It never interrupts mid-typing: the waker fires only on an
+empty, running prompt; otherwise the result waits for the next real turn.
+
+**Subagents** are the `kind="agent"` instance of the same primitive (`agent/subagent.py`).
+The coordinator's `spawn_agent` tool fans out focused, READ-ONLY research agents that run in
+parallel: each is a fresh, *isolated* `AgentHarness` (its own model + `Session` — the model
+adapters keep per-turn state, so a subagent can never share the coordinator's — with a
+tighter turn budget), driven through `subagent_executor`, which refuses anything at or above
+`Risk.WRITE` and refuses `spawn_agent` itself (so a subagent can't mutate the workspace or
+recurse). A subagent runs as an `agent` task off the turn; on completion its findings are
+pushed to the *parent* session's inbox, so the coordinator picks them up through the same
+auto-resume path — no polling. Concurrency is capped; per-agent cost falls out of the usage
+ledger's `session_id` tagging. Safety composes: a subagent is never more privileged than the
+coordinator, and (being read-only) it can't spawn processes, so there are no orphaned tasks
+to reap. Write-capable subagents (git-worktree isolation for parallel edits) are a future
+extension; today the coordinator does the edits itself using subagents' findings.
+
 ## Reference projects to study
 
 - **Home Assistant voice pipeline + Wyoming protocol** — an existing open standard

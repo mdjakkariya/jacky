@@ -146,3 +146,9 @@ def test_write_settings_roundtrips_and_leaves_no_temp(tmp_path: Path) -> None:
     assert read_settings(p) == {"llm_provider": "anthropic"}
     # atomic write must not leave a stray temp file behind
     assert [f.name for f in tmp_path.iterdir()] == ["settings.json"]
+
+
+def test_command_output_model_cap_default() -> None:
+    from autobot.config import Settings
+
+    assert Settings().command_output_model_cap == 10_000

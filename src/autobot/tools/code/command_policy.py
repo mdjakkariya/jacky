@@ -1,7 +1,10 @@
 """Command allow/blocklist classification for shell commands the coding agent proposes.
 
 ``classify_command`` decides whether a shell command should be blocked outright, run
-without confirmation, or held for approval — before it ever reaches an executor. The
+without confirmation, or held for approval — before it ever reaches an executor. A
+built-in read-only baseline (:func:`is_read_only_command`) lets genuinely read-only
+commands (test/build/lint runners, ``git status``/``diff``, ``ls``/``cat``/``grep``,
+``--version``/``--help``) run without a prompt, symmetric with the dangerous baseline. The
 built-in dangerous-command baseline is matched with anchored regular expressions
 precise enough to catch genuinely catastrophic invocations (whole-filesystem wipes,
 fork bombs, piping a download straight into a shell, formatting/overwriting a raw
@@ -55,6 +58,90 @@ _DANGEROUS: tuple[re.Pattern[str], ...] = (
     re.compile(r">\s*/dev/(sd|nvme|disk)", re.IGNORECASE),
 )
 
+# Leading programs whose invocations only read/inspect, or run the project's own
+# test/build/lint scripts (which the user has classified as safe). Matched against the
+# leading program of each pipeline stage. Kept precise: only subcommands that are
+# read-only for ALL argument forms are listed — e.g. `git status`/`git diff` are in, but
+# `git branch`/`git remote` (which have mutating `-D`/`add` variants) and `find` (which
+# has `-delete`/`-exec`) are deliberately left out so they still confirm.
+_SAFE_LEADERS: tuple[str, ...] = (
+    # test / build / lint runners
+    r"npx\s+playwright\s+test",
+    r"playwright\s+test",
+    r"jest",
+    r"vitest",
+    r"pytest",
+    r"go\s+test",
+    r"cargo\s+test",
+    r"(npm|pnpm|yarn)\s+(run\s+)?(test|build|lint|typecheck|check)",
+    # git — read-only subcommands only
+    r"git\s+(status|log|diff|show|rev-parse|ls-files)",
+    r"git\s+config\s+--get",
+    # filesystem / text reads
+    r"ls",
+    r"cat",
+    r"head",
+    r"tail",
+    r"grep",
+    r"rg",
+    r"wc",
+    r"pwd",
+    r"stat",
+    r"file",
+    r"which",
+    r"tree",
+    r"du",
+    r"df",
+    r"echo",
+    # package info
+    r"npm\s+ls",
+    r"(pip|pip3)\s+(list|show)",
+)
+
+# Safe programs a pipeline may pipe INTO — pagers/filters with no write/exec capability.
+# Deliberately excludes: `tee` (writes files), `sort -o`/`uniq OUT` (write via a flag or a
+# positional output file), `sed -i`/`awk` (can write/exec), and `less` (can shell out /
+# `LESSOPEN`).
+_SAFE_FILTERS = r"(tail|head|cat|grep|rg|wc)"
+
+# Flags that turn an otherwise read-only tool into an arbitrary-command or file-write
+# vector (argv smuggling). If any appear, the command is NOT read-only — it must go
+# through the confirm prompt like any other acting command, never auto-run. Guards the
+# permission gate against bypass via e.g. `rg --pre <cmd>` (ripgrep runs the preprocessor
+# command per file) or `git diff --output=<file>`. `--pre` is matched only as a whole
+# token so `git log --pretty` is unaffected.
+_EXEC_WRITE_FLAG = re.compile(
+    r"(?:^|\s)(?:"
+    r"--pre-glob|--pre|--search-zip|--hostname-bin"  # ripgrep: run an external command
+    r"|--output-file|--output"  # write output to a file (sort/git/…)
+    r"|--ext-diff|--ext-cmd"  # git: run an external diff/command
+    r"|-execdir|-exec|-delete"  # find-style exec/delete (defence in depth)
+    r")(?:=|\s|$)",
+    re.IGNORECASE,
+)
+
+# One safe stage: a safe leading program + args that introduce no new command or file
+# write (no `|;&<>$` or backtick), optionally ending in `2>&1`.
+_SAFE_STAGE = (
+    r"(?:" + "|".join(_SAFE_LEADERS) + r")"
+    r"(?:\s+[^|;&<>`$]*)?"
+    r"(?:\s+2>&1)?"
+)
+
+# A read-only command: one safe stage, then zero or more pipes into safe filters.
+_SAFE_READONLY = re.compile(
+    r"^" + _SAFE_STAGE + r"(?:\s*\|\s*" + _SAFE_FILTERS + r"(?:\s+[^|;&<>`$]*)?)*\s*$",
+    re.IGNORECASE,
+)
+
+# Any program invoked purely for information (`--version`/`--help`/`--list`) is read-only
+# regardless of the program, provided the line has no shell operators (the char classes
+# admit only plain word args).
+_INFO_ONLY = re.compile(
+    r"^[\w./@+-]+(?:\s+[\w./@=:+-]+)*\s+--(?:version|help|list)(?:\s+[\w./@=:+-]+)*$",
+    re.IGNORECASE,
+)
+
 _WHITESPACE_RUN = re.compile(r"\s+")
 
 
@@ -66,6 +153,28 @@ def _normalize(command: str) -> str:
 def _matches_dangerous_baseline(normalized: str) -> bool:
     """Return True if ``normalized`` matches any built-in dangerous-command regex."""
     return any(pattern.search(normalized) for pattern in _DANGEROUS)
+
+
+def is_read_only_command(command: str) -> bool:
+    """Whether ``command`` only reads/inspects (or runs a project test/build/lint script).
+
+    A read-only command auto-runs without a confirmation prompt (still audited by the
+    gate). Conservative: any file-write redirect (``>``/``>>``), command chaining
+    (``;``/``&&``/``||``/``&``), command substitution (``$(...)``/backticks), an
+    exec/write-enabling flag (``rg --pre``, ``--output``, ``--ext-diff`` — see
+    :data:`_EXEC_WRITE_FLAG`), or an unrecognized leading program makes it non-read-only,
+    so it falls through to confirm. Never raises; unparseable input is treated as not
+    read-only.
+    """
+    try:
+        normalized = _normalize(command or "")
+    except (TypeError, AttributeError):
+        return False
+    if not normalized or _matches_dangerous_baseline(normalized):
+        return False
+    if _EXEC_WRITE_FLAG.search(normalized):
+        return False  # argv smuggling (e.g. `rg --pre <cmd>`, `git diff --output=<file>`)
+    return bool(_SAFE_READONLY.match(normalized) or _INFO_ONLY.match(normalized))
 
 
 def _matches(pattern: str, normalized: str) -> bool:
@@ -123,5 +232,8 @@ def classify_command(
 
     if _matches_any(allow_patterns, normalized):
         return "allow", "matches a user allowlist entry"
+
+    if is_read_only_command(normalized):
+        return "allow", "safe read-only command"
 
     return "confirm", "not on the allowlist; needs approval"

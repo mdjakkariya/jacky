@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 import pytest
 
 pytest.importorskip("pyte")
@@ -26,28 +28,64 @@ def test_working_and_turn_started() -> None:
     # A turn has visibly started on a spinner, a tool line, or a gate — but not at idle.
     assert markers.turn_started(spinner)
     assert markers.turn_started("  ⎿  Read foo.py")
-    assert markers.turn_started("Proceed?   [1] Yes   [2] Edit")
+    assert markers.turn_started("(y) yes   (e) edit   (n) no")
     assert not markers.turn_started("⏺ Done.\n❯ ")
 
 
 def test_awaiting_reply_is_the_live_gate_prompt() -> None:
-    # A LIVE gate shows the '>' answer prompt as the last line.
-    assert markers.awaiting_reply("Proceed?   [1] Yes   [2] Edit\n> ")
-    assert markers.awaiting_reply("Run `pytest`?\nProceed?   [1] Yes, run it   [2] No\n>")
-    # An ANSWERED gate whose committed 'Proceed?' text lingers above the idle prompt is NOT
-    # live — this is the stale-card case that used to trigger spurious re-approvals.
-    assert not markers.awaiting_reply("Proceed?   [1] Yes   [2] Edit\n⏺ Done.\n❯ ")
+    # The single-key prompt is transient (erased once answered), so its mere presence is
+    # the live-gate signal — no stale-card case to disambiguate.
+    assert markers.awaiting_reply("Run this command?\n\n  $ mkdir x\n(y) yes   (n) no")
+    assert markers.awaiting_reply("Approve this plan?\n(y) yes   (e) edit   (n) no")
     assert not markers.awaiting_reply("⏺ Done.\n❯ ")
     assert not markers.awaiting_reply("⠹ Working…  ·  esc to interrupt · 2s")
     assert "awaiting_reply" in markers.BY_NAME
 
 
 def test_plan_vs_permission_gate() -> None:
-    plan = "Here's my plan\nProceed?   [1] Yes   [2] Edit   [3] No\n> "
-    perm = "Run `pytest`?\nProceed?   [1] Yes, run it   [2] No\n> "
+    plan = "Approve this plan?\n(y) yes   (e) edit   (n) no"
+    perm = "Run this command?\n\n  $ mkdir x\n(y) yes   (n) no"
     assert markers.plan_card(plan) and not markers.permission_card(plan)
     assert markers.permission_card(perm) and not markers.plan_card(perm)
     assert markers.any_gate(plan) and markers.any_gate(perm)
+
+
+def test_cost_view_matches_the_rendered_cost_summary() -> None:
+    # Render the REAL /cost output (same renderer the TUI uses) and assert the marker fires
+    # on it but not on an ordinary reply — so the E2E /cost scenario syncs to the true screen.
+    from rich.console import Console
+
+    from autobot.cli import render
+
+    bucket: dict[str, Any] = {
+        "turns": 1,
+        "in": 52,
+        "out": 4079,
+        "cache_read": 219067,
+        "cache_write": 54908,
+        "tokens": 4131,
+        "usd": 0.333,
+        "has_unpriced": False,
+    }
+    payload: dict[str, Any] = {
+        "ctx": {"model": "claude-sonnet-5"},
+        "provider": "anthropic",
+        "model": "claude-sonnet-5",
+        "rollups": {
+            "totals": {"today": bucket, "last_7d": bucket, "last_30d": bucket, "all_time": bucket},
+            "daily": [],
+            "by_model": [{"key": "claude-sonnet-5", **bucket}],
+            "by_provider": [],
+            "by_workspace": [],
+            "session": bucket,
+        },
+    }
+    console = Console(width=90)
+    with console.capture() as cap:
+        console.print(render.render_cost(payload, 90))
+    screen = cap.get()
+    assert markers.cost_view(screen)
+    assert not markers.cost_view("⏺ Done.\n❯ ")
 
 
 def test_by_name_maps_all() -> None:
@@ -59,6 +97,7 @@ def test_by_name_maps_all() -> None:
         "any_gate",
         "working",
         "turn_started",
+        "cost_view",
         "error",
         "idle_prompt",
     ):

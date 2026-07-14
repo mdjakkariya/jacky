@@ -55,15 +55,43 @@ def test_act_allowlisted_runs_pre_authorized() -> None:
 def test_act_confirm_command_asks_gate() -> None:
     gate = _FakeGate({"run_command": Risk.DESTRUCTIVE})
     ex = act_executor(gate, allowlist=[], blocklist=[])  # type: ignore[arg-type]
-    ex(ToolCall(name="run_command", arguments={"command": "npm run build"}))
+    # npm install is not read-only, so it falls through to the gate (confirm).
+    ex(ToolCall(name="run_command", arguments={"command": "npm install"}))
     assert gate.calls == [("run_command", False)]  # falls through → gate confirms (asks CLI)
 
 
 def test_act_auto_mode_runs_confirm_command_without_asking() -> None:
     gate = _FakeGate({"run_command": Risk.DESTRUCTIVE})
     ex = act_executor(gate, allowlist=[], blocklist=[], ask_on_confirm=False)  # type: ignore[arg-type]
-    ex(ToolCall(name="run_command", arguments={"command": "npm run build"}))
+    ex(ToolCall(name="run_command", arguments={"command": "npm install"}))
     assert gate.calls == [("run_command", True)]  # auto: pre_authorized, no ask
+
+
+def test_read_only_command_does_not_snapshot() -> None:
+    fired: list[str] = []
+    gate = _FakeGate({"run_command": Risk.DESTRUCTIVE})
+    ex = act_executor(
+        gate,  # type: ignore[arg-type]
+        allowlist=[],
+        blocklist=[],
+        before_mutation=lambda: fired.append("x"),
+    )
+    ex(ToolCall(name="run_command", arguments={"command": "git status"}))
+    assert fired == []  # read-only: no checkpoint taken
+    assert gate.calls == [("run_command", True)]  # read-only → auto-run pre-authorized
+
+
+def test_writing_command_snapshots() -> None:
+    fired: list[str] = []
+    gate = _FakeGate({"run_command": Risk.DESTRUCTIVE})
+    ex = act_executor(
+        gate,  # type: ignore[arg-type]
+        allowlist=[],
+        blocklist=[],
+        before_mutation=lambda: fired.append("x"),
+    )
+    ex(ToolCall(name="run_command", arguments={"command": "npm install"}))
+    assert fired == ["x"]  # mutating command: checkpoint taken first
 
 
 def test_act_passes_edits_straight_through() -> None:

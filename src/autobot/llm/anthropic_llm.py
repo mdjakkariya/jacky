@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import re
 from collections.abc import Sequence
+from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any
 
 from autobot.agent.chat_model import ChatResponse, OnEvent
@@ -105,6 +106,42 @@ def is_too_long_error(exc: Exception) -> bool:
     return "prompt is too long" in s or "too many tokens" in s or "context window" in s
 
 
+# Anthropic error-type tokens appear verbatim in the SDK exception's string (e.g.
+# ``'type': 'authentication_error'``), so we classify on those stable tokens rather than
+# bare HTTP status numbers — a request_id or a token count could otherwise false-match a
+# "401"/"429". The reset date is pulled from the usage-limit body when present.
+_REGAIN_RE = re.compile(r"regain access on (\d{4}-\d{2}-\d{2}(?: at [0-9:]+ ?UTC)?)", re.IGNORECASE)
+
+
+def is_usage_limit_error(exc: Exception) -> bool:
+    """True if the cloud rejected the request due to a workspace usage/spend limit.
+
+    This is a *hard* block (billing/limit layer, after the key authenticates), not a
+    transient outage — so the reply must not tell the user to "try again in a little
+    while." Detected on the distinctive phrasing of the ``invalid_request_error`` body.
+    """
+    s = str(exc).lower()
+    return "usage limit" in s or "regain access" in s
+
+
+def usage_limit_regain(exc: Exception) -> str:
+    """The 'YYYY-MM-DD at HH:MM UTC' access-returns date from a usage-limit error, or ''."""
+    match = _REGAIN_RE.search(str(exc))
+    return match.group(1) if match else ""
+
+
+def is_auth_error(exc: Exception) -> bool:
+    """True if the cloud rejected the API key itself (missing/invalid/expired)."""
+    s = str(exc).lower()
+    return "authentication_error" in s or "invalid x-api-key" in s or "permission_error" in s
+
+
+def is_rate_limited_error(exc: Exception) -> bool:
+    """True if the cloud is momentarily rate-limited or overloaded (a real retry-soon)."""
+    s = str(exc).lower()
+    return "rate_limit_error" in s or "overloaded_error" in s
+
+
 def too_long_reply() -> str:
     """Calm reply when even after trimming the turn won't fit (e.g. one giant message)."""
     return (
@@ -113,22 +150,9 @@ def too_long_reply() -> str:
     )
 
 
-# Approximate list prices in USD per million tokens (input, output), for a *cost
-# estimate* in the log — this is debugging signal, not billing. Add/adjust entries
-# as Anthropic's pricing changes; unknown models simply log tokens without a cost.
-_PRICING_USD_PER_MTOK: dict[str, tuple[float, float]] = {
-    # Keyed by model-id PREFIX so 4.x point releases match. Approximate list prices.
-    "claude-haiku-4-5": (1.0, 5.0),
-    "claude-sonnet-4-6": (3.0, 15.0),
-    "claude-opus-4": (5.0, 25.0),
-}
-# Prompt-cache multipliers applied to the base INPUT rate (Anthropic): a 5-minute cache
-# write costs 1.25x, a cache read 0.1x (90% off). Pricing these matters because a large
-# static tool prefix is almost entirely cache_read/cache_write — omitting them made
-# "advertise all tools" look free while tool search's on-demand (uncached) tool loads
-# looked expensive, which is exactly backwards from real billing.
-_CACHE_WRITE_MULT = 1.25
-_CACHE_READ_MULT = 0.1
+def _now() -> datetime:
+    """Current UTC time (a seam so tests can freeze the clock for intro pricing)."""
+    return datetime.now(timezone.utc)
 
 
 def estimate_cost_usd(
@@ -139,24 +163,22 @@ def estimate_cost_usd(
     cache_read: int = 0,
     cache_write: int = 0,
 ) -> float | None:
-    """Rough USD cost for a call, or None if the model's price isn't known here.
+    """Rough USD cost for an Anthropic call, or None if the model's price isn't known.
 
-    Prices fresh input and output at the model's list rate, plus prompt-cache tokens at
-    Anthropic's multipliers on the input rate (write 1.25x, read 0.1x). ``cache_read`` /
-    ``cache_write`` default to 0 so existing callers are unaffected; the daemon passes
-    them so the logged session cost reflects real billing rather than fresh tokens alone.
+    Thin wrapper over :func:`autobot.usage.pricing.price_usd` (the single source of prices),
+    so the context meter and the ledger agree. Cache tokens are priced at Anthropic's
+    multipliers on the input rate.
     """
-    price = next(
-        (p for prefix, p in _PRICING_USD_PER_MTOK.items() if model.startswith(prefix)), None
-    )
-    if price is None:
-        return None
-    in_rate, out_rate = price
-    return (
-        in_tokens / 1_000_000 * in_rate
-        + cache_write / 1_000_000 * in_rate * _CACHE_WRITE_MULT
-        + cache_read / 1_000_000 * in_rate * _CACHE_READ_MULT
-        + out_tokens / 1_000_000 * out_rate
+    from autobot.usage.pricing import price_usd
+
+    return price_usd(
+        "anthropic",
+        model,
+        in_tokens=in_tokens,
+        out_tokens=out_tokens,
+        cache_read=cache_read,
+        cache_write=cache_write,
+        at=_now(),
     )
 
 
@@ -277,13 +299,34 @@ def text_from_content(content: Any) -> str:
     return " ".join(p.strip() for p in parts if p.strip()).strip()
 
 
-def cloud_error_reply(_exc: Exception) -> str:
-    """A short, calm spoken reply when the cloud model can't be reached.
+def cloud_error_reply(exc: Exception) -> str:
+    """A short, calm reply when the cloud model can't be reached, tailored to the cause.
 
-    The real cause (usage limit, bad key, outage) is logged by the caller; we
-    deliberately do **not** speak the raw API error — read aloud it's long, noisy,
-    and unhelpful. The user just needs to know it's temporary and what to do now.
+    The generic transient-outage line is actively misleading for a *hard* block: a hit
+    usage limit won't clear "in a little while" (it clears on a fixed date), and a bad
+    key never will — telling the user to retry sends them in circles. So classify the
+    common, actionable failures (usage limit, auth, rate limit) and say precisely what's
+    wrong and what to do. The raw API error is still logged by the caller and never
+    spoken — read aloud it's long, noisy, and unhelpful.
     """
+    if is_usage_limit_error(exc):
+        when = usage_limit_regain(exc)
+        window = f" Access returns on {when}." if when else ""
+        return (
+            "You've reached your Anthropic workspace usage limit." + window + " Raise the "
+            "limit in your Anthropic Console, switch to a key on a workspace with room, or "
+            "use a local model in Settings to keep working."
+        )
+    if is_auth_error(exc):
+        return (
+            "Your Anthropic API key was rejected. Add a valid key in Settings (or run "
+            "'jack config set-key anthropic'), then try again."
+        )
+    if is_rate_limited_error(exc):
+        return (
+            "The cloud model is busy right now (rate-limited). Try again in a moment, or "
+            "switch to a local model in Settings."
+        )
     return (
         "The cloud model isn't responding right now. You can try again in a little "
         "while, or switch to the local model in Settings for an immediate response."
@@ -526,6 +569,20 @@ class AnthropicLanguageModel:
             cost_str,
             session.cost.in_tokens + session.cost.out_tokens,
             session.cost.usd,
+        )
+        from autobot.usage.record import record_turn
+
+        record_turn(
+            provider="anthropic",
+            model=model,
+            workspace=session.cwd,
+            session_id=session.id,
+            in_tokens=turn_in,  # RAW fresh input — not the display turn_in that folds cache_write
+            out_tokens=turn_out,
+            cache_read=cache_read,
+            cache_write=cache_write,
+            at=_now(),
+            enabled=self._settings.usage_tracking,
         )
 
     def _system(self, session: Session) -> str:

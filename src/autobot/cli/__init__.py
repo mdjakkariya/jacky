@@ -34,6 +34,8 @@ __all__ = [
     "_post",
     "_probe",
     "_prompt_user",
+    "_run_cost",
+    "_run_debug",
     "ensure_daemon",
     "is_daemon_up",
     "list_daemons",
@@ -129,6 +131,51 @@ def _run_config(action: str, rest: list[str], base_url: str) -> int:
     return run(action, rest, deps)
 
 
+def _run_cost(rest: list[str]) -> int:
+    """`jack cost` — cross-project usage from the global ledger (no daemon needed).
+
+    `--open` writes + opens the HTML dashboard; otherwise prints a terminal summary.
+    """
+    from datetime import datetime
+
+    from rich.console import Console
+
+    from autobot.cli import render
+    from autobot.config import Settings
+    from autobot.usage import ledger, rollup
+
+    rolls = rollup.summarize(ledger.read(), now=datetime.now(), session_id=None).to_dict()
+    if "--open" in rest:
+        from autobot.usage.report import write_and_open
+
+        path = write_and_open(rolls, now=datetime.now())
+        print(f"Opened the usage report ({path}).")
+        return 0
+    payload = {
+        "ctx": None,
+        "provider": Settings.load().llm_provider,
+        "model": None,
+        "rollups": rolls,
+    }
+    Console().print(render.render_cost(payload, 100))
+    return 0
+
+
+def _run_debug() -> int:
+    """`jack debug` — write a shareable session debug bundle (works with or without a daemon).
+
+    Reuses the in-REPL ``/debug`` assembler: the daemon's redacted report if it's up, else a
+    log-file report; plus the newest transcript + session usage. Handy right after cancelling a
+    stuck turn.
+    """
+    from autobot.cli import coder_commands
+
+    ws = resolve_workspace(Path.cwd(), None)
+    base_url = f"http://127.0.0.1:{workspace_port(str(ws))}"
+    print(coder_commands._debug(base_url, str(ws), coder_commands.Deps()))
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     """`jack` opens the TUI; `jack "…"` runs a request; `jack config …` manages settings."""
     argv = list(sys.argv[1:] if argv is None else argv)
@@ -145,6 +192,10 @@ def main(argv: list[str] | None = None) -> int:
     if argv and argv[0] == "config":
         action = argv[1] if len(argv) > 1 else "show"
         return _run_config(action, argv[2:], f"http://127.0.0.1:{_CODER_PORT}")
+    if argv and argv[0] == "cost":
+        return _run_cost(argv[1:])
+    if argv and argv[0] == "debug":
+        return _run_debug()
     if argv and argv[0] == "restart":
         ws = resolve_workspace(Path.cwd(), None)
         stopped = stop_workspace(str(ws))

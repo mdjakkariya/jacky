@@ -22,6 +22,7 @@ from collections.abc import Callable
 from dataclasses import replace
 from typing import TYPE_CHECKING, Any
 
+from autobot.core.streaming import active_session_id, output_sink
 from autobot.core.types import ToolCall, ToolResult
 from autobot.logging_setup import get_logger
 
@@ -30,11 +31,14 @@ if TYPE_CHECKING:
     from autobot.agent.session import Session
     from autobot.agent.session_store import SessionStore
     from autobot.core.types import ToolExecutor
+    from autobot.tasks import NotificationInbox
 
 _log = get_logger("harness")
 
-_MAX_TOOL_ROUNDS = 8  # cap the plan→tool→result loop so it can't spin forever
+_MAX_TOOL_ROUNDS = 8  # runaway backstop on the plan→tool→result loop (insurance, not the
+# normal stop — natural completion + progress guards below end a turn first)
 _DOOM_LIMIT = 4  # abort if one identical (name+args) call repeats this many times
+_MAX_UNPRODUCTIVE_ROUNDS = 3  # stop after this many rounds in a row with NO successful tool
 # Phase 2 TODO: when polling/wait tools arrive, key this on CONSECUTIVE identical
 # calls with no intervening progress (not a per-turn total) so legitimate polling
 # with identical args isn't cut off.
@@ -58,6 +62,8 @@ def tool_label(call: ToolCall) -> str:
         return f"$ {str(args.get('command', ''))[:80]}"
     if call.name in ("write_file", "edit_file", "multi_edit"):
         return f"Edited {args.get('path', '')}".strip()
+    if call.name == "spawn_agent":
+        return f"Spawned subagent: {str(args.get('label') or args.get('task', ''))[:70]}".strip()
     return call.name
 
 
@@ -73,7 +79,9 @@ class AgentHarness:
         model_name: str = "",
         max_rounds: int = _MAX_TOOL_ROUNDS,
         doom_limit: int = _DOOM_LIMIT,
+        max_unproductive: int = _MAX_UNPRODUCTIVE_ROUNDS,
         redact: Callable[[str], str] | None = None,
+        inbox: NotificationInbox | None = None,
     ) -> None:
         """Wire the harness.
 
@@ -82,12 +90,19 @@ class AgentHarness:
             store: Persists the conversation session across turns.
             cwd: Working directory recorded on the session.
             model_name: Model identifier recorded on the session.
-            max_rounds: Cap on the plan-tool-result loop per turn.
+            max_rounds: Runaway backstop on the plan-tool-result loop per turn.
             doom_limit: Times an identical call may repeat before aborting.
+            max_unproductive: Stop the turn after this many consecutive rounds that ran
+                tools but produced no successful result (diminishing-returns guard) — so a
+                model flailing with new-but-failing calls stops well before ``max_rounds``.
             redact: Optional scrubber applied to each tool result's content right
                 before it is handed to the model (e.g. to strip secrets from tool
                 output before any provider sees it). ``None`` (the default) passes
                 content through unchanged.
+            inbox: Optional per-session notification inbox. When set, any completion
+                notes for this session (e.g. a backgrounded command that finished) are
+                folded into the next turn's context so the model acts on them without the
+                user re-prompting. ``None`` disables delivery.
         """
         self._model = model
         self._store = store
@@ -95,7 +110,9 @@ class AgentHarness:
         self._model_name = model_name
         self._max_rounds = max_rounds
         self._doom_limit = doom_limit
+        self._max_unproductive = max_unproductive
         self._redact = redact
+        self._inbox = inbox
         self._session = store.create(cwd, model_name)
 
     @property
@@ -120,10 +137,16 @@ class AgentHarness:
             except Exception:  # a bad sink must never break a turn
                 _log.exception("on_event sink failed; continuing turn")
 
+        # Expose this session's id for the turn so a backgrounded run_command can tag its
+        # task and route its completion note back here. Re-set at the top of every turn, so a
+        # leak on an error path is self-correcting; reset on the normal path below.
+        sid_token = active_session_id.set(self._session.id)
+        user_text = self._fold_notifications(user_text)
         self._model.begin_turn(self._session, user_text)
         failed: dict[str, str] = {}  # anti-thrash: call key -> failure text
         seen: dict[str, int] = {}  # doom-loop: call key -> times issued this turn
         reply = ""
+        unproductive = 0  # consecutive rounds that ran tools but produced no successful result
         for _ in range(self._max_rounds):
             resp = self._model.send(self._session, on_event)
             if not resp.tool_calls:
@@ -132,12 +155,14 @@ class AgentHarness:
             _log.info("planned tools=%s", [c.name for c in resp.tool_calls])
             results: list[tuple[ToolCall, ToolResult]] = []
             all_repeat = True  # did this round only re-issue calls that already failed?
+            progressed = False  # did any tool this round actually succeed (real forward progress)?
             last_fail = ""
             doomed = False
             for call in resp.tool_calls:
                 discovery = self._model.handle_discovery(self._session, call)
                 if discovery is not None:
                     all_repeat = False  # discovery is real progress, not a failing repeat
+                    progressed = True
                     results.append((call, ToolResult(name=call.name, content=discovery, ok=True)))
                     continue
                 key = _call_key(call)
@@ -157,7 +182,18 @@ class AgentHarness:
                             "label": tool_label(call),
                         }
                     )
-                    result = execute(call)  # through the permission gate
+
+                    # Expose a live output sink for the duration of this tool call so a
+                    # streaming tool (run_command) can surface each line to the CLI as it
+                    # runs; reset after so nothing leaks between calls.
+                    def _emit_output(line: str, _name: str = call.name) -> None:
+                        emit({"type": "output", "text": line, "name": _name})
+
+                    sink_token = output_sink.set(_emit_output)
+                    try:
+                        result = execute(call)  # through the permission gate
+                    finally:
+                        output_sink.reset(sink_token)
                     out, ok = result.content, result.ok
                     emit(
                         {
@@ -168,7 +204,9 @@ class AgentHarness:
                             "ok": ok,
                         }
                     )
-                    if not result.ok:
+                    if result.ok:
+                        progressed = True
+                    else:
                         failed[key] = out
                         last_fail = out
                 results.append((call, ToolResult(name=call.name, content=out, ok=ok)))
@@ -188,11 +226,34 @@ class AgentHarness:
                 _log.info("stopping: round repeated only previously-failed tool calls")
                 reply = last_fail or "I couldn't complete that, so I stopped."
                 break
+            unproductive = 0 if progressed else unproductive + 1
+            if unproductive >= self._max_unproductive:
+                _log.info("stopping: %d rounds with no successful progress", unproductive)
+                reply = last_fail or "I couldn't make progress after several tries, so I stopped."
+                break
         else:
             reply = self._model.final_answer_no_tools(self._session)
         new_events = self._model.finalize_turn(self._session)
         self._store.append(self._session, new_events)
+        active_session_id.reset(sid_token)
         return reply
+
+    def _fold_notifications(self, user_text: str) -> str:
+        """Prepend any pending completion notes for this session to ``user_text``.
+
+        Delivers the results of tasks that finished off the turn (e.g. a backgrounded
+        command) so the model sees them at the start of its next turn without the user
+        re-prompting. A no-op when no inbox is wired or nothing is pending.
+        """
+        if self._inbox is None:
+            return user_text
+        notes = self._inbox.drain(self._session.id)
+        if not notes:
+            return user_text
+        _log.info("delivering %d background notification(s)", len(notes))
+        header = "Results from background tasks that finished (act on any that matter):"
+        body = "\n".join(f"- {note}" for note in notes)
+        return f"{header}\n{body}\n\n{user_text}"
 
     def complete(self, prompt: str, *, temperature: float = 0.0) -> str:
         """One-shot completion — delegated to the model (no tools, no loop)."""
@@ -201,6 +262,10 @@ class AgentHarness:
     def context_usage(self) -> dict[str, Any] | None:
         """The current session's context-meter payload."""
         return self._session.last_usage
+
+    def session_id(self) -> str:
+        """The current session's id (for filtering the usage ledger to this session)."""
+        return self._session.id
 
     def new_session(self) -> None:
         """Discard the current conversation and start a fresh session."""

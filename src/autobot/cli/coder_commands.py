@@ -14,7 +14,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
-from autobot.cli import client, gitdiff, render
+from autobot.cli import client, debug_report, gitdiff, render
 from autobot.config import Settings
 from autobot.logging_setup import get_logger
 
@@ -23,8 +23,19 @@ if TYPE_CHECKING:
 
 _log = get_logger("cli")
 
-_DAEMON_CMDS = frozenset({"/diff", "/undo", "/model", "/autonomy", "/sessions", "/new"})
+_DAEMON_CMDS = frozenset(
+    {"/diff", "/undo", "/model", "/autonomy", "/sessions", "/new", "/cost", "/debug"}
+)
 _AUTONOMY = ("plan", "confirm", "auto")
+
+
+def _open_report_default(rollups: dict[str, Any]) -> str:
+    """Write + open the HTML dashboard, returning its path (real default for Deps)."""
+    from datetime import datetime
+
+    from autobot.usage.report import write_and_open
+
+    return str(write_and_open(rollups, now=datetime.now()))
 
 
 @dataclass(frozen=True, slots=True)
@@ -40,6 +51,8 @@ class Deps:
     resume_session: Callable[[str, str], dict[str, Any]] = client.resume_session
     new_session: Callable[[str], dict[str, Any]] = client.new_session
     load_settings: Callable[[], Any] = Settings.load
+    get_usage: Callable[[str], dict[str, Any]] = client.get_usage
+    open_report: Callable[[dict[str, Any]], str] = _open_report_default
 
 
 def handle(
@@ -68,7 +81,38 @@ def handle(
         return _sessions(base_url, args, deps)
     if name == "/new":
         return _new(base_url, deps)
+    if name == "/cost":
+        return _cost(args, base_url, width, deps)
+    if name == "/debug":
+        return _debug(base_url, cwd, deps)
     return None
+
+
+def _debug(base_url: str, cwd: str, deps: Deps) -> str:
+    """Write a shareable session debug bundle and tell the user how to copy it.
+
+    File-based (works with or without the daemon): the newest session transcript excerpt + the
+    coder-relevant recent log + the session's token/cost summary, written to
+    ``<cwd>/.jack/debug-report.md`` (secrets/paths redacted); returns copy/paste instructions.
+    """
+    from pathlib import Path
+
+    settings = deps.load_settings()
+    log_path = Path(getattr(settings, "log_dir", "~/.autobot/logs")).expanduser() / "autobot.log"
+    autonomy = str(getattr(settings, "coding_autonomy", "?"))
+    provider = getattr(settings, "llm_provider", None)
+    transcript = debug_report.newest_transcript(cwd)
+    bundle = debug_report.build_bundle(
+        transcript=transcript,
+        log_path=log_path,
+        cwd=cwd,
+        usage=deps.get_usage(base_url),
+        autonomy=autonomy,
+        provider=provider,
+    )
+    path = debug_report.write_bundle(bundle, cwd)
+    _log.info("debug report written path=%s", path)
+    return debug_report.share_hint(path, transcript)
 
 
 def _diff(cwd: str, width: int, deps: Deps) -> RenderableType | str:
@@ -140,3 +184,15 @@ def _new(base_url: str, deps: Deps) -> str:
     """Start a fresh session on the daemon."""
     res = deps.new_session(base_url)
     return "Started a new session." if res.get("ok") else "Couldn't start a new session."
+
+
+def _cost(args: str, base_url: str, width: int, deps: Deps) -> RenderableType | str:
+    """`/cost` renders the summary; `/cost open` builds + opens the browser dashboard."""
+    payload = deps.get_usage(base_url)
+    if args.strip() == "open":
+        rollups = payload.get("rollups") if isinstance(payload, dict) else None
+        if not rollups:
+            return "No usage recorded yet — nothing to open."
+        path = deps.open_report(rollups)
+        return f"Opened the usage report ({path})."
+    return render.render_cost(payload if isinstance(payload, dict) else {}, width)

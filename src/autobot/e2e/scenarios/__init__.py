@@ -38,15 +38,33 @@ ALL: tuple[Scenario, ...] = (
         name="run-command",
         autonomy="confirm",
         strategy="scripted",
-        task="run the command: echo e2e-ok",
-        success_criteria="Asked before running the command, then ran it and reported the output.",
+        task="run this shell command to make a folder: mkdir e2e_dir",
+        success_criteria="Showed a clear 'Run this command?' prompt with the actual command, "
+        "then ran it after approval and created the folder.",
         steps=(
-            Send("run this shell command: echo e2e-ok"),
-            Expect("permission_card", _TURN),
-            Confirm(),
+            Send("run this shell command to make a folder: mkdir e2e_dir"),
+            Expect("permission_card", _TURN),  # a mutating command DOES prompt
+            Confirm(),  # approve with the y key (the real affordance)
             Expect("idle_prompt", _TURN),
         ),
-        checks=(ScreenContains("e2e-ok"),),
+        checks=(FileExists("e2e_dir"),),
+    ),
+    Scenario(
+        name="readonly-command-no-prompt",
+        autonomy="confirm",
+        strategy="scripted",
+        task="run this shell command: echo e2e-readonly-ok",
+        success_criteria="Ran the read-only echo command and showed its output WITHOUT asking "
+        "for confirmation (no permission card).",
+        steps=(
+            Send("run this shell command: echo e2e-readonly-ok"),
+            # A read-only command auto-runs: the turn goes straight to idle with no gate. If a
+            # permission card wrongly blocked it, the turn would park at the '>' answer prompt
+            # and idle_prompt would never hold — so this Expect deterministically asserts that
+            # no confirmation was requested.
+            Expect("idle_prompt", _TURN),
+        ),
+        checks=(ScreenContains("e2e-readonly-ok"),),
     ),
     Scenario(
         name="edit-file",
@@ -81,6 +99,23 @@ ALL: tuple[Scenario, ...] = (
         ),
         # After undo the file must be back to its seed: still has ORIGINAL, marker removed.
         checks=(FileContains("foo.py", "ORIGINAL"), FileLacks("foo.py", "# marker")),
+    ),
+    Scenario(
+        name="cost-summary",
+        autonomy="auto",
+        strategy="scripted",
+        task="run a read-only command, then check /cost",
+        success_criteria="After a turn recorded usage, /cost rendered a summary with per-window "
+        "totals (Today / All time), a Cache r/w column, and a cost figure — no crash.",
+        steps=(
+            # A read-only echo auto-runs (no gate) and still records a usage row; then /cost
+            # renders the summary from the (E2E-isolated) ledger via the daemon endpoint.
+            Send("run this shell command: echo e2e-cost-ok"),
+            Expect("idle_prompt", _TURN),
+            Send("/cost"),
+            Expect("cost_view", _CMD),
+        ),
+        checks=(ScreenContains("All time"),),
     ),
     Scenario(
         name="slash-and-chat",
