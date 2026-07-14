@@ -1032,6 +1032,29 @@ class Orchestrator:
         """List workspace checkpoints newest-first (coder profile only)."""
         return self.coder_driver.list_checkpoints() if self.coder_driver is not None else []
 
+    def coder_usage(self) -> dict[str, Any]:
+        """The usage payload for GET /coder/usage: live context + ledger rollups."""
+        from datetime import datetime
+
+        from autobot.config import Settings
+        from autobot.usage import ledger, rollup
+
+        ctx = None
+        sid = None
+        ctx_fn = getattr(self._llm, "context_usage", None)
+        if callable(ctx_fn):
+            ctx = ctx_fn()
+        sid_fn = getattr(self._llm, "session_id", None)
+        if callable(sid_fn):
+            sid = sid_fn()
+        rolls = rollup.summarize(ledger.read(), now=datetime.now(), session_id=sid)
+        return {
+            "ctx": ctx,
+            "provider": Settings.load().llm_provider,
+            "model": (ctx or {}).get("model"),
+            "rollups": rolls.to_dict(),
+        }
+
     def resume_coder_session(self, session_id: str) -> bool:
         """Resume a stored coder session through the driver's lock (coder profile only)."""
         return self.coder_driver.resume(session_id) if self.coder_driver is not None else False

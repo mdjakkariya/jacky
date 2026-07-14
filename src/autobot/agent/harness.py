@@ -202,6 +202,10 @@ class AgentHarness:
         """The current session's context-meter payload."""
         return self._session.last_usage
 
+    def session_id(self) -> str:
+        """The current session's id (for filtering the usage ledger to this session)."""
+        return self._session.id
+
     def new_session(self) -> None:
         """Discard the current conversation and start a fresh session."""
         self._session = self._store.create(self._session.cwd, self._session.model)
