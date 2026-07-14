@@ -158,7 +158,7 @@ Rules:
   `_log = get_logger("stt")` (module level). The component name becomes the
   `[stt]` tag on every line — the handle used to **filter**:
   `make logs-grep C=stt` (or `grep '\[stt\]' ~/.autobot/logs/autobot.log`).
-  Existing tags: `app`, `orchestrator`, `gate`, `stt`, `llm`, `listening`, `wake`.
+  Existing tags: `app`, `orchestrator`, `gate`, `stt`, `llm`, `listening`, `wake`, `usage`.
 - Log **events at the seams**, never inside hot loops (no per-frame/per-token logs).
 - Use `key=value` properties so lines are readable and greppable, e.g.
   `_log.info("captured seconds=%.1f frames=%d", s, n)`. Pass args to the logger

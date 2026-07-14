@@ -8,7 +8,7 @@ the input-prompt line the shell already leaves in the scrollback, so it isn't re
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from autobot.cli import theme
 from autobot.cli.classify import Segment
@@ -201,3 +201,61 @@ def render_checkpoints(rows: list[dict[str, str]]) -> RenderableType:
         if i < len(rows) - 1:
             out.append("\n")
     return out
+
+
+def _fmt_usd(bucket: dict[str, Any]) -> str:
+    """`$X.XXXX`, prefixed `≥` when some rows were unpriced."""
+    usd = float(bucket.get("usd", 0.0) or 0.0)
+    prefix = "≥ " if bucket.get("has_unpriced") else ""
+    return f"{prefix}${usd:.4f}"
+
+
+def render_cost(payload: dict[str, Any], width: int) -> RenderableType:
+    """A compact usage summary: this session + today/7d/all-time + top models/workspaces."""
+    from rich.console import Group
+    from rich.table import Table
+    from rich.text import Text
+
+    rollups = payload.get("rollups") or {}
+    totals = rollups.get("totals") or {}
+    if not totals or totals.get("all_time", {}).get("turns", 0) == 0:
+        return Text("No usage recorded yet. Run a turn, then try /cost again.", style="dim")
+
+    parts: list[RenderableType] = []
+    session = rollups.get("session")
+    model = payload.get("model") or "?"
+    provider = payload.get("provider") or "?"
+    if session:
+        parts.append(
+            Text(
+                f"This session · {model} ({provider}) · {session['turns']} turns · "
+                f"in {session['in']:,} / out {session['out']:,} · "
+                f"cache r {session['cache_read']:,} / w {session['cache_write']:,} · "
+                f"{_fmt_usd(session)}",
+                style="teal",
+            )
+        )
+
+    table = Table(show_header=True, header_style="dim", expand=False, pad_edge=False)
+    table.add_column("Window")
+    table.add_column("Turns", justify="right")
+    table.add_column("Tokens", justify="right")
+    table.add_column("Cost", justify="right")
+    for label, key in (("Today", "today"), ("Last 7 days", "last_7d"), ("All time", "all_time")):
+        b = totals.get(key)
+        if b:
+            table.add_row(label, f"{b['turns']:,}", f"{b['tokens']:,}", _fmt_usd(b))
+    parts.append(table)
+
+    models = rollups.get("by_model") or []
+    if models:
+        top = "  ".join(f"{m['key']} {_fmt_usd(m)}" for m in models[:3])
+        parts.append(Text(f"Top models: {top}", style="dim"))
+    parts.append(
+        Text(
+            "Estimate from recorded tokens; your provider console is authoritative. "
+            "/cost open for the full dashboard.",
+            style="dim",
+        )
+    )
+    return Group(*parts)

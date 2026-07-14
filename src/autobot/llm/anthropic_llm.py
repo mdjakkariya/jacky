@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import re
 from collections.abc import Sequence
+from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any
 
 from autobot.agent.chat_model import ChatResponse, OnEvent
@@ -149,22 +150,9 @@ def too_long_reply() -> str:
     )
 
 
-# Approximate list prices in USD per million tokens (input, output), for a *cost
-# estimate* in the log — this is debugging signal, not billing. Add/adjust entries
-# as Anthropic's pricing changes; unknown models simply log tokens without a cost.
-_PRICING_USD_PER_MTOK: dict[str, tuple[float, float]] = {
-    # Keyed by model-id PREFIX so 4.x point releases match. Approximate list prices.
-    "claude-haiku-4-5": (1.0, 5.0),
-    "claude-sonnet-4-6": (3.0, 15.0),
-    "claude-opus-4": (5.0, 25.0),
-}
-# Prompt-cache multipliers applied to the base INPUT rate (Anthropic): a 5-minute cache
-# write costs 1.25x, a cache read 0.1x (90% off). Pricing these matters because a large
-# static tool prefix is almost entirely cache_read/cache_write — omitting them made
-# "advertise all tools" look free while tool search's on-demand (uncached) tool loads
-# looked expensive, which is exactly backwards from real billing.
-_CACHE_WRITE_MULT = 1.25
-_CACHE_READ_MULT = 0.1
+def _now() -> datetime:
+    """Current UTC time (a seam so tests can freeze the clock for intro pricing)."""
+    return datetime.now(timezone.utc)
 
 
 def estimate_cost_usd(
@@ -175,24 +163,22 @@ def estimate_cost_usd(
     cache_read: int = 0,
     cache_write: int = 0,
 ) -> float | None:
-    """Rough USD cost for a call, or None if the model's price isn't known here.
+    """Rough USD cost for an Anthropic call, or None if the model's price isn't known.
 
-    Prices fresh input and output at the model's list rate, plus prompt-cache tokens at
-    Anthropic's multipliers on the input rate (write 1.25x, read 0.1x). ``cache_read`` /
-    ``cache_write`` default to 0 so existing callers are unaffected; the daemon passes
-    them so the logged session cost reflects real billing rather than fresh tokens alone.
+    Thin wrapper over :func:`autobot.usage.pricing.price_usd` (the single source of prices),
+    so the context meter and the ledger agree. Cache tokens are priced at Anthropic's
+    multipliers on the input rate.
     """
-    price = next(
-        (p for prefix, p in _PRICING_USD_PER_MTOK.items() if model.startswith(prefix)), None
-    )
-    if price is None:
-        return None
-    in_rate, out_rate = price
-    return (
-        in_tokens / 1_000_000 * in_rate
-        + cache_write / 1_000_000 * in_rate * _CACHE_WRITE_MULT
-        + cache_read / 1_000_000 * in_rate * _CACHE_READ_MULT
-        + out_tokens / 1_000_000 * out_rate
+    from autobot.usage.pricing import price_usd
+
+    return price_usd(
+        "anthropic",
+        model,
+        in_tokens=in_tokens,
+        out_tokens=out_tokens,
+        cache_read=cache_read,
+        cache_write=cache_write,
+        at=_now(),
     )
 
 
@@ -583,6 +569,20 @@ class AnthropicLanguageModel:
             cost_str,
             session.cost.in_tokens + session.cost.out_tokens,
             session.cost.usd,
+        )
+        from autobot.usage.record import record_turn
+
+        record_turn(
+            provider="anthropic",
+            model=model,
+            workspace=session.cwd,
+            session_id=session.id,
+            in_tokens=turn_in,  # RAW fresh input — not the display turn_in that folds cache_write
+            out_tokens=turn_out,
+            cache_read=cache_read,
+            cache_write=cache_write,
+            at=_now(),
+            enabled=self._settings.usage_tracking,
         )
 
     def _system(self, session: Session) -> str:

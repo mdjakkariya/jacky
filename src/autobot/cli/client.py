@@ -110,6 +110,15 @@ def list_sessions(
     return data if isinstance(data, list) else []
 
 
+def get_usage(base_url: str, *, get: Callable[[str, float], Any] = _get_json) -> dict[str, Any]:
+    """Fetch live session usage + rollups (``GET /coder/usage``); ``{}`` on any failure."""
+    try:
+        data = get(f"{base_url}/coder/usage", 10.0)
+    except (OSError, urllib.error.URLError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
 def resume_session(
     base_url: str, session_id: str, *, post: Callable[..., dict[str, Any]] = _post
 ) -> dict[str, Any]:

@@ -221,6 +221,7 @@ def serve(settings: Settings | None = None, *, workspace: str | None = None) -> 
             on_coder_reply=orchestrator.reply_coder_stream,
             on_coder_undo=orchestrator.undo_coder,
             on_coder_checkpoints=orchestrator.list_coder_checkpoints,
+            on_usage=orchestrator.coder_usage,
             idle_timeout=float(settings.coder_idle_timeout_s) if coder else None,
         )
     finally:

@@ -83,6 +83,11 @@ class ReloadableLanguageModel:
         fn = getattr(self._inner, "context_usage", None)
         return fn() if callable(fn) else None
 
+    def session_id(self) -> str | None:
+        """Delegate the active inner model's ``session_id`` (if it has one)."""
+        fn = getattr(self._inner, "session_id", None)
+        return str(fn()) if callable(fn) else None
+
     def new_session(self) -> None:
         """Reset the active inner model's conversation (the chat's "New chat")."""
         with self._lock:

@@ -107,6 +107,7 @@ def create_app(
     on_coder_reply: Any | None = None,
     on_coder_undo: Any | None = None,
     on_coder_checkpoints: Any | None = None,
+    on_usage: Any | None = None,
 ) -> Any:
     """Build the FastAPI app: the event stream plus the Settings-view API.
 
@@ -154,6 +155,9 @@ def create_app(
             lists coder checkpoints newest-first; wired to the orchestrator's
             ``list_coder_checkpoints``. When ``None``, ``GET /coder/checkpoints``
             returns ``{"checkpoints": []}``.
+        on_usage: Optional callback (() -> dict) returning the live session usage
+            plus ledger rollups; wired to the orchestrator's ``coder_usage``. When
+            ``None``, ``GET /coder/usage`` returns ``{}``.
 
     Returns:
         A FastAPI app: ``/healthz``, WebSocket ``/ws``, the settings API, and
@@ -384,6 +388,13 @@ def create_app(
             return {"checkpoints": []}
         rows = await asyncio.to_thread(on_coder_checkpoints)
         return {"checkpoints": rows if isinstance(rows, list) else []}
+
+    async def get_coder_usage() -> dict[str, Any]:
+        """Live session usage + ledger rollups. Empty dict when unwired."""
+        if on_usage is None:
+            return {}
+        result = await asyncio.to_thread(on_usage)
+        return result if isinstance(result, dict) else {}
 
     async def post_new_session() -> dict[str, Any]:
         """Start a fresh chat session — discard the engine's conversation history.
@@ -717,6 +728,7 @@ def create_app(
     app.add_api_route("/coder/reply", post_coder_reply, methods=["POST"])
     app.add_api_route("/coder/undo", post_coder_undo, methods=["POST"])
     app.add_api_route("/coder/checkpoints", get_coder_checkpoints, methods=["GET"])
+    app.add_api_route("/coder/usage", get_coder_usage, methods=["GET"])
     app.add_api_route("/session/new", post_new_session, methods=["POST"])
     app.add_api_route("/sessions", get_sessions, methods=["GET"])
     app.add_api_route("/sessions/resume", post_sessions_resume, methods=["POST"])
@@ -816,6 +828,7 @@ def run_daemon(
     on_coder_reply: Any | None = None,
     on_coder_undo: Any | None = None,
     on_coder_checkpoints: Any | None = None,
+    on_usage: Any | None = None,
     idle_timeout: float | None = None,
 ) -> None:
     """Run the daemon server (blocking) on ``host:port``.
@@ -853,6 +866,7 @@ def run_daemon(
         on_coder_reply=on_coder_reply,
         on_coder_undo=on_coder_undo,
         on_coder_checkpoints=on_coder_checkpoints,
+        on_usage=on_usage,
     )
     if idle_timeout and idle_timeout > 0:
         _install_idle_shutdown(app, idle_timeout)
