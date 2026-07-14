@@ -37,20 +37,6 @@ _StreamTurn = Callable[[str, str], Iterator[dict[str, Any]]]
 _StreamAnswer = Callable[[str, str, str], Iterator[dict[str, Any]]]
 
 
-def _tail_preview(buffer: str, width: int, *, max_lines: int = 6) -> str:
-    """A bounded tail of a streaming reply, so the live preview never exceeds the viewport.
-
-    A ``rich.Live`` renderable taller than the terminal can't repaint in place — it commits
-    every refresh frame instead of overwriting, spamming the scrollback. Capping the preview
-    to roughly ``max_lines`` rows keeps the transient region small and stable; the full reply
-    is printed once when the turn completes.
-    """
-    cap = max(width, 20) * max_lines
-    if len(buffer) <= cap:
-        return buffer
-    return "…" + buffer[-cap:]
-
-
 def gather_context(cwd: str) -> dict[str, str]:
     """Best-effort status context for the banner/footer (never raises)."""
     branch = _branch(cwd)
@@ -201,43 +187,28 @@ class Shell:
             return
 
     def _consume_until_phase(self, events: Any, verb: str) -> tuple[dict[str, Any] | None, bool]:
-        """Drain streaming (token/tool) events — rendering them live — and return the phase event.
+        """Drain streaming events, keeping the spinner up, and return the phase event.
 
-        The spinner (its own threaded ``Live``, with a ticking ``Working… · Ns`` byline) stays
-        up through tool and command-output activity — so a long or silent command (e.g. one
-        that buffers via ``| tail`` and emits nothing until it exits) still shows live
-        elapsed-time liveness instead of a frozen screen. Tool ``start`` events and dim ``⎿``
-        output lines are committed with ``console.print``, which ``rich`` draws *above* the
-        running spinner. Only reply *tokens* need the separate token ``rich.Live`` region, and
-        that region and the spinner must never be active at once (both drive a ``Live`` on the
-        same console; a nested transient ``Live`` never paints). So the spinner is torn down
-        exactly when the *first token* arrives, then the token ``Live`` takes over: tokens
-        accumulate into ``buffer`` and repaint the transient region as ``⏺ <buffer>``. Because
-        that region is transient it clears the instant a phase event arrives — the caller then
-        prints the finalized markdown reply, so preview and final text never both linger.
+        The spinner (its own threaded ``Live``, with a ticking ``Working… · Ns`` byline) runs
+        for the WHOLE phase — through tool activity, command output, *and* reply generation —
+        so there's always calm, non-jittery liveness (no frozen screen even on a long or silent
+        command). Reply *tokens* are consumed but deliberately **not** painted live: repainting
+        a growing, wrapping buffer in a terminal jitters, and the spinner already signals
+        progress — so the finalized markdown reply is rendered once by the caller when the phase
+        event arrives, instead of a shaky word-by-word preview. Tool ``start`` events and dim
+        ``⎿`` command-output lines are committed with ``console.print``, which ``rich`` draws
+        *above* the running spinner.
 
         Returns ``(phase_dict, printed_activity)`` — the phase event (or ``None`` if the
         stream ended without one), and whether any tool/output activity line was committed
         to the scrollback (so the caller can insert one separating blank line before the
         reply).
         """
-        from rich.live import Live
         from rich.text import Text
 
-        buffer = ""
         printed_activity = False
-        # vertical_overflow="crop" + a bounded preview (see _tail_preview) keep the transient
-        # region within the viewport so it repaints in place instead of committing every frame.
-        live_region = Live(
-            console=self._console,
-            refresh_per_second=12,
-            transient=True,
-            vertical_overflow="crop",
-        )
         spin_cm = self._spin(self._console, verb)
         spin_cm.__enter__()
-        spinning = True
-        live: Live | None = None
         try:
             for evt in events:
                 if isinstance(evt, dict) and evt.get("status") in (
@@ -248,31 +219,17 @@ class Shell:
                 ):
                     return evt, printed_activity
                 seg = classify(evt)
-                is_tool_start = seg.kind == "tool" and evt.get("event") == "start"
-                # Keep the spinner ticking during tool/command activity for liveness; hand off
-                # to the token Live ONLY when reply tokens start (they can't share a console).
-                if seg.kind == "token" and spinning:
-                    spin_cm.__exit__(None, None, None)
-                    spinning = False
-                    live = live_region.__enter__()
-                if seg.kind == "token":
-                    buffer += seg.text
-                    assert live is not None
-                    preview = _tail_preview(buffer, self._console.width or 80)
-                    live.update(Text(f"{theme.GLYPH_ASSISTANT} {preview}", style="assistant"))
-                elif is_tool_start:
+                if seg.kind == "tool" and evt.get("event") == "start":
                     self._console.print(render.render_tool(seg))
                     printed_activity = True
                 elif seg.kind == "output":
                     # Command output, streamed live under the ⎿ tool line (dim), as it arrives.
                     self._console.print(Text(seg.text, style="tool"))
                     printed_activity = True
+                # token (and any other) events are consumed but not displayed — the spinner
+                # covers liveness; the finalized reply is rendered by the caller (see above).
         finally:
-            exc_info = sys.exc_info()
-            if spinning:
-                spin_cm.__exit__(*exc_info)
-            elif live is not None:
-                live_region.__exit__(*exc_info)
+            spin_cm.__exit__(*sys.exc_info())
         return None, printed_activity
 
     def _ask(self, seg: Any) -> Answer:

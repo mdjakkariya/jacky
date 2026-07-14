@@ -13,7 +13,7 @@ from rich.console import Console
 
 from autobot.cli import shell, spinner
 from autobot.cli.prompt import Answer
-from autobot.cli.theme import GLYPH_ASSISTANT, jack_theme
+from autobot.cli.theme import jack_theme
 
 
 def _console() -> Console:
@@ -284,10 +284,13 @@ class _FakeLive:
         self.updates.append(str(renderable))
 
 
-def test_stream_tokens_render_live_then_markdown(
+def test_streamed_tokens_are_consumed_but_not_shown_live(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Token events repaint a live preview buffer; the ``done`` phase finalizes as markdown."""
+    """Calm streaming: tokens are drained but not painted live; only the final reply renders.
+
+    No token Live region is opened; the spinner covers liveness.
+    """
     fakes: list[_FakeLive] = []
 
     def make_fake(*args: object, **kwargs: object) -> _FakeLive:
@@ -299,9 +302,9 @@ def test_stream_tokens_render_live_then_markdown(
 
     turns = {
         "start": [
-            {"type": "token", "text": "Hel"},
-            {"type": "token", "text": "lo!"},
-            {"status": "done", "reply": "Hello!"},
+            {"type": "token", "text": "strea"},
+            {"type": "token", "text": "ming"},
+            {"status": "done", "reply": "Final reply."},
         ],
     }
 
@@ -312,7 +315,7 @@ def test_stream_tokens_render_live_then_markdown(
         return iter([])
 
     console = _console()
-    sh = shell.Shell(
+    shell.Shell(
         "http://x",
         str(tmp_path),
         stream_turn=stream_turn,
@@ -322,26 +325,23 @@ def test_stream_tokens_render_live_then_markdown(
         snapshot=lambda _c: None,
         diff_since=lambda _c, _b: None,
         spin=_noop_spin,
-    )
-    sh.run()
+    ).run()
 
-    assert len(fakes) == 1  # one Live region for the one turn
-    assert fakes[0].updates == [f"{GLYPH_ASSISTANT} Hel", f"{GLYPH_ASSISTANT} Hello!"]
+    assert fakes == []  # no token Live region is opened any more (calm streaming)
     out = console.export_text()
-    assert "Hello!" in out  # the done phase's markdown reply is what persists
+    assert "Final reply." in out  # the finalized reply renders
+    assert "streaming" not in out  # the streamed tokens are not shown live
 
 
-def test_stream_tokens_paint_with_the_real_spinner(tmp_path: Path) -> None:
-    """Regression test: the spinner and the token Live must never both be active.
+def test_reply_renders_with_the_real_spinner_tokens_not_shown(tmp_path: Path) -> None:
+    """Streamed tokens aren't shown; the finalized reply renders (real threaded spinner).
 
-    Uses the REAL ``spinner.with_spinner`` (not the no-op fake the other tests inject)
-    so this exercises actual nested-``Live`` semantics. If the token ``Live`` is opened
-    while the spinner's ``Live`` is still active, ``rich`` marks it "nested"; a nested,
-    transient ``Live`` never paints its content on ``stop()`` — so the streamed buffer
-    text would never reach the console at all, only the finalized phase reply would.
-    The phase's reply is deliberately distinct from the buffered tokens so the two
-    sources can't be confused: this test fails against a nested structure and passes
-    once the spinner is torn down before the token Live starts.
+    With the real spinner running the whole turn, streamed tokens are NOT displayed and the
+    finalized reply renders once after the spinner tears down.
+    Uses the real ``spinner.with_spinner`` so this exercises the actual threaded ``Live``:
+    the reply text is deliberately distinct from the streamed tokens so the two can't be
+    confused. It passes only if the tokens are dropped from the display and the finalized
+    phase reply is what reaches the scrollback.
     """
     turns = {
         "start": [
@@ -358,7 +358,7 @@ def test_stream_tokens_paint_with_the_real_spinner(tmp_path: Path) -> None:
         return iter([])
 
     console = _console()
-    sh = shell.Shell(
+    shell.Shell(
         "http://x",
         str(tmp_path),
         stream_turn=stream_turn,
@@ -368,12 +368,11 @@ def test_stream_tokens_paint_with_the_real_spinner(tmp_path: Path) -> None:
         snapshot=lambda _c: None,
         diff_since=lambda _c, _b: None,
         spin=spinner.with_spinner,  # the real, threaded spinner — not the no-op fake
-    )
-    sh.run()
+    ).run()
 
     out = console.export_text()
-    assert "Done." in out  # the finalized phase reply always prints
-    assert "Hello!" in out  # the live-streamed buffer must have actually painted too
+    assert "Done." in out  # the finalized phase reply renders
+    assert "Hello!" not in out  # streamed tokens are NOT shown live (calm streaming)
 
 
 def test_turn_renders_streamed_output_lines(tmp_path: Path) -> None:
@@ -474,17 +473,3 @@ def test_spinner_stays_up_through_a_command_and_tears_down_after(tmp_path: Path)
     assert len(seen_at_exit) == 1  # torn down exactly once, at the end of the turn
     # By teardown the command line + its output were already on screen (spinner was live).
     assert "$ slow-cmd" in seen_at_exit[0] and "still working" in seen_at_exit[0]
-
-
-def test_tail_preview_bounds_the_streaming_region() -> None:
-    from autobot.cli.shell import _tail_preview
-
-    # Small buffers pass through untouched.
-    assert _tail_preview("hi there", 80) == "hi there"
-    # A long buffer is capped to ~max_lines*width chars so the live region can't overflow
-    # the viewport (the cause of the duplicated-reply spam).
-    big = "x" * 5000
-    out = _tail_preview(big, 80, max_lines=6)
-    assert out.startswith("…")
-    assert len(out) <= 80 * 6 + 1
-    assert out.endswith("x")
