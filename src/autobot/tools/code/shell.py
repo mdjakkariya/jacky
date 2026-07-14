@@ -178,9 +178,11 @@ def register_exec_tools(
                 "builds directly — their output streams live line-by-line and is budgeted for "
                 "you (use a streaming reporter for a big suite, e.g. `npx playwright test "
                 "--reporter=line`). Use `grep` only to *filter* output you truly don't need. "
-                "For a long-running process (e.g. a dev server) needed by a later step, start "
-                "it in the background with output redirected to a file (e.g. `nohup <cmd> > "
-                "/tmp/server.log 2>&1 &`), then continue."
+                "A full test suite or build can take minutes: set a generous `timeout` (up to "
+                "600 seconds) so it isn't killed mid-run — don't guard it with a short timeout "
+                "and don't sleep-poll it. For a long-running process (e.g. a dev server) needed "
+                "by a LATER step, start it in the background with output redirected to a file "
+                "(e.g. `nohup <cmd> > /tmp/server.log 2>&1 &`), then continue."
             ),
             parameters={
                 "type": "object",
