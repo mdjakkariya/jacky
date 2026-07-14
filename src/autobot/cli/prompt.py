@@ -50,13 +50,63 @@ class JackCompleter(Completer):
                 yield Completion(name, start_position=-len(text), display_meta=desc)
 
     def _files(self, prefix: str) -> Iterable[Completion]:
+        """Complete an ``@path`` segment, descending into subfolders, with type icons.
+
+        ``prefix`` is the text after ``@`` (e.g. ``src/cli/pro``). Only the final segment is
+        completed (``pro`` -> ``prompt.py``); folders gain a trailing ``/`` so the next
+        keystroke keeps descending. Folders sort first, then files, each shown with a glyph
+        and a type in the meta column.
+        """
+        dirpart, _, partial = prefix.rpartition("/")
+        base = Path(self._cwd) / dirpart if dirpart else Path(self._cwd)
         try:
-            entries = sorted(p.name for p in Path(self._cwd).iterdir())
+            entries = sorted(base.iterdir(), key=lambda p: (not p.is_dir(), p.name.lower()))
         except OSError:
             return
-        for name in entries:
-            if name.startswith(prefix):
-                yield Completion(name, start_position=-len(prefix))
+        for entry in entries:
+            if not entry.name.startswith(partial):
+                continue
+            is_dir = entry.is_dir()
+            icon, kind = _icon_for(entry, is_dir=is_dir)
+            suffix = "/" if is_dir else ""
+            yield Completion(
+                entry.name + suffix,
+                start_position=-len(partial),
+                display=f"{icon} {entry.name}{suffix}",
+                display_meta=kind,
+            )
+
+
+# Type glyphs by extension for the @-path completer (folder handled separately). Terminal
+# emoji, so any font renders them; the meta column carries the word for clarity.
+_ICONS: dict[str, tuple[str, str]] = {
+    ".png": ("🖼️", "image"),
+    ".jpg": ("🖼️", "image"),
+    ".jpeg": ("🖼️", "image"),
+    ".gif": ("🖼️", "image"),
+    ".webp": ("🖼️", "image"),
+    ".svg": ("🖼️", "image"),
+    ".bmp": ("🖼️", "image"),
+    ".ico": ("🖼️", "image"),
+    ".pdf": ("📕", "pdf"),
+    ".doc": ("📘", "doc"),
+    ".docx": ("📘", "doc"),
+    ".xls": ("📊", "sheet"),
+    ".xlsx": ("📊", "sheet"),
+    ".csv": ("📊", "sheet"),
+    ".md": ("📝", "markdown"),
+    ".json": ("🔧", "config"),
+    ".yaml": ("🔧", "config"),
+    ".yml": ("🔧", "config"),
+    ".toml": ("🔧", "config"),
+}
+
+
+def _icon_for(path: Path, *, is_dir: bool) -> tuple[str, str]:
+    """The (glyph, type-word) for a completion entry."""
+    if is_dir:
+        return ("📁", "folder")
+    return _ICONS.get(path.suffix.lower(), ("📄", "file"))
 
 
 def make_session(cwd: str, commands: dict[str, str]) -> PromptSession[str]:

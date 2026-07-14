@@ -98,6 +98,13 @@ tui = [
 e2e = [
     "pyte>=0.8",
 ]
+# On-device extraction of @-mentioned rich files (pdf/docx/xlsx) into text for the model.
+# Lazy-imported by `cli/mentions.py`; missing → a note, never a crash. `uv sync --extra docs`.
+docs = [
+    "pypdf>=4",
+    "python-docx>=1.1",
+    "openpyxl>=3.1",
+]
 dev = [
     "ruff>=0.6",
     "mypy>=1.11",
@@ -207,6 +214,9 @@ module = [
     "rich.*",
     "prompt_toolkit.*",
     "pyte.*",
+    "openpyxl.*",
+    "docx.*",
+    "pypdf.*",
     "objc.*",
     "AVFoundation.*",
     "ApplicationServices.*",

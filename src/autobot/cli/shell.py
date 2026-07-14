@@ -13,7 +13,17 @@ from collections.abc import Callable, Iterator
 from contextlib import AbstractContextManager
 from typing import Any
 
-from autobot.cli import client, coder_commands, commands, gitdiff, prompt, render, spinner, theme
+from autobot.cli import (
+    client,
+    coder_commands,
+    commands,
+    gitdiff,
+    mentions,
+    prompt,
+    render,
+    spinner,
+    theme,
+)
 from autobot.cli.classify import classify
 from autobot.cli.prompt import Answer
 from autobot.cli.theme import GLYPH_PROMPT
@@ -155,7 +165,14 @@ class Shell:
         """Drive a turn from the event stream: render tool lines live, cards, reply, diff."""
         snap = self._snapshot(self._cwd)
         verb = spinner.verb_for(self._turn_no)
-        _log.info("turn start")
+        # Expand @path mentions into bounded file context so the model can use them directly.
+        attached = mentions.find_mentions(text)
+        if attached:
+            self._console.print(
+                f"{theme.GLYPH_TOOL}  attached: {', '.join(attached)}", style="tool"
+            )
+            text = mentions.resolve_mentions(text, self._cwd)
+        _log.info("turn start attached=%d", len(attached))
         events = self._stream_turn(self._base_url, text)
         while True:
             # Breathing room ABOVE the loading region: print the gap before the spinner
