@@ -143,15 +143,24 @@ session id from the `active_session_id` context var, registers a `command` task,
 a daemon thread that streams output to `<cwd>/.jack/tasks/<id>.log`. When the process exits,
 that thread marks the registry and pushes a note to the session's inbox. `AgentHarness`
 drains its session's inbox at the top of every turn and folds any notes into the model's
-context — so the result arrives on the **next turn** with no polling. This keeps the
+context — so the result is available on the next turn with no polling. This keeps the
 no-sleep-poll guidance honest: the model is *told* to background long work and *told* the
 result later, rather than blocking or re-checking.
 
-Not yet built (future phases): **auto-resume** (a persistent `GET /coder/events` stream +
-a daemon-initiated continuation turn, so a result surfaces while the user is idle instead of
-on their next message) and **subagents** (`kind="agent"` = an `AgentHarness` on its own
-`Session` with a scoped broker, fanned out by a coordinator). The registry/inbox are already
-kind-agnostic, so those add on top rather than replacing this.
+**Auto-resume** closes the loop so the result surfaces even while the user is idle, not just
+on their next message. The registry has an `add_listener` seam that fires when a task
+settles; the daemon exposes those as a persistent `GET /coder/events` SSE
+(`Orchestrator.subscribe_coder_events`). The CLI keeps that stream open on a background
+thread (`cli/autoresume.py`); when a task finishes while the prompt is idle it wakes the
+prompt (the auto-reader returns an `AUTO_CONTINUE` sentinel) and the shell runs a
+continuation turn on its own — reusing the normal `/coder/turn` path, so the harness folds
+the result in exactly as above. It never interrupts mid-typing: the waker fires only on an
+empty, running prompt; otherwise the result waits for the next real turn.
+
+Not yet built: **subagents** (`kind="agent"` = an `AgentHarness` on its own `Session` with a
+scoped broker, fanned out by a coordinator). The registry/inbox/stream are already
+kind-agnostic, so subagents add on top — a coordinator spawns `agent` tasks and picks up
+their results through the same inbox + auto-resume path.
 
 ## Reference projects to study
 
