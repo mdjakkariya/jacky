@@ -2,7 +2,51 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterator
+from typing import Any
+
 import pytest
+
+
+@pytest.fixture(autouse=True)
+def _isolate_logging(
+    tmp_path_factory: pytest.TempPathFactory, monkeypatch: pytest.MonkeyPatch
+) -> Iterator[None]:
+    """Never write the real ``~/.autobot/logs/autobot.log`` from a test (hermetic).
+
+    ``setup_logging`` attaches a process-global rotating file handler to the user's log dir
+    and is idempotent, so once any test triggers it (e.g. ``app.build()``), every later test's
+    log lines leak into the real file — burying the user's real session logs (and their debug
+    reports) under test noise. Reset the one-time guard + handlers around each test so nothing
+    leaks across tests, and force ``app.build``'s ``setup_logging`` to a throwaway dir so even
+    a build test's own lines stay isolated. (``test_logging_setup`` imports ``setup_logging``
+    directly and has its own tmp fixture, so it's unaffected.)
+    """
+    import logging
+
+    import autobot.app as app_mod
+    import autobot.logging_setup as log_mod
+
+    logdir = tmp_path_factory.mktemp("logs")
+    real_setup = log_mod.setup_logging
+
+    def _isolated(settings: Any) -> Any:
+        from dataclasses import replace
+
+        return real_setup(replace(settings, log_dir=str(logdir)))
+
+    monkeypatch.setattr(app_mod, "setup_logging", _isolated)  # app imports it by name
+
+    logger = logging.getLogger("autobot")
+    saved = logger.handlers[:]
+    logger.handlers.clear()
+    log_mod._configured = False
+    try:
+        yield
+    finally:
+        logger.handlers.clear()
+        logger.handlers.extend(saved)
+        log_mod._configured = False
 
 
 @pytest.fixture(autouse=True)
