@@ -9,7 +9,9 @@ from autobot.agent.chat_model import ChatResponse
 from autobot.agent.harness import AgentHarness
 from autobot.agent.session import Session
 from autobot.agent.session_store import SessionStore
+from autobot.core.streaming import active_session_id
 from autobot.core.types import ToolCall, ToolResult
+from autobot.tasks import NotificationInbox
 
 
 class FakeChatModel:
@@ -203,6 +205,53 @@ def test_resume_unknown_id_returns_false_and_leaves_session_unchanged(
 
     assert harness.resume("does-not-exist") is False
     assert harness.session is original
+
+
+def test_pending_notifications_are_folded_into_the_next_turn(store: SessionStore) -> None:
+    """A completed background task's note is prepended to the next turn, then drained."""
+    model = FakeChatModel([ChatResponse(text="ok", tool_calls=[])])
+    inbox = NotificationInbox()
+    harness = AgentHarness(model, store, inbox=inbox)
+    inbox.push(harness.session.id, "Background command task-1 finished OK (exit 0).")
+
+    assert harness.run_turn("what's next?", _ok_executor) == "ok"
+    folded = model.turns[0]
+    assert "task-1 finished" in folded  # the note reached the model
+    assert "what's next?" in folded  # the user's actual text is preserved
+    assert inbox.pending(harness.session.id) == 0  # one-shot: not redelivered next turn
+
+
+def test_no_inbox_leaves_user_text_unchanged(store: SessionStore) -> None:
+    model = FakeChatModel([ChatResponse(text="ok", tool_calls=[])])
+    harness = AgentHarness(model, store)  # inbox defaults to None
+    harness.run_turn("hello", _ok_executor)
+    assert model.turns[0] == "hello"
+
+
+def test_empty_inbox_leaves_user_text_unchanged(store: SessionStore) -> None:
+    model = FakeChatModel([ChatResponse(text="ok", tool_calls=[])])
+    harness = AgentHarness(model, store, inbox=NotificationInbox())
+    harness.run_turn("hello", _ok_executor)
+    assert model.turns[0] == "hello"
+
+
+def test_active_session_id_seam_is_set_during_tool_execution(store: SessionStore) -> None:
+    """A tool (e.g. a backgrounded run_command) can read the running session's id."""
+    model = FakeChatModel(
+        [
+            ChatResponse(text="", tool_calls=[ToolCall(name="peek")]),
+            ChatResponse(text="done", tool_calls=[]),
+        ]
+    )
+    seen: list[str] = []
+
+    def exec_(call: ToolCall) -> ToolResult:
+        seen.append(active_session_id.get())
+        return ToolResult(name=call.name, content="ok", ok=True)
+
+    harness = AgentHarness(model, store)
+    harness.run_turn("go", exec_)
+    assert seen == [harness.session.id]
 
 
 def test_no_redactor_leaves_tool_result_content_unchanged(store: SessionStore) -> None:

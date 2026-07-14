@@ -12,6 +12,7 @@ audit log apply exactly as they do for the assistant's file tools.
 from __future__ import annotations
 
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from autobot.core.types import Risk
 from autobot.logging_setup import get_logger
@@ -22,6 +23,9 @@ from autobot.tools.code.repomap import register_repomap_tool
 from autobot.tools.code.search import register_nav_tools
 from autobot.tools.code.shell import register_exec_tools
 from autobot.tools.registry import ToolRegistry, ToolSpec
+
+if TYPE_CHECKING:
+    from autobot.tasks import NotificationInbox, TaskRegistry
 
 _log = get_logger("coder")
 
@@ -182,6 +186,8 @@ def register_code_tools(
     allowlist: list[str] | None = None,
     blocklist: list[str] | None = None,
     output_model_cap: int = 10_000,
+    task_registry: TaskRegistry | None = None,
+    task_inbox: NotificationInbox | None = None,
 ) -> None:
     """Register the coder-profile code tools (read/write/edit/multi_edit).
 
@@ -198,6 +204,9 @@ def register_code_tools(
             :func:`register_exec_tools`.
         output_model_cap: Max chars of command output returned to the model inline,
             forwarded to ``run_command`` via :func:`register_exec_tools`.
+        task_registry: Process-global async-task registry, forwarded to
+            :func:`register_exec_tools` to enable ``run_command``'s background path.
+        task_inbox: Per-session notification inbox, forwarded alongside ``task_registry``.
     """
     registry.register(
         ToolSpec(
@@ -316,6 +325,8 @@ def register_code_tools(
         allowlist=allowlist,
         blocklist=blocklist,
         output_model_cap=output_model_cap,
+        task_registry=task_registry,
+        task_inbox=task_inbox,
     )
     register_repomap_tool(registry, broker)
     register_plan_tool(registry)

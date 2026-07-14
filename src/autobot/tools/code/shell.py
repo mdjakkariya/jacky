@@ -11,10 +11,14 @@ returns whether it timed out.
 
 from __future__ import annotations
 
+import contextlib
 import sys
+import threading
 from collections.abc import Callable
+from pathlib import Path
+from typing import TYPE_CHECKING
 
-from autobot.core.streaming import output_sink
+from autobot.core.streaming import active_session_id, output_sink
 from autobot.core.types import Risk
 from autobot.logging_setup import get_logger
 from autobot.tools.access import AccessBroker, AccessDeniedError
@@ -22,10 +26,14 @@ from autobot.tools.code.command_policy import classify_command
 from autobot.tools.code.output_budget import budget_output
 from autobot.tools.registry import ToolRegistry, ToolSpec
 
+if TYPE_CHECKING:
+    from autobot.tasks import NotificationInbox, TaskRegistry
+
 _log = get_logger("coder")
 
 _DEFAULT_TIMEOUT = 120.0  # seconds
 _MAX_TIMEOUT = 600.0
+_BG_EXCERPT_CHARS = 800  # tail of a finished background command folded into the next turn
 
 # (command, cwd, timeout, on_output) -> (returncode, combined_output, timed_out). The
 # ``on_output`` sink (if any) is called with each output line as it arrives, so the CLI can
@@ -100,6 +108,88 @@ def _kill_tree(proc: object) -> None:  # pragma: no cover - the real OS boundary
         pass
 
 
+def _rel(path: Path, base: Path) -> str:
+    """``path`` relative to ``base`` for display, or the absolute path if it's outside."""
+    try:
+        return str(path.relative_to(base))
+    except ValueError:
+        return str(path)
+
+
+def _tail(text: str, limit: int) -> str:
+    """The last ``limit`` chars of ``text`` (stripped), elided with a leading ``…``."""
+    text = text.strip()
+    return text if len(text) <= limit else "…" + text[-limit:]
+
+
+def _start_background(
+    command: str,
+    workdir: Path,
+    timeout: float,
+    runner: CommandRunner,
+    registry: TaskRegistry,
+    inbox: NotificationInbox,
+    session_id: str,
+) -> str:
+    """Spawn ``command`` off the turn: stream to a ``.jack/tasks`` log, notify on finish.
+
+    Registers a ``kind="command"`` task, runs it on a daemon thread (which blocks on the
+    process, not the turn), and on completion marks the registry and pushes a completion
+    note to ``session_id``'s inbox — so the model learns the result at its next turn
+    without polling. Returns immediately with the task id and log path.
+    """
+    task = registry.add(kind="command", session_id=session_id, label=f"$ {command[:80]}")
+    log_dir = workdir / ".jack" / "tasks"
+    with contextlib.suppress(OSError):  # a log we can't write must not stop the command
+        log_dir.mkdir(parents=True, exist_ok=True)
+    log_path = log_dir / f"{task.id}.log"
+    rel_log = _rel(log_path, workdir)
+    short = command[:80]
+
+    def _worker() -> None:
+        try:
+            handle = log_path.open("w", encoding="utf-8")
+        except OSError:
+            handle = None
+
+        def _to_file(line: str) -> None:
+            if handle is not None:
+                handle.write(line + "\n")
+                handle.flush()
+
+        prefix = f"Background command {task.id} (`{short}`)"
+        try:
+            rc, out, timed_out = runner(command, str(workdir), timeout, _to_file)
+        except OSError as exc:  # spawn failure (missing shell, etc.)
+            registry.mark_failed(task.id, result=f"couldn't run: {exc}", returncode=None)
+            inbox.push(session_id, f"{prefix} failed to start: {exc}")
+            return
+        finally:
+            if handle is not None:
+                handle.close()
+        excerpt = _tail(out, _BG_EXCERPT_CHARS)
+        if timed_out:
+            registry.mark_failed(task.id, result=f"timed out after {int(timeout)}s", returncode=124)
+            note = f"{prefix} timed out after {int(timeout)}s. Full log: {rel_log}"
+        elif rc == 0:
+            registry.mark_done(task.id, result=excerpt, returncode=0)
+            note = f"{prefix} finished OK (exit 0). Last output:\n{excerpt}\nFull log: {rel_log}"
+        else:
+            registry.mark_failed(task.id, result=excerpt, returncode=rc)
+            note = f"{prefix} failed (exit {rc}). Last output:\n{excerpt}\nFull log: {rel_log}"
+        inbox.push(session_id, note)
+        _log.info("background task=%s rc=%d timed_out=%s", task.id, rc, timed_out)
+
+    threading.Thread(target=_worker, name=f"bg-{task.id}", daemon=True).start()
+    _log.info("run_command backgrounded task=%s cmd=%s", task.id, short)
+    return (
+        f"Started in the background as {task.id} (streaming to {rel_log}). It's running now; "
+        "you'll get its result automatically at the start of your next step once it finishes. "
+        "Do NOT wait or poll for it — continue with other work, or end your turn if nothing "
+        "else can proceed until it's done."
+    )
+
+
 def run_command(
     command: str,
     broker: AccessBroker,
@@ -109,6 +199,10 @@ def run_command(
     allowlist: list[str] | None = None,
     blocklist: list[str] | None = None,
     output_model_cap: int = 10_000,
+    *,
+    run_in_background: bool = False,
+    registry: TaskRegistry | None = None,
+    inbox: NotificationInbox | None = None,
 ) -> str:
     """Run a shell ``command`` in a jailed ``cwd`` (gated), returning bounded output.
 
@@ -132,6 +226,11 @@ def run_command(
         return f"'{workdir.name}' is not a folder to run in."
     limit = max(1.0, min(timeout or _DEFAULT_TIMEOUT, _MAX_TIMEOUT))
     run = runner or _streaming_runner
+    if run_in_background:
+        if registry is not None and inbox is not None:
+            sid = active_session_id.get()
+            return _start_background(command, workdir, limit, run, registry, inbox, sid)
+        _log.warning("run_in_background requested but no task registry wired; running foreground")
     sink = output_sink.get()  # set by the harness for the duration of this tool call
     try:
         rc, out, timed_out = run(command, str(workdir), limit, sink)
@@ -153,6 +252,8 @@ def register_exec_tools(
     allowlist: list[str] | None = None,
     blocklist: list[str] | None = None,
     output_model_cap: int = 10_000,
+    task_registry: TaskRegistry | None = None,
+    task_inbox: NotificationInbox | None = None,
 ) -> None:
     """Register the execution tool (run_command). Destructive → the gate confirms it.
 
@@ -163,6 +264,11 @@ def register_exec_tools(
         blocklist: Commands the user has pre-refused; always blocked.
         output_model_cap: Max chars of output returned to the model inline (larger output
             is spilled to a file and only an excerpt + path is returned).
+        task_registry: Process-global async-task registry. When set (with ``task_inbox``),
+            ``run_command`` supports ``run_in_background`` — the command runs off the turn
+            and its result is delivered on the next turn. ``None`` disables backgrounding.
+        task_inbox: Per-session notification inbox that carries a backgrounded command's
+            completion note back to the model's next turn.
     """
     registry.register(
         ToolSpec(
@@ -180,9 +286,11 @@ def register_exec_tools(
                 "--reporter=line`). Use `grep` only to *filter* output you truly don't need. "
                 "A full test suite or build can take minutes: set a generous `timeout` (up to "
                 "600 seconds) so it isn't killed mid-run — don't guard it with a short timeout "
-                "and don't sleep-poll it. For a long-running process (e.g. a dev server) needed "
-                "by a LATER step, start it in the background with output redirected to a file "
-                "(e.g. `nohup <cmd> > /tmp/server.log 2>&1 &`), then continue."
+                "and don't sleep-poll it. Set `run_in_background: true` for a command you should "
+                "NOT wait on inline — a long process a later step depends on (e.g. a dev server), "
+                "or slow work you can carry on around: it returns immediately and its result is "
+                "delivered to you automatically at your next step, so never sleep-poll or re-run "
+                "to check on it. (Prefer this over a manual `nohup <cmd> &`.)"
             ),
             parameters={
                 "type": "object",
@@ -193,20 +301,32 @@ def register_exec_tools(
                         "type": "number",
                         "description": "Seconds before it's killed (default 120, max 600).",
                     },
+                    "run_in_background": {
+                        "type": "boolean",
+                        "description": (
+                            "Run off the turn and return immediately; the result is delivered "
+                            "at your next step. Use for a long process or a server (default false)."
+                        ),
+                    },
                 },
                 "required": ["command"],
             },
-            handler=lambda command="", cwd=".", timeout=_DEFAULT_TIMEOUT: run_command(
-                command,
-                broker,
-                cwd,
-                timeout,
-                allowlist=allowlist,
-                blocklist=blocklist,
-                output_model_cap=output_model_cap,
+            handler=lambda command="", cwd=".", timeout=_DEFAULT_TIMEOUT, run_in_background=False: (
+                run_command(
+                    command,
+                    broker,
+                    cwd,
+                    timeout,
+                    allowlist=allowlist,
+                    blocklist=blocklist,
+                    output_model_cap=output_model_cap,
+                    run_in_background=bool(run_in_background),
+                    registry=task_registry,
+                    inbox=task_inbox,
+                )
             ),
             risk=Risk.DESTRUCTIVE,
             ack="Running that command.",
         )
     )
-    _log.info("exec tools registered (run_command)")
+    _log.info("exec tools registered (run_command background=%s)", task_registry is not None)

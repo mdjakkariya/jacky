@@ -20,3 +20,8 @@ output_sink: ContextVar[Callable[[str], None] | None] = ContextVar("output_sink"
 plan_sink: ContextVar[Callable[[list[dict[str, str]]], None] | None] = ContextVar(
     "plan_sink", default=None
 )
+
+#: The id of the session running the current turn, set by the harness for the turn's
+#: duration. A backgrounded ``run_command`` reads it to tag its task and to route the
+#: completion note back to the right session's inbox. Empty string when no turn is running.
+active_session_id: ContextVar[str] = ContextVar("active_session_id", default="")

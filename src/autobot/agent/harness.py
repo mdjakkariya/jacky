@@ -22,7 +22,7 @@ from collections.abc import Callable
 from dataclasses import replace
 from typing import TYPE_CHECKING, Any
 
-from autobot.core.streaming import output_sink
+from autobot.core.streaming import active_session_id, output_sink
 from autobot.core.types import ToolCall, ToolResult
 from autobot.logging_setup import get_logger
 
@@ -31,6 +31,7 @@ if TYPE_CHECKING:
     from autobot.agent.session import Session
     from autobot.agent.session_store import SessionStore
     from autobot.core.types import ToolExecutor
+    from autobot.tasks import NotificationInbox
 
 _log = get_logger("harness")
 
@@ -78,6 +79,7 @@ class AgentHarness:
         doom_limit: int = _DOOM_LIMIT,
         max_unproductive: int = _MAX_UNPRODUCTIVE_ROUNDS,
         redact: Callable[[str], str] | None = None,
+        inbox: NotificationInbox | None = None,
     ) -> None:
         """Wire the harness.
 
@@ -95,6 +97,10 @@ class AgentHarness:
                 before it is handed to the model (e.g. to strip secrets from tool
                 output before any provider sees it). ``None`` (the default) passes
                 content through unchanged.
+            inbox: Optional per-session notification inbox. When set, any completion
+                notes for this session (e.g. a backgrounded command that finished) are
+                folded into the next turn's context so the model acts on them without the
+                user re-prompting. ``None`` disables delivery.
         """
         self._model = model
         self._store = store
@@ -104,6 +110,7 @@ class AgentHarness:
         self._doom_limit = doom_limit
         self._max_unproductive = max_unproductive
         self._redact = redact
+        self._inbox = inbox
         self._session = store.create(cwd, model_name)
 
     @property
@@ -128,6 +135,11 @@ class AgentHarness:
             except Exception:  # a bad sink must never break a turn
                 _log.exception("on_event sink failed; continuing turn")
 
+        # Expose this session's id for the turn so a backgrounded run_command can tag its
+        # task and route its completion note back here. Re-set at the top of every turn, so a
+        # leak on an error path is self-correcting; reset on the normal path below.
+        sid_token = active_session_id.set(self._session.id)
+        user_text = self._fold_notifications(user_text)
         self._model.begin_turn(self._session, user_text)
         failed: dict[str, str] = {}  # anti-thrash: call key -> failure text
         seen: dict[str, int] = {}  # doom-loop: call key -> times issued this turn
@@ -221,7 +233,25 @@ class AgentHarness:
             reply = self._model.final_answer_no_tools(self._session)
         new_events = self._model.finalize_turn(self._session)
         self._store.append(self._session, new_events)
+        active_session_id.reset(sid_token)
         return reply
+
+    def _fold_notifications(self, user_text: str) -> str:
+        """Prepend any pending completion notes for this session to ``user_text``.
+
+        Delivers the results of tasks that finished off the turn (e.g. a backgrounded
+        command) so the model sees them at the start of its next turn without the user
+        re-prompting. A no-op when no inbox is wired or nothing is pending.
+        """
+        if self._inbox is None:
+            return user_text
+        notes = self._inbox.drain(self._session.id)
+        if not notes:
+            return user_text
+        _log.info("delivering %d background notification(s)", len(notes))
+        header = "Results from background tasks that finished (act on any that matter):"
+        body = "\n".join(f"- {note}" for note in notes)
+        return f"{header}\n{body}\n\n{user_text}"
 
     def complete(self, prompt: str, *, temperature: float = 0.0) -> str:
         """One-shot completion — delegated to the model (no tools, no loop)."""

@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import time
 from collections.abc import Callable
 from pathlib import Path
 
+from autobot.core.streaming import active_session_id
+from autobot.tasks import NotificationInbox, Task, TaskRegistry
 from autobot.tools.access import AccessBroker, AccessPolicy
 from autobot.tools.code.shell import CommandRunner, run_command
 
@@ -136,6 +139,92 @@ def test_run_command_runs_normally_with_empty_allow_and_blocklists(tmp_path: Pat
     )
     assert "hi" in out
     assert "ok" in out.lower()
+
+
+def _wait_settled(reg: TaskRegistry, task_id: str, timeout: float = 2.0) -> Task:
+    """Block until the background worker thread has settled ``task_id`` (or fail)."""
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        task = reg.get(task_id)
+        if task is not None and task.settled:
+            return task
+        time.sleep(0.01)
+    raise AssertionError(f"background task {task_id} did not settle in {timeout}s")
+
+
+def _run_background(
+    tmp_path: Path, runner: CommandRunner, *, session_id: str = "sess-1"
+) -> tuple[str, TaskRegistry, NotificationInbox]:
+    """Run ``run_command`` in background mode with the session-id seam set, like a turn."""
+    reg = TaskRegistry()
+    inbox = NotificationInbox()
+    token = active_session_id.set(session_id)
+    try:
+        reply = run_command(
+            "npx playwright test",
+            _broker(tmp_path),
+            str(tmp_path),
+            runner=runner,
+            run_in_background=True,
+            registry=reg,
+            inbox=inbox,
+        )
+    finally:
+        active_session_id.reset(token)
+    return reply, reg, inbox
+
+
+def test_run_in_background_returns_immediately_and_registers_task(tmp_path: Path) -> None:
+    reply, reg, _inbox = _run_background(tmp_path, _fake_runner(0, "3 passed\n"))
+    assert "background" in reply.lower()
+    assert "task-1" in reply
+    task = reg.get("task-1")
+    assert task is not None
+    assert task.session_id == "sess-1"
+    assert task.kind == "command"
+
+
+def test_run_in_background_success_notifies_and_logs(tmp_path: Path) -> None:
+    _reply, reg, inbox = _run_background(tmp_path, _fake_runner(0, "3 passed\n"))
+    task = _wait_settled(reg, "task-1")
+    assert task.status == "done"
+    assert task.returncode == 0
+    notes = inbox.drain("sess-1")
+    assert len(notes) == 1
+    assert "task-1" in notes[0] and "exit 0" in notes[0] and "3 passed" in notes[0]
+    # Full output streamed to the managed log file.
+    log = (tmp_path / ".jack" / "tasks" / "task-1.log").read_text()
+    assert "3 passed" in log
+
+
+def test_run_in_background_failure_marks_failed_and_notifies(tmp_path: Path) -> None:
+    _reply, reg, inbox = _run_background(tmp_path, _fake_runner(1, "1 failed\n"))
+    task = _wait_settled(reg, "task-1")
+    assert task.status == "failed"
+    assert task.returncode == 1
+    assert "exit 1" in inbox.drain("sess-1")[0]
+
+
+def test_run_in_background_timeout_marks_failed(tmp_path: Path) -> None:
+    _reply, reg, inbox = _run_background(tmp_path, _fake_runner(124, "partial", True))
+    task = _wait_settled(reg, "task-1")
+    assert task.status == "failed"
+    assert task.returncode == 124
+    assert "timed out" in inbox.drain("sess-1")[0].lower()
+
+
+def test_run_in_background_falls_back_to_foreground_without_registry(tmp_path: Path) -> None:
+    # No registry/inbox wired: the request degrades to a normal foreground run, not an error.
+    out = run_command(
+        "echo hi",
+        _broker(tmp_path),
+        str(tmp_path),
+        runner=_fake_runner(0, "hi\n"),
+        run_in_background=True,
+    )
+    assert "hi" in out
+    assert "ok" in out.lower()
+    assert "background" not in out.lower()
 
 
 def test_run_command_blocks_command_matching_user_blocklist(tmp_path: Path) -> None:

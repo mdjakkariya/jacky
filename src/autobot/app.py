@@ -43,6 +43,7 @@ if TYPE_CHECKING:
     from autobot.io.listening import FrameSource
     from autobot.mcp.manager import McpManager
     from autobot.memory.store import MemoryStore
+    from autobot.tasks import NotificationInbox
 
 
 def _build_mic_source(settings: Settings) -> FrameSource:
@@ -314,6 +315,7 @@ def _build_llm(
     registry: ToolRegistry,
     transcript: Transcript,
     memory: MemoryStore | None,
+    inbox: NotificationInbox | None = None,
 ) -> AgentHarness:
     """Pick the LLM backend: local Ollama (default), Anthropic, or an OpenAI-compatible endpoint.
 
@@ -366,6 +368,7 @@ def _build_llm(
                 model_name=settings.anthropic_model,
                 max_rounds=settings.max_tool_rounds,
                 redact=lambda t: redact_secrets(t)[0],
+                inbox=inbox,
             )
         except ImportError:
             log.warning("cloud LLM extra missing, falling back to local")
@@ -401,6 +404,7 @@ def _build_llm(
             model_name=settings.llm_model,
             max_rounds=settings.max_tool_rounds,
             redact=lambda t: redact_secrets(t)[0],
+            inbox=inbox,
         )
     from autobot.tools.selection import build_tool_selector
 
@@ -413,6 +417,7 @@ def _build_llm(
         model_name=settings.llm_model,
         max_rounds=settings.max_tool_rounds,
         redact=lambda t: redact_secrets(t)[0],
+        inbox=inbox,
     )
 
 
@@ -759,6 +764,14 @@ def build(
 
     broker = AccessBroker(access_policy, confirmer)
 
+    # Process-global async-task primitive (lives as long as the daemon). The coder's
+    # run_command uses it to background a command; its completion note is delivered to the
+    # session's next turn via the harness (both share these instances).
+    from autobot.tasks import NotificationInbox, TaskRegistry
+
+    task_registry = TaskRegistry()
+    task_inbox = NotificationInbox()
+
     if coder:
         # Lean code-tool registry: read_file/write_file/edit_file/multi_edit, nav
         # (glob/grep), run_command, repo_map — no fileio/filesystem/workspace tools
@@ -769,6 +782,8 @@ def build(
             allowlist=settings.command_allowlist,
             blocklist=settings.command_blocklist,
             output_model_cap=settings.command_output_model_cap,
+            task_registry=task_registry,
+            task_inbox=task_inbox,
         )
         log.info("coder profile ENABLED (code tools only)")
     else:
@@ -795,7 +810,11 @@ def build(
 
     llm = ReloadableLanguageModel(
         lambda: _build_llm(
-            replace(Settings.load(), profile=settings.profile), registry, transcript, memory
+            replace(Settings.load(), profile=settings.profile),
+            registry,
+            transcript,
+            memory,
+            inbox=task_inbox,
         )
     )
 
