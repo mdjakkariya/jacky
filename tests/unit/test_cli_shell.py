@@ -236,10 +236,14 @@ def test_loading_gap_is_printed_before_output_not_after_reply(tmp_path: Path) ->
         diff_since=lambda _c, _b: None,
         spin=_noop_spin,
     ).run()
-    # log[0] is the welcome banner; the turn's prints follow. The first must be the blank
-    # gap, then the tool line, then the reply — with no blank wedged between tool and reply.
+    # log[0] is the welcome banner; the turn's prints follow. Cluster-C spacing: the loading
+    # GAP comes first (blank, so it shows during loading — not popped in after the reply),
+    # then the tool line, then exactly ONE separating blank between the tool-activity block
+    # and the reply, then the reply. (Previously the tool line opened the token Live, whose
+    # redirect machinery injected extra artifact prints; keeping the spinner up instead of
+    # opening that Live for tool activity removes the noise — this is the clean sequence.)
     turn = console.prints[1:]
-    assert turn[:3] == [False, True, True]
+    assert turn[:4] == [False, True, False, True]
 
 
 def test_stream_error_event_renders_in_red(tmp_path: Path) -> None:
@@ -390,6 +394,86 @@ def test_turn_renders_streamed_output_lines(tmp_path: Path) -> None:
     assert "PASS a.spec.ts" in text
     assert "PASS b.spec.ts" in text
     assert "All tests passed." in text
+
+
+def test_command_activity_paints_with_the_real_spinner_still_running(tmp_path: Path) -> None:
+    """Tool + output must paint with the REAL threaded spinner still running.
+
+    The spinner's Live is only torn down when reply tokens start, so this guards that
+    printing above the running spinner works — the fix for a command that looks 'stuck'
+    because it emits nothing until it finishes.
+    """
+    turns = {
+        "start": [
+            {"type": "tool", "event": "start", "name": "run_command", "label": "$ npm test"},
+            {"type": "output", "text": "PASS a.spec.ts"},
+            {"status": "done", "reply": "Done."},
+        ],
+        "answer": [],
+    }
+
+    def stream_turn(_b: str, _t: str) -> Iterator[dict[str, Any]]:
+        return iter(turns["start"])
+
+    def stream_answer(_b: str, _v: str, _t: str = "") -> Iterator[dict[str, Any]]:
+        return iter([])
+
+    console = _console()
+    shell.Shell(
+        "http://x",
+        str(tmp_path),
+        stream_turn=stream_turn,
+        stream_answer=stream_answer,
+        reader=_scripted_reader(["run tests", None]),
+        console=console,
+        snapshot=lambda _c: None,
+        diff_since=lambda _c, _b: None,
+        spin=spinner.with_spinner,  # the real, threaded spinner
+    ).run()
+    out = console.export_text()
+    assert "$ npm test" in out and "PASS a.spec.ts" in out and "Done." in out
+
+
+def test_spinner_stays_up_through_a_command_and_tears_down_after(tmp_path: Path) -> None:
+    """The spinner is NOT torn down on tool/output events — only at the end (no tokens here).
+
+    By its teardown the command's tool + output lines are already committed, proving the
+    spinner kept ticking during the command (the liveness the 'looks stuck' bug lacked).
+    """
+    console = _console()
+    seen_at_exit: list[str] = []
+
+    @contextlib.contextmanager
+    def recording_spin(_c: Console, _verb: str) -> Iterator[None]:
+        try:
+            yield
+        finally:
+            seen_at_exit.append(console.export_text())  # console text at teardown time
+
+    turns = {
+        "start": [
+            {"type": "tool", "event": "start", "name": "run_command", "label": "$ slow-cmd"},
+            {"type": "output", "text": "still working"},
+            {"status": "done", "reply": "Finished."},
+        ],
+        "answer": [],
+    }
+    stream_turn, stream_answer = _streams(turns)
+    sh = shell.Shell(
+        "http://x",
+        str(tmp_path),
+        stream_turn=stream_turn,
+        stream_answer=stream_answer,
+        reader=_scripted_reader([None]),
+        console=console,
+        snapshot=lambda _c: None,
+        diff_since=lambda _c, _b: None,
+        spin=recording_spin,
+    )
+    sh._turn("run a slow command")
+    assert len(seen_at_exit) == 1  # torn down exactly once, at the end of the turn
+    # By teardown the command line + its output were already on screen (spinner was live).
+    assert "$ slow-cmd" in seen_at_exit[0] and "still working" in seen_at_exit[0]
 
 
 def test_tail_preview_bounds_the_streaming_region() -> None:

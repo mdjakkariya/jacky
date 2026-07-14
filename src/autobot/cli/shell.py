@@ -203,15 +203,18 @@ class Shell:
     def _consume_until_phase(self, events: Any, verb: str) -> tuple[dict[str, Any] | None, bool]:
         """Drain streaming (token/tool) events — rendering them live — and return the phase event.
 
-        The spinner runs alone until the *first* streaming event (token or tool) arrives —
-        it and the token ``rich.Live`` region must never be active at once, since both drive
-        their own ``Live`` on the same console and a nested one simply never paints. On that
-        first event the spinner is torn down and the token ``Live`` takes over for the rest
-        of the phase: reply tokens accumulate into ``buffer`` and repaint the transient region
-        as plain text (``⏺ <buffer>``); tool ``start`` events print as dim ``⎿`` lines above
-        it. Because the region is transient, it clears the instant a phase event arrives —
-        the caller then prints ``render.render_rich(seg)`` (the finalized markdown reply), so
-        the live preview and the finalized text never both linger in the scrollback.
+        The spinner (its own threaded ``Live``, with a ticking ``Working… · Ns`` byline) stays
+        up through tool and command-output activity — so a long or silent command (e.g. one
+        that buffers via ``| tail`` and emits nothing until it exits) still shows live
+        elapsed-time liveness instead of a frozen screen. Tool ``start`` events and dim ``⎿``
+        output lines are committed with ``console.print``, which ``rich`` draws *above* the
+        running spinner. Only reply *tokens* need the separate token ``rich.Live`` region, and
+        that region and the spinner must never be active at once (both drive a ``Live`` on the
+        same console; a nested transient ``Live`` never paints). So the spinner is torn down
+        exactly when the *first token* arrives, then the token ``Live`` takes over: tokens
+        accumulate into ``buffer`` and repaint the transient region as ``⏺ <buffer>``. Because
+        that region is transient it clears the instant a phase event arrives — the caller then
+        prints the finalized markdown reply, so preview and final text never both linger.
 
         Returns ``(phase_dict, printed_activity)`` — the phase event (or ``None`` if the
         stream ended without one), and whether any tool/output activity line was committed
@@ -246,7 +249,9 @@ class Shell:
                     return evt, printed_activity
                 seg = classify(evt)
                 is_tool_start = seg.kind == "tool" and evt.get("event") == "start"
-                if (seg.kind in ("token", "output") or is_tool_start) and spinning:
+                # Keep the spinner ticking during tool/command activity for liveness; hand off
+                # to the token Live ONLY when reply tokens start (they can't share a console).
+                if seg.kind == "token" and spinning:
                     spin_cm.__exit__(None, None, None)
                     spinning = False
                     live = live_region.__enter__()
