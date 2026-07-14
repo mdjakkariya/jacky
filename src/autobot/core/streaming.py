@@ -15,3 +15,8 @@ from contextvars import ContextVar
 
 #: Set by the harness around each tool call to a ``line -> None`` sink; ``None`` otherwise.
 output_sink: ContextVar[Callable[[str], None] | None] = ContextVar("output_sink", default=None)
+
+#: Set by the coder driver around the act phase to a ``todos -> None`` sink; ``None`` otherwise.
+plan_sink: ContextVar[Callable[[list[dict[str, str]]], None] | None] = ContextVar(
+    "plan_sink", default=None
+)
