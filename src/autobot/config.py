@@ -176,6 +176,14 @@ class Settings:
     # is far too small for code — a coder plan or reply would truncate — so the coder build
     # raises it via _apply_profile_overrides. The assistant's budget is left untouched.
     coder_llm_max_tokens: int = 4096
+    # How many plan→tool→result rounds one turn may run before the harness forces a final
+    # answer. The assistant default is small (short voice turns); the coder profile raises it
+    # via _apply_profile_overrides so a real multi-step task (explore → run tests → diagnose →
+    # fix → re-run) finishes in one turn instead of stopping at "I hit my step limit". The
+    # harness's doom-loop + consecutive-failure guards still stop genuine spinning, and prompt
+    # caching keeps the extra rounds cheap (the re-sent prefix is a cache read at 0.1x).
+    max_tool_rounds: int = 8
+    coder_max_tool_rounds: int = 50
     # A per-workspace coder daemon shuts itself down after this many seconds with no
     # requests, so daemons for projects you've stopped using don't pile up. 0 disables it.
     coder_idle_timeout_s: int = 1200

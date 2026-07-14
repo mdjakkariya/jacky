@@ -294,14 +294,17 @@ def _apply_profile_overrides(settings: Settings) -> Settings:
     truncate at the assistant's small default. Both the local (``llm_max_tokens``) and the
     cloud (``anthropic_max_tokens``) budgets are raised — otherwise a cloud coder is silently
     capped at the tiny assistant default and large edits fail with "too many steps". The
-    OpenAI-compatible provider sends no max-tokens cap, so it needs no override. All other
-    profiles are returned unchanged.
+    OpenAI-compatible provider sends no max-tokens cap, so it needs no override. The coder also
+    gets a much larger ``max_tool_rounds`` (the plan→tool→result cap per turn) so a real
+    multi-step task finishes in one turn instead of stopping early at "I hit my step limit".
+    All other profiles are returned unchanged.
     """
     if settings.profile == "coder":
         return replace(
             settings,
             llm_max_tokens=settings.coder_llm_max_tokens,
             anthropic_max_tokens=settings.coder_llm_max_tokens,
+            max_tool_rounds=settings.coder_max_tool_rounds,
         )
     return settings
 
@@ -361,6 +364,7 @@ def _build_llm(
                 store,
                 cwd=cwd,
                 model_name=settings.anthropic_model,
+                max_rounds=settings.max_tool_rounds,
                 redact=lambda t: redact_secrets(t)[0],
             )
         except ImportError:
@@ -395,6 +399,7 @@ def _build_llm(
             store,
             cwd=cwd,
             model_name=settings.llm_model,
+            max_rounds=settings.max_tool_rounds,
             redact=lambda t: redact_secrets(t)[0],
         )
     from autobot.tools.selection import build_tool_selector
@@ -406,6 +411,7 @@ def _build_llm(
         store,
         cwd=cwd,
         model_name=settings.llm_model,
+        max_rounds=settings.max_tool_rounds,
         redact=lambda t: redact_secrets(t)[0],
     )
 
