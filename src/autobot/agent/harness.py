@@ -34,8 +34,10 @@ if TYPE_CHECKING:
 
 _log = get_logger("harness")
 
-_MAX_TOOL_ROUNDS = 8  # cap the plan→tool→result loop so it can't spin forever
+_MAX_TOOL_ROUNDS = 8  # runaway backstop on the plan→tool→result loop (insurance, not the
+# normal stop — natural completion + progress guards below end a turn first)
 _DOOM_LIMIT = 4  # abort if one identical (name+args) call repeats this many times
+_MAX_UNPRODUCTIVE_ROUNDS = 3  # stop after this many rounds in a row with NO successful tool
 # Phase 2 TODO: when polling/wait tools arrive, key this on CONSECUTIVE identical
 # calls with no intervening progress (not a per-turn total) so legitimate polling
 # with identical args isn't cut off.
@@ -74,6 +76,7 @@ class AgentHarness:
         model_name: str = "",
         max_rounds: int = _MAX_TOOL_ROUNDS,
         doom_limit: int = _DOOM_LIMIT,
+        max_unproductive: int = _MAX_UNPRODUCTIVE_ROUNDS,
         redact: Callable[[str], str] | None = None,
     ) -> None:
         """Wire the harness.
@@ -83,8 +86,11 @@ class AgentHarness:
             store: Persists the conversation session across turns.
             cwd: Working directory recorded on the session.
             model_name: Model identifier recorded on the session.
-            max_rounds: Cap on the plan-tool-result loop per turn.
+            max_rounds: Runaway backstop on the plan-tool-result loop per turn.
             doom_limit: Times an identical call may repeat before aborting.
+            max_unproductive: Stop the turn after this many consecutive rounds that ran
+                tools but produced no successful result (diminishing-returns guard) — so a
+                model flailing with new-but-failing calls stops well before ``max_rounds``.
             redact: Optional scrubber applied to each tool result's content right
                 before it is handed to the model (e.g. to strip secrets from tool
                 output before any provider sees it). ``None`` (the default) passes
@@ -96,6 +102,7 @@ class AgentHarness:
         self._model_name = model_name
         self._max_rounds = max_rounds
         self._doom_limit = doom_limit
+        self._max_unproductive = max_unproductive
         self._redact = redact
         self._session = store.create(cwd, model_name)
 
@@ -125,6 +132,7 @@ class AgentHarness:
         failed: dict[str, str] = {}  # anti-thrash: call key -> failure text
         seen: dict[str, int] = {}  # doom-loop: call key -> times issued this turn
         reply = ""
+        unproductive = 0  # consecutive rounds that ran tools but produced no successful result
         for _ in range(self._max_rounds):
             resp = self._model.send(self._session, on_event)
             if not resp.tool_calls:
@@ -133,12 +141,14 @@ class AgentHarness:
             _log.info("planned tools=%s", [c.name for c in resp.tool_calls])
             results: list[tuple[ToolCall, ToolResult]] = []
             all_repeat = True  # did this round only re-issue calls that already failed?
+            progressed = False  # did any tool this round actually succeed (real forward progress)?
             last_fail = ""
             doomed = False
             for call in resp.tool_calls:
                 discovery = self._model.handle_discovery(self._session, call)
                 if discovery is not None:
                     all_repeat = False  # discovery is real progress, not a failing repeat
+                    progressed = True
                     results.append((call, ToolResult(name=call.name, content=discovery, ok=True)))
                     continue
                 key = _call_key(call)
@@ -180,7 +190,9 @@ class AgentHarness:
                             "ok": ok,
                         }
                     )
-                    if not result.ok:
+                    if result.ok:
+                        progressed = True
+                    else:
                         failed[key] = out
                         last_fail = out
                 results.append((call, ToolResult(name=call.name, content=out, ok=ok)))
@@ -199,6 +211,11 @@ class AgentHarness:
             if all_repeat:  # model is just retrying a failing step — stop and explain
                 _log.info("stopping: round repeated only previously-failed tool calls")
                 reply = last_fail or "I couldn't complete that, so I stopped."
+                break
+            unproductive = 0 if progressed else unproductive + 1
+            if unproductive >= self._max_unproductive:
+                _log.info("stopping: %d rounds with no successful progress", unproductive)
+                reply = last_fail or "I couldn't make progress after several tries, so I stopped."
                 break
         else:
             reply = self._model.final_answer_no_tools(self._session)
