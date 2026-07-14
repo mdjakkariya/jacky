@@ -25,7 +25,12 @@ class Answer:
 
 
 def parse_plan_choice(raw: str) -> Answer | None:
-    """Map a typed plan answer to an :class:`Answer`, or ``None`` if unrecognized."""
+    """Map a typed plan answer to an :class:`Answer`, or ``None`` if unrecognized.
+
+    Accepts the canonical ``1``/``2``/``3`` and ``y``/``e``/``n`` tokens; free text then
+    falls back to the on-device intent classifier (a plain yes → approve, no → reject).
+    Edit/refine stays explicit (``2``/``e``/``edit``).
+    """
     low = raw.strip().lower()
     if low in ("1", "y", "yes", "approve"):
         return Answer("approve")
@@ -33,17 +38,39 @@ def parse_plan_choice(raw: str) -> Answer | None:
         return Answer("refine")
     if low in ("3", "n", "no", "reject", "cancel"):
         return Answer("reject")
+    intent = _intent(raw)
+    if intent is True:
+        return Answer("approve")
+    if intent is False:
+        return Answer("reject")
     return None
 
 
 def parse_confirm_choice(raw: str) -> Answer | None:
-    """Map a typed confirm answer to an :class:`Answer`, or ``None`` if unrecognized."""
+    """Map a typed confirm answer to an :class:`Answer`, or ``None`` if unrecognized.
+
+    Accepts the canonical ``1``/``2`` and ``y``/``n`` tokens; free text ("go ahead",
+    "nope") then falls back to the on-device intent classifier so a natural reply still
+    resolves. Returns ``None`` only when the answer is genuinely ambiguous.
+    """
     low = raw.strip().lower()
     if low in ("1", "y", "yes"):
         return Answer("yes")
     if low in ("2", "n", "no", "reject"):
         return Answer("no")
+    intent = _intent(raw)
+    if intent is True:
+        return Answer("yes")
+    if intent is False:
+        return Answer("no")
     return None
+
+
+def _intent(raw: str) -> bool | None:
+    """Reuse the on-device yes/no classifier (no LLM) for free-text confirm answers."""
+    from autobot.tools.confirm import parse_confirmation
+
+    return parse_confirmation(raw)
 
 
 class JackCompleter(Completer):

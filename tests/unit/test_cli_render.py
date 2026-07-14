@@ -47,7 +47,8 @@ def test_rich_dispatch_plan_lists_steps() -> None:
     reply = "Here's my plan:\n1. wrap fetch\n2. add test"
     console.print(render_rich(Segment("plan", reply, ("wrap fetch", "add test"))))
     out = console.export_text()
-    assert "wrap fetch" in out and "add test" in out and "Proceed" in out
+    assert "wrap fetch" in out and "add test" in out
+    assert "[y]es" in out and "[e]dit" in out and "[n]o" in out
 
 
 def test_rich_dispatch_pending_is_a_permission_card() -> None:
@@ -123,3 +124,16 @@ def test_render_checkpoints_lists_labels() -> None:
     console.print(render_checkpoints(rows))
     out = console.export_text()
     assert "before edit" in out and "first" in out
+
+
+def test_permission_card_shows_yn_not_numbers() -> None:
+    pytest.importorskip("rich")
+    from rich.console import Console
+
+    from autobot.cli.render import render_permission_card
+
+    console = Console(record=True, width=80)
+    console.print(render_permission_card("Run this command?\n\n  $ npm install"))
+    out = console.export_text()
+    assert "[y/n]" in out
+    assert "[1]" not in out and "Proceed" not in out

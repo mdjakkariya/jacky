@@ -242,6 +242,10 @@ class Shell:
                 return Answer("reject") if kind == "plan" else Answer("no")
             ans = parse(raw)
             if ans is None:
+                # Unrecognized/ambiguous answer — hint instead of silently re-looping.
+                self._console.print(
+                    "Please answer y, e, or n." if kind == "plan" else "Please answer y or n."
+                )
                 continue
             if ans.value == "refine":  # plan edit: take the follow-up as the refinement
                 try:

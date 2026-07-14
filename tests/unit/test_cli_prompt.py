@@ -61,3 +61,25 @@ def test_file_completer_offers_cwd_paths(tmp_path: Path) -> None:
     texts = [c.text for c in comp.get_completions(doc, None)]
     assert any("apples.py" in t for t in texts)
     assert not any("bananas.py" in t for t in texts)
+
+
+@pytest.mark.parametrize(
+    "raw,expected",
+    [("go ahead", "yes"), ("sure", "yes"), ("nope", "no"), ("cancel", "no")],
+)
+def test_parse_confirm_free_text_intent(raw: str, expected: str) -> None:
+    ans = prompt.parse_confirm_choice(raw)
+    assert ans is not None and ans.value == expected
+
+
+def test_parse_confirm_genuinely_ambiguous_is_none() -> None:
+    assert prompt.parse_confirm_choice("why?") is None
+
+
+def test_parse_plan_free_text_intent_keeps_edit_explicit() -> None:
+    approve = prompt.parse_plan_choice("go ahead")
+    reject = prompt.parse_plan_choice("no thanks")
+    refine = prompt.parse_plan_choice("e")
+    assert approve is not None and approve.value == "approve"
+    assert reject is not None and reject.value == "reject"
+    assert refine is not None and refine.value == "refine"  # edit stays explicit

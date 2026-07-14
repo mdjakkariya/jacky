@@ -375,3 +375,17 @@ def test_turn_renders_streamed_output_lines(tmp_path: Path) -> None:
     assert "PASS a.spec.ts" in text
     assert "PASS b.spec.ts" in text
     assert "All tests passed." in text
+
+
+def test_ask_hints_on_ambiguous_then_accepts(tmp_path: Path) -> None:
+    # An unrecognized confirm answer prints a hint (not a silent re-loop), then a valid
+    # answer proceeds.
+    turns = {
+        "start": [{"status": "pending", "prompt": "Run this command?\n\n  $ npm i"}],
+        "answer": [{"status": "done", "reply": "Done."}],
+    }
+    sh, console = _make(["install deps", "huh?", "y", None], turns, tmp_path)
+    sh.run()
+    out = console.export_text().lower()
+    assert "answer y or n" in out
+    assert "done." in out

@@ -15,7 +15,6 @@ from autobot.cli.classify import Segment
 
 if TYPE_CHECKING:
     from rich.console import RenderableType
-    from rich.text import Text
 
 
 def render_plain(seg: Segment) -> str:
@@ -74,20 +73,8 @@ def render_tool(seg: Segment) -> RenderableType:
     return Text(f"{theme.GLYPH_TOOL}  {seg.text}", style="tool")
 
 
-def _proceed(*labels: str) -> Text:
-    """A ``Proceed?   [1] … [2] …`` choice line with teal-numbered options."""
-    from rich.text import Text
-
-    line = Text("Proceed?", style="bold")
-    for i, label in enumerate(labels, 1):
-        line.append("   ")
-        line.append(f"[{i}]", style="teal")
-        line.append(f" {label}")
-    return line
-
-
 def render_plan_card(reply: str) -> RenderableType:
-    """The plan: the assistant's numbered plan, then the approve / edit / cancel choices.
+    """The plan: the assistant's numbered plan, then the ``[y]es · [e]dit · [n]o`` choices.
 
     The reply already contains the numbered steps, so they are shown once (via the reply)
     and never re-listed.
@@ -95,15 +82,23 @@ def render_plan_card(reply: str) -> RenderableType:
     from rich.console import Group
     from rich.text import Text
 
-    return Group(render_reply(reply), Text(""), _proceed("Yes", "Edit", "No"))
+    choices = Text()
+    choices.append("[y]es", style="teal")
+    choices.append("  ·  ")
+    choices.append("[e]dit", style="teal")
+    choices.append("  ·  ")
+    choices.append("[n]o", style="teal")
+    return Group(render_reply(reply), Text(""), choices)
 
 
 def render_permission_card(prompt_text: str) -> RenderableType:
-    """The permission prompt: the (amber) request, then the run / decline choices."""
+    """The permission prompt: the (amber) request, then a plain ``[y/n]`` choice line."""
     from rich.console import Group
     from rich.text import Text
 
-    return Group(Text(prompt_text, style="amber"), Text(""), _proceed("Yes, run it", "No"))
+    choices = Text()
+    choices.append("[y/n]", style="teal")
+    return Group(Text(prompt_text, style="amber"), Text(""), choices)
 
 
 def render_welcome(ctx: dict[str, str]) -> RenderableType:
