@@ -38,20 +38,6 @@ def _open_report_default(rollups: dict[str, Any]) -> str:
     return str(write_and_open(rollups, now=datetime.now()))
 
 
-def _log_report_default() -> str:
-    """Fallback debug report built from the on-disk log when the daemon is unreachable."""
-    from pathlib import Path
-
-    from autobot.diagnostics import build_report
-
-    try:
-        settings = Settings.load()
-        log_path = Path(settings.log_dir).expanduser() / "autobot.log"
-        return build_report(settings, log_path=log_path)
-    except Exception:  # a debug helper must not itself fail
-        return ""
-
-
 @dataclass(frozen=True, slots=True)
 class Deps:
     """Injectable collaborators for the handlers (defaults are the real functions)."""
@@ -67,8 +53,6 @@ class Deps:
     load_settings: Callable[[], Any] = Settings.load
     get_usage: Callable[[str], dict[str, Any]] = client.get_usage
     open_report: Callable[[dict[str, Any]], str] = _open_report_default
-    get_report: Callable[[str], str] = client.get_report
-    report_fallback: Callable[[], str] = _log_report_default
 
 
 def handle(
@@ -107,14 +91,23 @@ def handle(
 def _debug(base_url: str, cwd: str, deps: Deps) -> str:
     """Write a shareable session debug bundle and tell the user how to copy it.
 
-    Assembles the daemon's redacted log report (falling back to a log-file report if the
-    daemon is unreachable) + the session's transcript path + token/cost summary, writes it to
-    ``<cwd>/.jack/debug-report.md``, and returns copy/paste instructions.
+    File-based (works with or without the daemon): the newest session transcript excerpt + the
+    coder-relevant recent log + the session's token/cost summary, written to
+    ``<cwd>/.jack/debug-report.md`` (secrets/paths redacted); returns copy/paste instructions.
     """
-    report = deps.get_report(base_url) or deps.report_fallback()
-    cost = debug_report.cost_line(deps.get_usage(base_url))
+    from pathlib import Path
+
+    settings = deps.load_settings()
+    log_path = Path(getattr(settings, "log_dir", "~/.autobot/logs")).expanduser() / "autobot.log"
+    autonomy = str(getattr(settings, "coding_autonomy", "?"))
     transcript = debug_report.newest_transcript(cwd)
-    bundle = debug_report.build_bundle(report, transcript=transcript, cost=cost)
+    bundle = debug_report.build_bundle(
+        transcript=transcript,
+        log_path=log_path,
+        cwd=cwd,
+        usage=deps.get_usage(base_url),
+        autonomy=autonomy,
+    )
     path = debug_report.write_bundle(bundle, cwd)
     _log.info("debug report written path=%s", path)
     return debug_report.share_hint(path, transcript)
