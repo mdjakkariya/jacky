@@ -5,10 +5,19 @@ from __future__ import annotations
 import queue
 import threading
 from collections.abc import Callable
+from typing import Any
 
-from autobot.agent.coder_turn import CoderTurnDriver, SuspendingConfirmer, TurnChannel
+from autobot.agent.coder_turn import (
+    _CONTINUE_NUDGE,
+    _REMAINING_NUDGE,
+    MAX_ACT_CONTINUES,
+    CoderTurnDriver,
+    SuspendingConfirmer,
+    TurnChannel,
+)
 from autobot.config import Settings
-from autobot.core.types import Risk, ToolCall
+from autobot.core.streaming import plan_sink
+from autobot.core.types import Risk, ToolCall, ToolExecutor
 from autobot.tools.audit import AuditLog
 from autobot.tools.permission import PermissionGate
 from autobot.tools.registry import ToolRegistry, ToolSpec
@@ -55,6 +64,49 @@ class _ScriptedLLM:
         return self.route
 
 
+class _TodoScriptedLLM:
+    """A fake llm whose act turns publish a scripted checklist via the current ``plan_sink``.
+
+    Plan turns return ``plan_reply``. Each act turn — the initial one and every continuation
+    nudge — consumes the next ``(todos, reply)`` step (clamping to the last once exhausted):
+    when ``todos`` is not ``None`` it calls the current ``plan_sink``, mimicking the real
+    ``update_plan`` tool, then returns ``reply``. ``prompts`` records each act prompt so tests
+    can assert the nudge text the driver sends.
+    """
+
+    def __init__(
+        self,
+        plan_reply: str,
+        act_steps: list[tuple[list[dict[str, str]] | None, str]],
+    ) -> None:
+        self.plan_reply = plan_reply
+        self.act_steps = act_steps
+        self.act_calls = 0
+        self.prompts: list[str] = []
+
+    def run_turn(
+        self,
+        user_text: str,
+        execute: ToolExecutor,
+        on_event: Callable[[dict[str, Any]], None] | None = None,
+    ) -> str:
+        if "PLANNING" in user_text:
+            return self.plan_reply
+        self.prompts.append(user_text)
+        index = min(self.act_calls, len(self.act_steps) - 1)
+        self.act_calls += 1
+        todos, reply = self.act_steps[index]
+        if todos is not None:
+            sink = plan_sink.get()
+            if sink is not None:
+                sink(todos)  # mimic the real update_plan tool writing to the driver's sink
+        return reply
+
+    def complete(self, prompt: str, *, temperature: float = 0.0) -> str:
+        """Router stub — unused in plan mode, present for parity with the real llm."""
+        return "PLAN"
+
+
 def _coder_gate(confirmer: SuspendingConfirmer) -> PermissionGate:
     reg = ToolRegistry()
     reg.register(
@@ -88,7 +140,7 @@ def _coder_gate(confirmer: SuspendingConfirmer) -> PermissionGate:
 
 
 def _driver(
-    llm: _ScriptedLLM,
+    llm: Any,  # a duck-typed fake LLM (_ScriptedLLM or _TodoScriptedLLM); CoderTurnDriver takes Any
     autonomy: str = "plan",
     checkpoint: Callable[[str], None] | None = None,
 ) -> CoderTurnDriver:
@@ -425,3 +477,81 @@ def test_checkpoint_failure_does_not_break_the_turn() -> None:
     list(d.start_stream("edit foo"))
     final = list(d.reply_stream("approve"))
     assert final[-1] == {"status": "done", "reply": "Edited foo."}
+
+
+def test_act_stops_when_all_todos_settled() -> None:
+    # The very first act run publishes a fully-settled checklist (done + blocked), so the
+    # todo-driven loop completes immediately — no continuation nudge, no matter the reply text.
+    todos = [
+        {"step": "edit foo", "status": "done"},
+        {"step": "drop bar", "status": "blocked"},
+    ]
+    llm = _TodoScriptedLLM("1. edit foo\n2. drop bar", [(todos, "All settled.")])
+    d = _driver(llm)
+    assert list(d.start_stream("do it"))[-1]["status"] == "plan"
+    final = list(d.reply_stream("approve"))
+    assert final[-1] == {"status": "done", "reply": "All settled."}
+    assert llm.act_calls == 1  # all_settled after the first run → the loop breaks with no nudge
+
+
+def test_act_nudges_with_remaining_steps_until_capped() -> None:
+    # Every act run leaves a step in_progress, so the loop keeps nudging (a fresh run_turn)
+    # with the still-open step text — bounded by MAX_ACT_CONTINUES.
+    open_todos = [
+        {"step": "edit foo", "status": "done"},
+        {"step": "run the suite", "status": "in_progress"},
+    ]
+    steps: list[tuple[list[dict[str, str]] | None, str]] = [
+        (open_todos, "still working") for _ in range(MAX_ACT_CONTINUES + 1)
+    ]
+    llm = _TodoScriptedLLM("1. edit foo\n2. run the suite", steps)
+    d = _driver(llm)
+    list(d.start_stream("do it"))
+    final = list(d.reply_stream("approve"))
+    assert final[-1]["status"] == "done"
+    assert llm.act_calls == MAX_ACT_CONTINUES + 1  # 1 initial run + MAX nudges, then the cap
+    nudges = llm.prompts[1:]  # prompts[0] is the initial _ACT_PROMPT
+    assert len(nudges) == MAX_ACT_CONTINUES
+    for nudge in nudges:
+        assert nudge.startswith(_REMAINING_NUDGE)
+        assert "run the suite" in nudge  # the still-open step is carried into the nudge
+        assert "edit foo" not in nudge  # a settled step is not re-listed
+
+
+def test_act_falls_back_to_continuation_heuristic_when_tool_unused() -> None:
+    # The model never calls update_plan (todos stays None) but its reply reads as a mid-task
+    # stall, so the driver falls back to _is_continuation_intent and nudges with _CONTINUE_NUDGE.
+    steps: list[tuple[list[dict[str, str]] | None, str]] = [
+        (None, "Now I'll run the tests.") for _ in range(MAX_ACT_CONTINUES + 1)
+    ]
+    llm = _TodoScriptedLLM("1. edit foo", steps)
+    d = _driver(llm)
+    list(d.start_stream("do it"))
+    final = list(d.reply_stream("approve"))
+    assert final[-1]["status"] == "done"
+    assert llm.act_calls == MAX_ACT_CONTINUES + 1
+    assert llm.prompts[1:] == [_CONTINUE_NUDGE] * MAX_ACT_CONTINUES  # heuristic nudge, not todo
+
+
+def test_act_emits_plan_update_events() -> None:
+    # When the model publishes a checklist, the driver emits a plan_update event carrying the
+    # PlanState's current items (one per update_plan call) so the CLI can render progress.
+    running = [
+        {"step": "edit foo", "status": "in_progress"},
+        {"step": "run tests", "status": "pending"},
+    ]
+    settled = [
+        {"step": "edit foo", "status": "done"},
+        {"step": "run tests", "status": "done"},
+    ]
+    llm = _TodoScriptedLLM(
+        "1. edit foo\n2. run tests",
+        [(running, "working"), (settled, "Done.")],
+    )
+    d = _driver(llm)
+    list(d.start_stream("do it"))
+    events = list(d.reply_stream("approve"))
+    plan_updates = [e for e in events if e.get("type") == "plan_update"]
+    assert len(plan_updates) == 2  # one emitted per update_plan the fake makes
+    assert plan_updates[0]["todos"] == running
+    assert plan_updates[-1]["todos"] == settled

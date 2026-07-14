@@ -14,7 +14,9 @@ import threading
 from collections.abc import Callable, Iterator
 from typing import Any
 
+from autobot.agent.plan_state import PlanState
 from autobot.config import Settings
+from autobot.core.streaming import plan_sink
 from autobot.core.types import Risk, ToolCall, ToolExecutor, ToolResult
 from autobot.logging_setup import get_logger
 from autobot.tools.code.command_policy import classify_command, is_read_only_command
@@ -220,7 +222,9 @@ _PLAN_PROMPT_PREFIX = (
 )
 _ACT_PROMPT = (
     "Your plan is approved. Carry it out now, step by step: make the edits and run the "
-    "commands from your plan, then briefly report what you did."
+    "commands from your plan, then briefly report what you did. As you work, call "
+    "`update_plan` to keep your checklist current (mark each step in_progress, then done) — "
+    "that's how progress is shown and how the turn knows it's finished."
 )
 _ROUTE_PROMPT = (
     "You route a coding request to one of two execution modes. Reply with EXACTLY one "
@@ -235,6 +239,7 @@ _ERROR_REPLY = "Something went wrong on my end, so I stopped. Nothing was change
 
 MAX_ACT_CONTINUES = 2  # auto-nudge the model past a narrate-then-stop, at most this many times
 _CONTINUE_NUDGE = "Continue with the remaining steps of the task."
+_REMAINING_NUDGE = "Continue with the remaining steps:\n"
 
 # Forward-looking, first-person cues at the tail of a reply that mean the model announced a
 # next step and then stopped (the narrate-then-stop failure mode) rather than finishing.
@@ -461,10 +466,14 @@ class CoderTurnDriver:
                     channel.done(_CANCELLED_REPLY)
                     return
                 if outcome == "reply":  # conversational / no actionable plan — just answer
-                    channel.done(payload)
+                    channel.done(payload if isinstance(payload, str) else "")
                     return
                 # outcome == "act": the plan was approved, so its commands run pre-authorized.
-                reply = self._act(channel, ask_on_confirm=False, request_text=text)
+                # ``payload`` carries the approved todo steps, seeding the act phase checklist.
+                todos = payload if isinstance(payload, list) else []
+                reply = self._act(
+                    channel, ask_on_confirm=False, request_text=text, approved_todos=todos
+                )
             else:  # confirm: no plan gate; ask before each non-allowlisted command
                 reply = self._act(channel, first_text=text, ask_on_confirm=True, request_text=text)
             channel.done(reply)
@@ -472,14 +481,15 @@ class CoderTurnDriver:
             _log.exception("coder turn failed")
             channel.done(_ERROR_REPLY)
 
-    def _plan_loop(self, channel: TurnChannel, text: str) -> tuple[str, str]:
+    def _plan_loop(self, channel: TurnChannel, text: str) -> tuple[str, str | list[str]]:
         """Plan (read-only), then decide the next step.
 
         Returns one of:
             ``("reply", text)`` — the turn was conversational (a greeting, a question the
                 coder answered from read-only tools, or a request for clarification): there
                 is nothing to approve, so answer directly without a plan-approval gate.
-            ``("act", "")`` — the user approved an actionable plan; run the act phase.
+            ``("act", todo)`` — the user approved an actionable plan; run the act phase with
+                ``todo`` (the parsed numbered/bulleted steps) seeding its checklist.
             ``("cancel", "")`` — the user rejected the plan.
 
         An actionable plan is detected by the presence of numbered/bulleted todo steps
@@ -500,7 +510,7 @@ class CoderTurnDriver:
             value = answer.get("value", "").strip().lower()
             if value in {"approve", "yes", "y"}:
                 _log.info("plan approved")
-                return "act", ""
+                return "act", todo
             if value in {"reject", "no", "n"}:
                 _log.info("plan rejected")
                 return "cancel", ""
@@ -514,6 +524,7 @@ class CoderTurnDriver:
         first_text: str | None = None,
         ask_on_confirm: bool,
         request_text: str,
+        approved_todos: list[str] | None = None,
     ) -> str:
         """Run the act phase; ``ask_on_confirm`` gates each non-allowlisted command.
 
@@ -522,6 +533,13 @@ class CoderTurnDriver:
         (``True``). Both still refuse blocklisted commands and stay within the cwd jail. A
         workspace checkpoint labelled ``request_text`` (the user's original request) is taken
         just before the first real change — never on a read-only act.
+
+        ``approved_todos`` seeds the living checklist (:class:`PlanState`): the model marks
+        each step via the ``update_plan`` tool, which reaches this turn through the
+        ``plan_sink`` ContextVar set below. The turn completes when every step is settled
+        (done/blocked); while steps remain it is nudged to continue with the open ones. For a
+        model that never calls the tool (or the confirm/no-plan path, where ``approved_todos``
+        is ``None``), it falls back to the ``_is_continuation_intent`` narration heuristic.
         """
         settings = self._settings()
         before_mutation: Callable[[], None] | None = None
@@ -544,15 +562,51 @@ class CoderTurnDriver:
             before_mutation=before_mutation,
         )
         prompt = first_text if first_text is not None else _ACT_PROMPT
-        reply: str = self._llm.run_turn(prompt, executor, on_event=channel.emit)
-        # Backstop for the narrate-then-stop failure mode: if the model announced a next
-        # step and stopped instead of finishing, nudge it to continue (capped, act-phase
-        # only) so the user doesn't have to type "continue" mid-task.
-        continues = 0
-        while continues < MAX_ACT_CONTINUES and _is_continuation_intent(reply):
-            continues += 1
-            _log.info("act auto-continue %d/%d", continues, MAX_ACT_CONTINUES)
-            reply = self._llm.run_turn(_CONTINUE_NUDGE, executor, on_event=channel.emit)
+
+        # The living checklist the act phase is driven by: seeded from the approved plan,
+        # then replaced by the model's update_plan payloads. Completion is intent-defined
+        # (all steps settled), with the narration heuristic kept only as a fallback.
+        state = PlanState(approved_todos or [])
+
+        def _publish(todos: list[dict[str, str]]) -> None:
+            """The plan_sink: apply the model's update_plan payload + stream a delta event."""
+            state.replace(todos)
+            channel.emit(
+                {
+                    "type": "plan_update",
+                    "todos": [{"step": item.step, "status": item.status} for item in state.items],
+                }
+            )
+
+        token = plan_sink.set(_publish)
+        try:
+            reply: str = self._llm.run_turn(prompt, executor, on_event=channel.emit)
+            # Continue while the task isn't finished: a cooperating model completes exactly
+            # when its todos are all settled; one that ignores update_plan falls back to the
+            # narrate-then-stop heuristic. Either way MAX_ACT_CONTINUES caps the nudges (each
+            # nudge is a fresh run_turn, itself bounded by the harness round backstop).
+            continues = 0
+            while continues < MAX_ACT_CONTINUES:
+                if state.used():
+                    if state.all_settled():
+                        break  # every step done/blocked → the task is complete
+                    nudge = _REMAINING_NUDGE + state.remaining_text()
+                elif _is_continuation_intent(reply):
+                    # The model ignored update_plan — fall back to the narration heuristic.
+                    nudge = _CONTINUE_NUDGE
+                else:
+                    break
+                continues += 1
+                _log.info(
+                    "act continue %d/%d settled=%s summary=%s",
+                    continues,
+                    MAX_ACT_CONTINUES,
+                    state.all_settled(),
+                    state.summary(),
+                )
+                reply = self._llm.run_turn(nudge, executor, on_event=channel.emit)
+        finally:
+            plan_sink.reset(token)
         _log.info("turn done")
         return reply
 
