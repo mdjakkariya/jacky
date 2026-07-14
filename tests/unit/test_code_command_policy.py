@@ -167,6 +167,27 @@ def test_writing_and_chained_commands_still_confirm() -> None:
         assert classify_command(cmd)[0] == "confirm", cmd
 
 
+def test_exec_write_smuggling_flags_are_not_read_only() -> None:
+    # Argv smuggling: a "read-only" tool with an exec/write flag must NOT auto-run —
+    # it has to go through the confirm prompt like any acting command.
+    for cmd in (
+        "rg --pre /bin/sh foo .",
+        "rg --pre-glob '*.log' foo",
+        "rg --search-zip foo .",
+        "git diff --output=/tmp/x",
+        "cat file | rg --pre sh x",
+    ):
+        assert not is_read_only_command(cmd), cmd
+        assert classify_command(cmd)[0] == "confirm", cmd
+
+
+def test_lookalike_flags_stay_read_only() -> None:
+    # These resemble denied flags but are read-only: --pretty is not --pre, and grep's
+    # -o means only-matching (not an output file).
+    assert is_read_only_command("git log --pretty=oneline -5")
+    assert is_read_only_command("grep -o pattern file.txt")
+
+
 def test_dangerous_beats_read_only_lookalike() -> None:
     # A read-only-looking leading token must never override the dangerous baseline.
     assert classify_command("rm -rf /")[0] == "block"

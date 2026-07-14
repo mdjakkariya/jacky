@@ -98,9 +98,27 @@ _SAFE_LEADERS: tuple[str, ...] = (
     r"(pip|pip3)\s+(list|show)",
 )
 
-# Safe programs a pipeline may pipe INTO — pagers/filters that only read their stdin
-# (deliberately excludes `tee`/`sed -i`/`awk`, which can write files).
-_SAFE_FILTERS = r"(tail|head|cat|grep|rg|less|wc|sort|uniq)"
+# Safe programs a pipeline may pipe INTO — pagers/filters with no write/exec capability.
+# Deliberately excludes: `tee` (writes files), `sort -o`/`uniq OUT` (write via a flag or a
+# positional output file), `sed -i`/`awk` (can write/exec), and `less` (can shell out /
+# `LESSOPEN`).
+_SAFE_FILTERS = r"(tail|head|cat|grep|rg|wc)"
+
+# Flags that turn an otherwise read-only tool into an arbitrary-command or file-write
+# vector (argv smuggling). If any appear, the command is NOT read-only — it must go
+# through the confirm prompt like any other acting command, never auto-run. Guards the
+# permission gate against bypass via e.g. `rg --pre <cmd>` (ripgrep runs the preprocessor
+# command per file) or `git diff --output=<file>`. `--pre` is matched only as a whole
+# token so `git log --pretty` is unaffected.
+_EXEC_WRITE_FLAG = re.compile(
+    r"(?:^|\s)(?:"
+    r"--pre-glob|--pre|--search-zip|--hostname-bin"  # ripgrep: run an external command
+    r"|--output-file|--output"  # write output to a file (sort/git/…)
+    r"|--ext-diff|--ext-cmd"  # git: run an external diff/command
+    r"|-execdir|-exec|-delete"  # find-style exec/delete (defence in depth)
+    r")(?:=|\s|$)",
+    re.IGNORECASE,
+)
 
 # One safe stage: a safe leading program + args that introduce no new command or file
 # write (no `|;&<>$` or backtick), optionally ending in `2>&1`.
@@ -142,9 +160,11 @@ def is_read_only_command(command: str) -> bool:
 
     A read-only command auto-runs without a confirmation prompt (still audited by the
     gate). Conservative: any file-write redirect (``>``/``>>``), command chaining
-    (``;``/``&&``/``||``/``&``), command substitution (``$(...)``/backticks), or an
-    unrecognized leading program makes it non-read-only, so it falls through to confirm.
-    Never raises; unparseable input is treated as not read-only.
+    (``;``/``&&``/``||``/``&``), command substitution (``$(...)``/backticks), an
+    exec/write-enabling flag (``rg --pre``, ``--output``, ``--ext-diff`` — see
+    :data:`_EXEC_WRITE_FLAG`), or an unrecognized leading program makes it non-read-only,
+    so it falls through to confirm. Never raises; unparseable input is treated as not
+    read-only.
     """
     try:
         normalized = _normalize(command or "")
@@ -152,6 +172,8 @@ def is_read_only_command(command: str) -> bool:
         return False
     if not normalized or _matches_dangerous_baseline(normalized):
         return False
+    if _EXEC_WRITE_FLAG.search(normalized):
+        return False  # argv smuggling (e.g. `rg --pre <cmd>`, `git diff --output=<file>`)
     return bool(_SAFE_READONLY.match(normalized) or _INFO_ONLY.match(normalized))
 
 
