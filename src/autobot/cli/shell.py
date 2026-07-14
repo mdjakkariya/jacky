@@ -11,7 +11,7 @@ import subprocess
 import sys
 from collections.abc import Callable, Iterator
 from contextlib import AbstractContextManager
-from typing import Any
+from typing import Any, Protocol
 
 from autobot.cli import (
     client,
@@ -36,6 +36,21 @@ _Reader = Callable[[str], str | None]
 _Spin = Callable[[Any, str], AbstractContextManager[None]]
 _StreamTurn = Callable[[str, str], Iterator[dict[str, Any]]]
 _StreamAnswer = Callable[[str, str, str], Iterator[dict[str, Any]]]
+
+# The user_text sent for an auto-resumed turn. The harness prepends the actual task result
+# (from the notification inbox), so this just tells the model to act on what's above.
+_CONTINUATION_PROMPT = (
+    "A background task you started has finished (its result is included above). Continue the "
+    "task using that result; if everything is now complete, briefly confirm what happened."
+)
+
+
+class _TaskEvents(Protocol):
+    """What the shell needs from the background-events listener (for auto-resume)."""
+
+    def poll_completed(self) -> list[dict[str, Any]]:
+        """Drain and return finished-task events collected while idle."""
+        ...
 
 
 def gather_context(cwd: str) -> dict[str, str]:
@@ -90,6 +105,7 @@ class Shell:
         diff_since: Callable[[str, str | None], str | None] = gitdiff.diff_since,
         spin: _Spin = spinner.with_spinner,
         chooser: prompt.KeyChooser = prompt.read_choice,
+        events: _TaskEvents | None = None,
     ) -> None:
         """Wire the shell; all collaborators are injectable for tests."""
         self._base_url = base_url
@@ -102,6 +118,7 @@ class Shell:
         self._diff_since = diff_since
         self._spin = spin
         self._chooser = chooser
+        self._events = events
         self._turn_no = 0
 
     def run(self) -> None:
@@ -114,6 +131,9 @@ class Shell:
                 continue  # Ctrl-C at idle clears the line
             if line is None:
                 break  # EOF / Ctrl-D
+            if line == prompt.AUTO_CONTINUE:
+                self._continue_turn()  # a background task finished while idle — pick it up
+                continue
             line = line.strip()
             if not line:
                 continue
@@ -146,6 +166,22 @@ class Shell:
                 style="dim",
             )
         )
+
+    def _continue_turn(self) -> None:
+        """Auto-resume: a backgrounded task finished while idle — pick up its result.
+
+        Drains the finished-task events (for the notice), prints it, and runs a normal turn
+        with a continuation prompt; the daemon-side harness folds the actual task result into
+        that turn. A no-op if nothing is actually pending (a benign wake race).
+        """
+        done = self._events.poll_completed() if self._events is not None else []
+        if not done:
+            return
+        _log.info("auto-continue picking up %d finished task(s)", len(done))
+        self._console.print()
+        self._console.print(render.render_task_pickup(done))
+        self._turn(_CONTINUATION_PROMPT)
+        self._turn_no += 1
 
     def _command(self, name: str, args: str) -> bool:
         """Run a command; return True to exit the loop.
@@ -304,16 +340,26 @@ def run(base_url: str, cwd: str) -> None:  # pragma: no cover - launches the int
     """Launch the inline REPL against ``base_url`` for the project at ``cwd``."""
     from rich.console import Console
 
-    from autobot.cli.prompt import make_reader, make_session
+    from autobot.cli.autoresume import BackgroundEvents
+    from autobot.cli.prompt import make_auto_reader, make_session
     from autobot.cli.theme import jack_theme
 
     console = Console(theme=jack_theme())
-    reader = make_reader(make_session(cwd, commands.COMMANDS))
-    Shell(
-        base_url,
-        cwd,
-        stream_turn=client.stream_turn,
-        stream_answer=client.stream_answer,
-        reader=reader,
-        console=console,
-    ).run()
+    session = make_session(cwd, commands.COMMANDS)
+    # Hold the daemon's /coder/events stream open so a background task finishing while the
+    # prompt is idle wakes it and auto-resumes (make_auto_reader returns AUTO_CONTINUE).
+    events = BackgroundEvents(base_url)
+    events.start()
+    reader = make_auto_reader(session, events)
+    try:
+        Shell(
+            base_url,
+            cwd,
+            stream_turn=client.stream_turn,
+            stream_answer=client.stream_answer,
+            reader=reader,
+            console=console,
+            events=events,
+        ).run()
+    finally:
+        events.close()

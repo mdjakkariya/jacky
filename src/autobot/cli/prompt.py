@@ -16,6 +16,10 @@ from prompt_toolkit.completion import Completer, Completion
 from prompt_toolkit.document import Document
 from prompt_toolkit.history import InMemoryHistory
 
+#: Reader return value meaning "no line typed, but a background task finished while idle —
+#: run a continuation turn." A NUL-prefixed marker the user can never type themselves.
+AUTO_CONTINUE = "\x00__jack_auto_continue__"
+
 
 @dataclass(frozen=True, slots=True)
 class Answer:
@@ -185,5 +189,40 @@ def make_reader(session: PromptSession[str]) -> Callable[[str], str | None]:
             return session.prompt(ANSI(f"\x1b[1;38;2;79;214;184m{prompt_str}\x1b[0m"))
         except EOFError:
             return None
+
+    return reader
+
+
+def make_auto_reader(
+    session: PromptSession[str], events: Any
+) -> Callable[[str], str | None]:  # pragma: no cover - prompt_toolkit + threads (manual smoke)
+    """A reader that also returns :data:`AUTO_CONTINUE` when a background task finishes idle.
+
+    Wraps :func:`make_reader`, but while the prompt is blocking it lets ``events`` wake it:
+    when a task completes AND the input line is empty (never mid-typing), it exits the prompt
+    with :data:`AUTO_CONTINUE` so the shell can auto-resume. If a task already finished before
+    the prompt opened, it returns immediately.
+    """
+    base = make_reader(session)
+
+    def wake() -> None:
+        # Called from the events listener thread. Only interrupt an *idle* prompt (running,
+        # empty buffer); if the user is typing or no prompt is up, deliver on the next idle.
+        app = session.app
+        loop = app.loop
+        try:
+            if loop is not None and app.is_running and not app.current_buffer.text:
+                loop.call_soon_threadsafe(lambda: app.exit(result=AUTO_CONTINUE))
+        except Exception:  # a wake attempt must never crash the listener
+            pass
+
+    def reader(prompt_str: str) -> str | None:
+        if events.pending():  # finished while we were away — pick it up at once
+            return AUTO_CONTINUE
+        events.set_waker(wake)
+        try:
+            return base(prompt_str)
+        finally:
+            events.set_waker(None)
 
     return reader

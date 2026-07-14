@@ -460,6 +460,78 @@ def test_command_activity_paints_with_the_real_spinner_still_running(tmp_path: P
     assert "$ npm test" in out and "PASS a.spec.ts" in out and "Done." in out
 
 
+class _FakeEvents:
+    """A scripted background-events source: successive polls return the queued batches."""
+
+    def __init__(self, batches: list[list[dict[str, Any]]]) -> None:
+        self._batches = list(batches)
+
+    def poll_completed(self) -> list[dict[str, Any]]:
+        return self._batches.pop(0) if self._batches else []
+
+
+def test_auto_continue_picks_up_a_finished_task_when_idle(tmp_path: Path) -> None:
+    """An AUTO_CONTINUE from the reader runs a continuation turn with the nudge prompt."""
+    from autobot.cli.prompt import AUTO_CONTINUE
+
+    sent: list[str] = []
+
+    def stream_turn(_b: str, text: str) -> Iterator[dict[str, Any]]:
+        sent.append(text)
+        return iter([{"status": "done", "reply": "Picked up — all green."}])
+
+    def stream_answer(_b: str, _v: str, _t: str = "") -> Iterator[dict[str, Any]]:
+        return iter([])
+
+    console = _console()
+    shell.Shell(
+        "http://x",
+        str(tmp_path),
+        stream_turn=stream_turn,
+        stream_answer=stream_answer,
+        reader=_scripted_reader([AUTO_CONTINUE, None]),
+        console=console,
+        snapshot=lambda _c: None,
+        diff_since=lambda _c, _b: None,
+        spin=_noop_spin,
+        events=_FakeEvents([[{"id": "task-3", "status": "done"}]]),
+    ).run()
+    out = console.export_text()
+    assert "task-3" in out  # the pickup notice
+    assert "Picked up — all green." in out  # the continuation turn's reply
+    assert sent == [shell._CONTINUATION_PROMPT]  # the continuation used the nudge prompt
+
+
+def test_auto_continue_is_a_noop_when_nothing_pending(tmp_path: Path) -> None:
+    """A wake with nothing actually queued (a benign race) runs no turn."""
+    from autobot.cli.prompt import AUTO_CONTINUE
+
+    sent: list[str] = []
+
+    def stream_turn(_b: str, text: str) -> Iterator[dict[str, Any]]:
+        sent.append(text)
+        return iter([{"status": "done", "reply": "should not run"}])
+
+    def stream_answer(_b: str, _v: str, _t: str = "") -> Iterator[dict[str, Any]]:
+        return iter([])
+
+    console = _console()
+    shell.Shell(
+        "http://x",
+        str(tmp_path),
+        stream_turn=stream_turn,
+        stream_answer=stream_answer,
+        reader=_scripted_reader([AUTO_CONTINUE, None]),
+        console=console,
+        snapshot=lambda _c: None,
+        diff_since=lambda _c, _b: None,
+        spin=_noop_spin,
+        events=_FakeEvents([[]]),  # nothing pending
+    ).run()
+    assert sent == []  # no continuation turn ran
+    assert "should not run" not in console.export_text()
+
+
 def test_spinner_stays_up_through_a_command_and_tears_down_after(tmp_path: Path) -> None:
     """The spinner is NOT torn down on tool/output events — only at the end (no tokens here).
 

@@ -89,6 +89,21 @@ def render_todo(status: str, step: str) -> RenderableType:
     return Text(f"{glyph} {step}", style=style)
 
 
+def render_task_pickup(events: list[dict[str, Any]]) -> RenderableType:
+    """A notice that finished background task(s) are being auto-picked-up (auto-resume).
+
+    Shown when the REPL was idle and a backgrounded command completed: the agent continues
+    on its own with the result. Teal ``✓`` if all succeeded, amber ``✕`` if any failed.
+    """
+    from rich.text import Text
+
+    ids = ", ".join(str(e.get("id", "task")) for e in events)
+    ok = all(e.get("status") == "done" for e in events)
+    mark = "✓" if ok else "✕"
+    text = f"⚑ background {ids} finished {mark} — picking it up…"
+    return Text(text, style="teal" if ok else "amber")
+
+
 def render_plan_card(reply: str) -> RenderableType:
     """The plan: the assistant's numbered plan, then the ``[y]es · [e]dit · [n]o`` choices.
 
