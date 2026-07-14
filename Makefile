@@ -18,6 +18,12 @@ EXTRA_FLAGS := $(addprefix --extra ,$(EXTRAS))
 install: ## Sync the virtualenv with all deps (dev + wake + tts + daemon + cloud + whispercpp + aec + mcp + tui)
 	uv sync $(EXTRA_FLAGS)
 
+install-cli: ## Install/update the system-wide `jack` from THIS source (uv tool; no venv needed)
+	scripts/dev-install.sh
+
+uninstall-cli: ## Remove the system-wide `jack` install
+	scripts/dev-install.sh uninstall
+
 lint: ## Lint with ruff
 	uv run ruff check .
 
