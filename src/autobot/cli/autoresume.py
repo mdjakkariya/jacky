@@ -1,11 +1,10 @@
-"""Background-task auto-resume: hold the /coder/events stream open, wake an idle prompt.
+"""Background-task auto-resume: hold the /coder/events stream open, notify the app.
 
-The CLI is a synchronous REPL that blocks on the input prompt between turns. This helper
-runs a daemon thread that keeps the daemon's persistent ``/coder/events`` SSE open; when a
+Runs a daemon thread that keeps the daemon's persistent ``/coder/events`` SSE open; when a
 backgrounded command finishes it records the event and calls the current *waker* (installed
-by the auto-reader) so an idle prompt can return :data:`~autobot.cli.prompt.AUTO_CONTINUE`
-and the shell picks the result up on its own. Finished-while-busy events are simply queued
-and delivered the next time the shell drains them.
+by ``shell.run`` as ``lambda: japp.on_task_finished(events.poll_completed())``). The app then
+hops to its event loop and, when idle, runs a continuation turn on the result. Finished-while-
+busy events are queued and delivered when the current turn ends.
 """
 
 from __future__ import annotations

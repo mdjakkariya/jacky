@@ -15,7 +15,6 @@ from typing import Any
 
 from autobot.cli import render, theme
 from autobot.cli.classify import classify
-from autobot.cli.live_region import verb_for
 from autobot.cli.surface import Surface
 from autobot.logging_setup import get_logger
 
@@ -50,11 +49,10 @@ class TurnDriver:
     ) -> None:
         """Drive a turn: commit tool/output lines, resolve gates, commit reply + diff."""
         snap = self._snapshot(self._cwd)
-        verb = verb_for(turn_no)
         _log.info("turn start turn_no=%d", turn_no)
         try:
             while True:
-                phase = await self._consume_until_phase(events, verb)
+                phase = await self._consume_until_phase(events)
                 if phase is None:
                     return
                 seg = classify(phase)
@@ -83,15 +81,17 @@ class TurnDriver:
             self._surface.clear_activity()
 
     async def _consume_until_phase(
-        self, events: AsyncIterator[dict[str, Any]], verb: str
+        self, events: AsyncIterator[dict[str, Any]]
     ) -> dict[str, Any] | None:
         """Drain events, committing activity lines and keeping the live region current.
 
-        Returns the first phase event (``plan``/``pending``/``done``/``error``), or ``None``
-        if the stream ended without one (e.g. a dropped connection).
+        The app owns the spinner + verb + timer; the driver only supplies the sub-activity
+        (the current tool label). Returns the first phase event
+        (``plan``/``pending``/``done``/``error``), or ``None`` if the stream ended without
+        one (e.g. a dropped connection).
         """
         prev: dict[str, str] = {}
-        self._surface.set_activity(verb)
+        self._surface.set_activity("")  # spinner only until a tool starts
         async for evt in events:
             status = evt.get("status")
             if status in ("plan", "pending", "done", "error"):
@@ -100,18 +100,18 @@ class TurnDriver:
                 self._commit_plan_updates(evt, prev)
                 continue
             try:
-                self._commit_activity(evt, verb)
+                self._commit_activity(evt)
             except Exception:  # a bad renderable must never crash the turn
                 _log.exception("render failed for event; continuing turn")
             # token events: consumed, not painted (the live region already signals progress).
         return None
 
-    def _commit_activity(self, evt: dict[str, Any], verb: str) -> None:
+    def _commit_activity(self, evt: dict[str, Any]) -> None:
         """Commit a tool-start or command-output line and refresh the activity label."""
         seg = classify(evt)
         if seg.kind == "tool" and evt.get("event") == "start":
             self._surface.commit(render.render_tool(seg))
-            self._surface.set_activity(f"{verb} · {seg.text[:60]}")
+            self._surface.set_activity(seg.text[:60])  # the tool now running
         elif seg.kind == "output":
             from rich.text import Text
 

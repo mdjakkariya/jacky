@@ -9,7 +9,20 @@ from prompt_toolkit.input import DummyInput, create_pipe_input
 from prompt_toolkit.output import DummyOutput
 from rich.console import Console
 
-from autobot.cli.app import AppSurface, JackApp
+from autobot.cli.app import AppSurface, JackApp, parse_gate_answer
+from autobot.cli.classify import Segment
+from autobot.cli.prompt import Answer
+
+
+def test_parse_gate_answer_plan_and_permission() -> None:
+    plan = Segment("plan", "the plan")
+    assert parse_gate_answer(plan, "y") == Answer("approve")
+    assert parse_gate_answer(plan, "n") == Answer("reject")
+    assert parse_gate_answer(plan, "") == Answer("reject")
+    assert parse_gate_answer(plan, "use a retry loop") == Answer("refine", "use a retry loop")
+    pending = Segment("pending", "run pytest?")
+    assert parse_gate_answer(pending, "yes") == Answer("yes")
+    assert parse_gate_answer(pending, "nope") == Answer("no")
 
 
 def test_submitting_a_line_spawns_a_turn() -> None:
@@ -72,6 +85,35 @@ def test_appsurface_set_activity_updates_fragments() -> None:
     assert "Reading parser.py" in flat
     surface.clear_activity()
     assert japp._activity_frags == []
+
+
+def test_begin_modal_resolves_from_typed_line() -> None:
+    got: list[Answer] = []
+
+    async def run_turn(text: str, turn_no: int) -> None:
+        got.append(await japp.begin_modal(Segment("plan", "the plan")))
+
+    japp: JackApp
+
+    async def _drive() -> None:
+        nonlocal japp
+        with create_pipe_input() as inp:
+            japp = JackApp(
+                cwd="/x", run_turn=run_turn, commands={}, input=inp, output=DummyOutput()
+            )
+
+            async def feed() -> None:
+                inp.send_text("do it\r")  # spawn a turn that opens a modal
+                await asyncio.sleep(0.1)
+                inp.send_text("y\r")  # answer the gate
+                await asyncio.sleep(0.1)
+                inp.send_text("\x04")  # exit
+
+            asyncio.get_running_loop().create_task(feed())
+            await japp.run_async()
+
+    asyncio.run(_drive())
+    assert got == [Answer("approve")]
 
 
 def test_on_task_finished_when_idle_runs_a_continuation_turn() -> None:
