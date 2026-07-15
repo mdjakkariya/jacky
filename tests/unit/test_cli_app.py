@@ -36,8 +36,13 @@ def test_submitting_a_line_spawns_a_turn() -> None:
             japp = JackApp(
                 cwd="/x", run_turn=fake_run_turn, commands={}, input=inp, output=DummyOutput()
             )
-            inp.send_text("hello\r")  # submit one turn
-            inp.send_text("\x04")  # Ctrl-D → EOF → exit
+
+            async def feed() -> None:
+                inp.send_text("hello\r")  # submit one turn
+                await asyncio.sleep(0.1)  # let the turn task run before we quit
+                inp.send_text("\x04")  # Ctrl-D → EOF → exit
+
+            asyncio.get_running_loop().create_task(feed())
             await japp.run_async()
 
     asyncio.run(_drive())
@@ -81,10 +86,9 @@ def test_appsurface_set_activity_updates_fragments() -> None:
     japp = JackApp(cwd="/x", run_turn=noop, commands={}, input=DummyInput(), output=DummyOutput())
     surface = AppSurface(japp, Console(file=StringIO(), force_terminal=False))
     surface.set_activity("Reading parser.py")
-    flat = "".join(text for _s, text in japp._activity_frags)
-    assert "Reading parser.py" in flat
+    assert japp._activity == "Reading parser.py"
     surface.clear_activity()
-    assert japp._activity_frags == []
+    assert japp._activity is None
 
 
 def test_begin_modal_resolves_from_typed_line() -> None:

@@ -137,12 +137,19 @@ async def aiter_blocking(
 
     Each ``next()`` runs in the loop's default executor so the daemon's blocking ``urllib``
     read never stalls the event loop that is also painting the pinned input + live region.
+    On cancellation (esc-to-interrupt) the underlying stream is closed so the ``urllib``
+    response socket — and any executor thread parked in ``next()`` — is not leaked.
     """
     loop = loop or asyncio.get_running_loop()
     it: Iterator[dict[str, Any]] = iter(sync_iter)
     sentinel: Any = object()
-    while True:
-        item = await loop.run_in_executor(None, lambda: next(it, sentinel))
-        if item is sentinel:
-            return
-        yield item
+    try:
+        while True:
+            item = await loop.run_in_executor(None, lambda: next(it, sentinel))
+            if item is sentinel:
+                return
+            yield item
+    finally:
+        close = getattr(sync_iter, "close", None)
+        if callable(close):
+            close()  # release the underlying urllib SSE response

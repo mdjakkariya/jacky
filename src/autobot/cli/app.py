@@ -3,7 +3,10 @@
 A single render owner: the pinned input + a transient live region are painted by this one
 app loop; finished lines are committed to native scrollback via ``run_in_terminal`` (see
 ``AppSurface``). A submitted line spawns the turn as an asyncio task, so the input stays
-pinned mid-turn and ``escape`` can cancel the task (real interrupt).
+pinned mid-turn and ``escape`` **detaches the client** from the turn — it cancels the local
+drive coroutine and re-pins the prompt. (It does *not* yet abort the turn server-side; the
+daemon has no cancel endpoint, so a tool already running there runs to completion. A
+daemon-side abort is a tracked follow-up.)
 
 Plan/permission gates are answered through the *same* pinned input (type ``y``/``n`` or, for
 a plan, type the change you want) — a future handshake between the turn task (awaiting the
@@ -13,6 +16,7 @@ answer) and the accept handler (resolving it). No nested Application, no dynamic
 from __future__ import annotations
 
 import asyncio
+import time
 from collections.abc import Awaitable, Callable
 from typing import TYPE_CHECKING, Any
 
@@ -44,6 +48,7 @@ if TYPE_CHECKING:
 _log = get_logger("cli")
 
 _RunTurn = Callable[[str, int], Awaitable[None]]
+_TICK_INTERVAL_S = 0.12  # live-region repaint cadence (spinner frame + elapsed seconds)
 
 _STYLE = Style.from_dict(
     {
@@ -101,8 +106,15 @@ class JackApp:
         self._commands = commands
         self._pickup_console = pickup_console
         self._turn_no = 0
+        self._exiting = False
         self._task: asyncio.Task[None] | None = None
-        self._activity_frags: list[tuple[str, str]] = []
+        self._ticker: asyncio.Task[None] | None = None
+        # Live-region state (all painted by _live_content on the app loop — single owner):
+        self._verb = live_region.verb_for(0)  # set per turn in _drive
+        self._activity: str | None = None  # None = no spinner region; str = sub-activity line
+        self._modal_hint: list[tuple[str, str]] | None = None  # gate affordance, when awaiting
+        self._turn_started = 0.0
+        self._frame_i = 0
         self._modal: asyncio.Future[Answer] | None = None
         self._modal_seg: Segment | None = None
         self._pending_pickups: list[dict[str, Any]] = []
@@ -127,10 +139,26 @@ class JackApp:
         """True while a turn task is running."""
         return self._task is not None and not self._task.done()
 
+    @property
+    def turn_no(self) -> int:
+        """How many turns have been started this session (for the exit footer)."""
+        return self._turn_no
+
+    def _live_content(self) -> list[tuple[str, str]]:
+        """Compose the live-region fragments from current state (called each paint)."""
+        if self._modal_hint is not None:
+            return self._modal_hint
+        if self._activity is None:
+            return []
+        elapsed = time.monotonic() - self._turn_started
+        frame = theme.SPINNER_FRAMES[self._frame_i % len(theme.SPINNER_FRAMES)]
+        width = self.app.output.get_size().columns or 80
+        return live_region.live_fragments(self._verb, frame, elapsed, self._activity, width)
+
     def _build_layout(self) -> Layout:
         live = ConditionalContainer(
-            Window(FormattedTextControl(lambda: self._activity_frags)),
-            filter=Condition(lambda: bool(self._activity_frags)),
+            Window(FormattedTextControl(self._live_content)),
+            filter=Condition(lambda: self._modal_hint is not None or self._activity is not None),
         )
         glyph = Window(
             FormattedTextControl([("class:prompt", f"{theme.GLYPH_PROMPT} ")]),
@@ -151,7 +179,12 @@ class JackApp:
 
         @kb.add("c-d")
         def _eof(event: Any) -> None:
-            if not self._input.text and self._modal is None:
+            if self._modal is not None and not self._modal.done():
+                return  # a gate is pending — a stray Ctrl-D must not quit
+            if not self._input.text:
+                self._exiting = True  # stop any queued auto-resume from spawning at shutdown
+                if self._task is not None and not self._task.done():
+                    self._task.cancel()
                 event.app.exit()
 
         @kb.add("escape", eager=True)
@@ -164,9 +197,8 @@ class JackApp:
     def _on_accept(self, buff: Buffer) -> bool:
         # A pending gate consumes the next submitted line as its answer.
         if self._modal is not None and not self._modal.done():
-            answer = (
-                parse_gate_answer(self._modal_seg, buff.text) if self._modal_seg else Answer("no")
-            )
+            seg = self._modal_seg
+            answer = parse_gate_answer(seg, buff.text) if seg is not None else Answer("no")
             buff.reset()
             self._modal.set_result(answer)
             return False
@@ -179,6 +211,10 @@ class JackApp:
         return False
 
     async def _drive(self, text: str, turn_no: int) -> None:
+        self._verb = live_region.verb_for(turn_no)
+        self._turn_started = time.monotonic()
+        self._frame_i = 0
+        self._ticker = asyncio.create_task(self._tick())
         try:
             await self._run_turn(text, turn_no)
         except asyncio.CancelledError:
@@ -186,11 +222,26 @@ class JackApp:
         except Exception:  # a failed turn must never kill the app loop
             _log.exception("turn crashed turn_no=%d", turn_no)
         finally:
-            self._activity_frags = []
+            if self._ticker is not None:
+                self._ticker.cancel()
+                self._ticker = None
+            self._activity = None
+            self._modal_hint = None
             self._modal = None
             self._modal_seg = None
             self.app.invalidate()
-            asyncio.get_running_loop().call_soon(self._maybe_pickup)
+            if not self._exiting:
+                asyncio.get_running_loop().call_soon(self._maybe_pickup)
+
+    async def _tick(self) -> None:
+        """Advance the spinner frame and repaint the elapsed timer while a turn runs."""
+        try:
+            while True:
+                self._frame_i += 1
+                self.app.invalidate()
+                await asyncio.sleep(_TICK_INTERVAL_S)
+        except asyncio.CancelledError:
+            pass
 
     async def begin_modal(self, seg: Segment) -> Answer:
         """Show a gate affordance in the live region and await the typed answer."""
@@ -199,19 +250,24 @@ class JackApp:
         self._modal = fut
         self._modal_seg = seg
         hint = "[y]es · [n]o · or type a change" if seg.kind == "plan" else "approve? [y]es · [n]o"
-        self._activity_frags = [("class:amber", f"  {hint}")]
+        self._modal_hint = [("class:amber", f"  {hint}")]
         self.app.invalidate()
         try:
             return await fut
         finally:
-            self._activity_frags = []
+            self._modal_hint = None
             self._modal = None
             self._modal_seg = None
             self.app.invalidate()
 
-    def set_activity_fragments(self, frags: list[tuple[str, str]]) -> None:
-        """Replace the live region's fragments and repaint."""
-        self._activity_frags = frags
+    def set_activity(self, text: str) -> None:
+        """Set the live region's sub-activity line (the app owns the spinner + verb + timer)."""
+        self._activity = text
+        self.app.invalidate()
+
+    def clear_activity(self) -> None:
+        """Clear the live region."""
+        self._activity = None
         self.app.invalidate()
 
     def on_task_finished(self, events: list[dict[str, Any]]) -> None:
@@ -230,11 +286,14 @@ class JackApp:
             self._pending_pickups.extend(events)
             self._maybe_pickup()
 
-        loop.call_soon_threadsafe(_enqueue)
+        try:
+            loop.call_soon_threadsafe(_enqueue)
+        except RuntimeError:  # loop closing at shutdown — nothing to resume onto
+            _log.debug("could not schedule task pickup (loop closing)")
 
     def _maybe_pickup(self) -> None:
         """If idle and pickups are queued, notice them and run a continuation turn."""
-        if self.busy or not self._pending_pickups:
+        if self._exiting or self.busy or not self._pending_pickups:
             return
         from autobot.cli import render
 
@@ -262,25 +321,29 @@ class AppSurface:
         """Bind to a ``JackApp`` and a rich ``Console`` for committed lines."""
         self._japp = japp
         self._console = console
-        self._verb = live_region.verb_for(0)
 
     def commit(self, renderable: Any) -> None:
-        """Commit a finished renderable above the app via ``run_in_terminal``."""
-        run_in_terminal(  # pragma: no cover - needs a live terminal
-            lambda: self._console.print(renderable)
-        )
+        """Commit a finished renderable above the app via ``run_in_terminal``.
+
+        The print runs in a scheduled ``run_in_terminal`` task, so it is guarded here (a bad
+        renderable must never surface as an unretrieved-task error or crash the turn).
+        """
+
+        def _print() -> None:  # pragma: no cover - needs a live terminal
+            try:
+                self._console.print(renderable)
+            except Exception:
+                _log.exception("committing a renderable failed; dropping it")
+
+        run_in_terminal(_print)  # pragma: no cover - needs a live terminal
 
     def set_activity(self, text: str) -> None:
-        """Paint the live region's spinner + current-activity line."""
-        width = self._japp.app.output.get_size().columns or 80
-        frame = theme.SPINNER_FRAMES[0]
-        self._japp.set_activity_fragments(
-            live_region.live_fragments(self._verb, frame, 0.0, text, width)
-        )
+        """Set the live region's current-activity line."""
+        self._japp.set_activity(text)
 
     def clear_activity(self) -> None:
         """Clear the live region."""
-        self._japp.set_activity_fragments([])
+        self._japp.clear_activity()
 
     async def ask(self, seg: Segment) -> Answer:
         """Resolve a plan/permission gate via the pinned-input modal handshake."""

@@ -163,10 +163,17 @@ def run(base_url: str, cwd: str) -> None:  # pragma: no cover - launches the int
 
     japp = JackApp(cwd=cwd, run_turn=run_turn, commands=commands.COMMANDS, pickup_console=console)
     holder["app"] = japp
-    events.set_waker(lambda: japp.on_task_finished(events.poll_completed()))
+
+    def _waker() -> None:
+        # Fired on the events-listener thread. Only drain once the app loop exists, so a task
+        # finishing during startup isn't drained-then-dropped; on_task_finished hops to the loop.
+        if japp.app.loop is not None:
+            japp.on_task_finished(events.poll_completed())
+
+    events.set_waker(_waker)
     events.start()
     try:
         asyncio.run(japp.run_async())
     finally:
         events.close()
-        print_session_footer(console, cwd, japp._turn_no)
+        print_session_footer(console, cwd, japp.turn_no)
