@@ -17,42 +17,14 @@ from rich.text import Text
 
 from autobot.cli import theme
 
-# Jack's own verb pool — professional, with a light workshop motif fitting the name.
-VERBS: tuple[str, ...] = (
-    "Working",
-    "Thinking",
-    "Planning",
-    "Tracing",
-    "Reading",
-    "Wiring",
-    "Drafting",
-    "Assembling",
-    "Untangling",
-    "Fitting",
-    "Tightening",
-    "Leveling",
-    "Bracing",
-    "Hoisting",
-    "Rigging",
-)
+# Re-exported from live_region (single source) during the TUI migration; spinner.py is
+# removed in the cutover task once shell.py no longer imports it. Listed in __all__ so the
+# re-export is explicit under mypy's strict no_implicit_reexport.
+from autobot.cli.live_region import VERBS, byline, verb_for
+
+__all__ = ["VERBS", "byline", "frame_text", "verb_for", "with_spinner"]
 
 _FRAME_INTERVAL_S = 0.09
-
-
-def verb_for(turn_index: int) -> str:
-    """Pick a verb by turn index — varied across turns, deterministic (no RNG)."""
-    return VERBS[turn_index % len(VERBS)]
-
-
-def byline(elapsed_s: float, width: int) -> str:
-    """A width-gated ``esc to interrupt · Ns`` byline (drops parts as width shrinks)."""
-    secs = f"{int(elapsed_s)}s"
-    full = f"esc to interrupt · {secs}"
-    if width >= len(full) + 4:
-        return full
-    if width >= len(secs) + 4:
-        return secs
-    return ""
 
 
 def frame_text(verb: str, frame_char: str, elapsed_s: float, width: int) -> Text:
