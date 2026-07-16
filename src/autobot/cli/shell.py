@@ -167,6 +167,7 @@ def run(base_url: str, cwd: str) -> None:  # pragma: no cover - launches the int
         commands=commands.COMMANDS,
         context=context,
         intro=render.render_welcome(context),
+        on_interrupt=lambda: client.coder_interrupt(base_url),
     )
     holder["app"] = japp
 

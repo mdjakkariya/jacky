@@ -83,6 +83,23 @@ def test_no_tool_calls_returns_reply_and_finalizes(store: SessionStore) -> None:
     assert model.finalized == 1
 
 
+def test_should_cancel_stops_before_the_first_round_and_finalizes(store: SessionStore) -> None:
+    # A model that would loop forever on tool calls; cancel is requested up front, so no
+    # send/tool runs — the turn returns an interrupted reply but is still finalized.
+    model = FakeChatModel([ChatResponse(text="", tool_calls=[ToolCall(name="x")])])
+    seen: list[str] = []
+    harness = AgentHarness(model, store)
+    reply = harness.run_turn(
+        "do it",
+        lambda c: seen.append(c.name) or ToolResult(name=c.name, content="", ok=True),  # type: ignore[func-returns-value]
+        should_cancel=lambda: True,
+    )
+    assert reply == "Interrupted."
+    assert seen == []  # no tool executed
+    assert model.recorded == []
+    assert model.finalized == 1  # partial turn still persisted
+
+
 def test_one_tool_round_executes_then_replies(store: SessionStore) -> None:
     model = FakeChatModel(
         [

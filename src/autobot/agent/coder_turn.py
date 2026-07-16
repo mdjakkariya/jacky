@@ -237,6 +237,7 @@ _ROUTE_PROMPT = (
 _CANCELLED_REPLY = "Okay, I won't make any changes."
 _ERROR_REPLY = "Something went wrong on my end, so I stopped. Nothing was changed."
 
+_SUPERSEDE_WAIT_S = 5.0  # how long a fresh turn waits for an interrupted one to stop first
 MAX_ACT_CONTINUES = 2  # auto-nudge the model past a narrate-then-stop, at most this many times
 _CONTINUE_NUDGE = "Continue with the remaining steps of the task."
 _REMAINING_NUDGE = "Continue with the remaining steps:\n"
@@ -310,6 +311,9 @@ class CoderTurnDriver:
         self._lock = threading.Lock()
         self._channel: TurnChannel | None = None
         self._awaiting = False  # True when the worker is parked awaiting an answer
+        self._cancel = threading.Event()  # set by interrupt(); polled between the turn's rounds
+        self._idle = threading.Event()  # set whenever no turn is active (for supersede waits)
+        self._idle.set()
         self._undo = undo
         self._checkpoints = checkpoints
         self._checkpoint = checkpoint
@@ -320,28 +324,55 @@ class CoderTurnDriver:
         return evt.get("status") in ("done", "error", "plan", "pending")
 
     def _spawn(self, text: str) -> TurnChannel:
-        """Take the lock, reclaim any parked turn, start a fresh worker; return its channel.
+        """Take the lock, reclaim/supersede any prior turn, start a fresh worker; return channel.
 
-        Raises :class:`_TurnBusyError` if a turn is actively running (not parked) — the caller
-        decides how to surface that (a plain error event for ``start_stream``).
+        A *parked* turn (awaiting an answer) is reclaimed immediately. An *actively running*
+        turn is superseded: request cancel and wait briefly for it to stop (so a resubmit
+        right after ``esc`` just works), then start fresh. Raises :class:`_TurnBusyError` only
+        if the running turn won't stop in time (stuck in a long op) — the caller surfaces that.
         """
         with self._lock:
-            if self._channel is not None and not self._awaiting:
-                raise _TurnBusyError()
+            running = self._channel is not None and not self._awaiting
+        if running:
+            self.interrupt()  # request the in-flight turn stop
+            if not self._idle.wait(_SUPERSEDE_WAIT_S):
+                raise _TurnBusyError()  # didn't stop in time (mid long LLM call / command)
+        with self._lock:
             if self._channel is not None and self._awaiting:
-                # Reclaim a stale parked turn (CLI died or a fresh start superseded it):
-                # close() unblocks the parked ask() with a self-decline so that worker's
-                # _run unwinds via its own channel.done(...) and never touches this new
-                # turn's channel.
+                # Reclaim a stale parked turn: close() unblocks its parked ask() with a
+                # self-decline so that worker's _run unwinds via its own channel.done(...).
                 self._channel.close()
+            if self._channel is not None and not self._awaiting:
+                raise _TurnBusyError()  # a fresh turn slipped in during the wait
+            self._cancel.clear()  # this turn starts uncancelled
             channel = TurnChannel()
             self._channel = channel
             self._awaiting = False
+            self._idle.clear()
             worker = threading.Thread(
                 target=self._run, args=(channel, text), name="coder-turn", daemon=True
             )
             worker.start()
         return channel
+
+    def interrupt(self) -> bool:
+        """Request the running turn stop; return whether a turn was active.
+
+        Sets the cancel flag (polled between the turn's rounds) and closes the current channel
+        so a turn parked awaiting a confirm/plan answer self-declines and unwinds. Cooperative:
+        the worker stops at its next round boundary — an in-flight LLM call or tool finishes
+        first (the daemon can't force-kill a worker thread). Idempotent and safe when idle.
+        """
+        with self._lock:
+            channel = self._channel
+            active = channel is not None
+            if active:
+                self._cancel.set()
+        if channel is not None:
+            channel.close()
+        if active:
+            _log.info("interrupt requested")
+        return active
 
     def _resume(self, value: str, text: str) -> TurnChannel | None:
         """Deliver the answer to the parked turn; return its channel, or None if none awaits."""
@@ -416,16 +447,24 @@ class CoderTurnDriver:
             return True
 
     def _drain(self, channel: TurnChannel) -> Iterator[dict[str, Any]]:
-        """Yield events from the channel until (and including) a phase-ender."""
+        """Yield events from the channel until (and including) a phase-ender.
+
+        State mutations are guarded by ``self._channel is channel`` so a superseded turn's
+        drain can never clobber the turn that replaced it (turns can now be interrupted and
+        superseded). Terminal cleanup is also done by the worker's ``finally`` — so the daemon
+        frees even if the client disconnected and this drain stopped being consumed.
+        """
         while True:
             event = channel.poll()
             if self._is_phase_ender(event):
                 with self._lock:
-                    if event.get("status") in ("done", "error"):
-                        self._channel = None
-                        self._awaiting = False
-                    else:
-                        self._awaiting = True
+                    if self._channel is channel:
+                        if event.get("status") in ("done", "error"):
+                            self._channel = None
+                            self._awaiting = False
+                            self._idle.set()
+                        else:
+                            self._awaiting = True
                 yield event
                 return
             yield event
@@ -480,6 +519,15 @@ class CoderTurnDriver:
         except Exception:  # a turn must always terminate with a reply for the CLI
             _log.exception("coder turn failed")
             channel.done(_ERROR_REPLY)
+        finally:
+            # The worker owns end-of-turn cleanup: clear the active-turn state so the daemon
+            # frees even when the client disconnected (esc) and _drain stopped being consumed.
+            # Guarded so a superseding turn's channel is never clobbered.
+            with self._lock:
+                if self._channel is channel:
+                    self._channel = None
+                    self._awaiting = False
+                    self._idle.set()
 
     def _plan_loop(self, channel: TurnChannel, text: str) -> tuple[str, str | list[str]]:
         """Plan (read-only), then decide the next step.
@@ -497,9 +545,13 @@ class CoderTurnDriver:
         """
         request = text
         while True:
+            if self._cancel.is_set():
+                return "cancel", ""
             executor = read_only_executor(self._gate)
             prompt = _PLAN_PROMPT_PREFIX + request
-            reply = self._llm.run_turn(prompt, executor, on_event=channel.emit)
+            reply = self._llm.run_turn(
+                prompt, executor, on_event=channel.emit, should_cancel=self._cancel.is_set
+            )
             todo = _extract_todo(reply)
             if not todo:
                 # No actionable steps — don't force an approve/act gate on a non-task.
@@ -580,13 +632,17 @@ class CoderTurnDriver:
 
         token = plan_sink.set(_publish)
         try:
-            reply: str = self._llm.run_turn(prompt, executor, on_event=channel.emit)
+            reply: str = self._llm.run_turn(
+                prompt, executor, on_event=channel.emit, should_cancel=self._cancel.is_set
+            )
             # Continue while the task isn't finished: a cooperating model completes exactly
             # when its todos are all settled; one that ignores update_plan falls back to the
             # narrate-then-stop heuristic. Either way MAX_ACT_CONTINUES caps the nudges (each
             # nudge is a fresh run_turn, itself bounded by the harness round backstop).
             continues = 0
             while continues < MAX_ACT_CONTINUES:
+                if self._cancel.is_set():
+                    break  # interrupted — stop nudging and return what we have
                 if state.used():
                     if state.all_settled():
                         break  # every step done/blocked → the task is complete
@@ -604,7 +660,9 @@ class CoderTurnDriver:
                     state.all_settled(),
                     state.summary(),
                 )
-                reply = self._llm.run_turn(nudge, executor, on_event=channel.emit)
+                reply = self._llm.run_turn(
+                    nudge, executor, on_event=channel.emit, should_cancel=self._cancel.is_set
+                )
         finally:
             plan_sink.reset(token)
         _log.info("turn done")

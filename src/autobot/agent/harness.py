@@ -121,12 +121,22 @@ class AgentHarness:
         return self._session
 
     def run_turn(
-        self, user_text: str, execute: ToolExecutor, on_event: OnEvent | None = None
+        self,
+        user_text: str,
+        execute: ToolExecutor,
+        on_event: OnEvent | None = None,
+        should_cancel: Callable[[], bool] | None = None,
     ) -> str:
         """Handle one user turn end-to-end; tool calls run through ``execute`` (the gate).
 
         When ``on_event`` is provided, emits ``{"type": "tool", "event": "start"/"end", ...}``
         around each executed tool call (and token events come from the provider's ``send``).
+
+        When ``should_cancel`` is provided, it is polled at the top of every tool round; the
+        first time it returns ``True`` the turn stops cooperatively (the current round is not
+        started) and returns a short interrupted reply. The turn is still finalized, so the
+        partial conversation is persisted. Cancellation is between rounds — an in-flight
+        provider ``send`` or tool call is not force-killed (see ``esc``/``/coder/interrupt``).
         """
 
         def emit(evt: dict[str, Any]) -> None:
@@ -148,6 +158,10 @@ class AgentHarness:
         reply = ""
         unproductive = 0  # consecutive rounds that ran tools but produced no successful result
         for _ in range(self._max_rounds):
+            if should_cancel is not None and should_cancel():
+                _log.info("turn interrupted (cancel requested)")
+                reply = "Interrupted."
+                break
             resp = self._model.send(self._session, on_event)
             if not resp.tool_calls:
                 reply = resp.text

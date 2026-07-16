@@ -87,6 +87,16 @@ def coder_undo(base_url: str, *, post: Callable[..., dict[str, Any]] = _post) ->
         return {"ok": False, "message": f"couldn't reach the coder daemon: {exc}"}
 
 
+def coder_interrupt(
+    base_url: str, *, post: Callable[..., dict[str, Any]] = _post
+) -> dict[str, Any]:
+    """Request the running coder turn stop (``POST /coder/interrupt``); best-effort."""
+    try:
+        return post(f"{base_url}/coder/interrupt", {}, 5.0)
+    except (OSError, urllib.error.URLError) as exc:
+        return {"ok": False, "error": str(exc)}
+
+
 def coder_checkpoints(
     base_url: str, *, get: Callable[[str, float], Any] = _get_json
 ) -> list[dict[str, Any]]:

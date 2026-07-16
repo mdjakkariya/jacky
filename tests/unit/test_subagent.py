@@ -41,7 +41,9 @@ class _FakeHarness:
         self._prompts = prompts
         self._executed = executed
 
-    def run_turn(self, user_text: str, execute: Any, on_event: Any = None) -> str:
+    def run_turn(
+        self, user_text: str, execute: Any, on_event: Any = None, should_cancel: Any = None
+    ) -> str:
         self._prompts.append(user_text)
         self._executed.append(execute(ToolCall(name="edit_file", arguments={"path": "x"})))
         return self._reply

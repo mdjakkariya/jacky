@@ -56,7 +56,9 @@ class _ScriptedLLM:
         self._replies = replies
         self.calls = 0
 
-    def run_turn(self, user_text: str, execute: Any, on_event: Any = None) -> str:
+    def run_turn(
+        self, user_text: str, execute: Any, on_event: Any = None, should_cancel: Any = None
+    ) -> str:
         self.calls += 1
         idx = min(self.calls - 1, len(self._replies) - 1)
         return self._replies[idx]

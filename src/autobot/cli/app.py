@@ -125,6 +125,7 @@ class JackApp:
         commands: dict[str, str],
         context: dict[str, str] | None = None,
         intro: Any | None = None,
+        on_interrupt: Callable[[], Any] | None = None,
         input: Any | None = None,
         output: Any | None = None,
     ) -> None:
@@ -139,6 +140,7 @@ class JackApp:
         self._commands = commands
         self._context = context or {}
         self._intro = intro
+        self._on_interrupt = on_interrupt
         self._seeded = False
         self._turn_no = 0
         self._exiting = False
@@ -263,6 +265,10 @@ class JackApp:
         def _interrupt(event: Any) -> None:
             if self._task is not None and not self._task.done():
                 self._task.cancel()
+                if self._on_interrupt is not None:
+                    # Tell the daemon to stop the turn too (off-loop; blocking HTTP). Without
+                    # this, the daemon keeps running and the next turn hits "already running".
+                    asyncio.get_running_loop().run_in_executor(None, self._on_interrupt)
                 if self._last_turn_text and not self._input.text:
                     # Refill the input with the interrupted turn's text so it can be edited
                     # and resent (only if the user hasn't already started typing something new).

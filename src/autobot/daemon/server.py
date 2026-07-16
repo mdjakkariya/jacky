@@ -105,6 +105,7 @@ def create_app(
     on_resume_session: Any | None = None,
     on_coder_turn: Any | None = None,
     on_coder_reply: Any | None = None,
+    on_coder_interrupt: Any | None = None,
     on_coder_undo: Any | None = None,
     on_coder_checkpoints: Any | None = None,
     on_usage: Any | None = None,
@@ -148,6 +149,10 @@ def create_app(
             that delivers the CLI's answer to a parked coder turn and streams the
             next phase's events; wired to the orchestrator's ``reply_coder_stream``.
             When ``None``, ``POST /coder/reply`` streams a single error status event.
+        on_coder_interrupt: Optional callback (() -> bool) that requests the running
+            coder turn stop (esc-to-interrupt); wired to the orchestrator's
+            ``interrupt_coder``. When ``None``, ``POST /coder/interrupt`` returns
+            ``{"ok": False}``.
         on_coder_undo: Optional callback (() -> tuple[bool, str]) that restores the
             most recent coder checkpoint; wired to the orchestrator's
             ``undo_coder``. When ``None``, ``POST /coder/undo`` returns
@@ -379,6 +384,13 @@ def create_app(
         return StreamingResponse(
             _sse_frames(on_coder_reply(str(value), str(text))), media_type="text/event-stream"
         )
+
+    async def post_coder_interrupt() -> dict[str, Any]:
+        """Request the running coder turn stop (esc-to-interrupt). Returns immediately."""
+        if on_coder_interrupt is None:
+            return {"ok": False, "active": False}
+        active = await asyncio.to_thread(on_coder_interrupt)
+        return {"ok": True, "active": bool(active)}
 
     async def post_coder_undo() -> dict[str, Any]:
         """Restore the most recent coder checkpoint. Runs off the loop (takes the driver lock)."""
@@ -769,6 +781,7 @@ def create_app(
     app.add_api_route("/chat", post_chat, methods=["POST"])
     app.add_api_route("/coder/turn", post_coder_turn, methods=["POST"])
     app.add_api_route("/coder/reply", post_coder_reply, methods=["POST"])
+    app.add_api_route("/coder/interrupt", post_coder_interrupt, methods=["POST"])
     app.add_api_route("/coder/undo", post_coder_undo, methods=["POST"])
     app.add_api_route("/coder/checkpoints", get_coder_checkpoints, methods=["GET"])
     app.add_api_route("/coder/usage", get_coder_usage, methods=["GET"])
@@ -870,6 +883,7 @@ def run_daemon(
     on_resume_session: Any | None = None,
     on_coder_turn: Any | None = None,
     on_coder_reply: Any | None = None,
+    on_coder_interrupt: Any | None = None,
     on_coder_undo: Any | None = None,
     on_coder_checkpoints: Any | None = None,
     on_usage: Any | None = None,
@@ -909,6 +923,7 @@ def run_daemon(
         on_resume_session=on_resume_session,
         on_coder_turn=on_coder_turn,
         on_coder_reply=on_coder_reply,
+        on_coder_interrupt=on_coder_interrupt,
         on_coder_undo=on_coder_undo,
         on_coder_checkpoints=on_coder_checkpoints,
         on_usage=on_usage,
