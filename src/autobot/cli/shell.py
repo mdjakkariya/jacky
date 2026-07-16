@@ -130,6 +130,7 @@ def run(base_url: str, cwd: str) -> None:  # pragma: no cover - launches the int
         surface = AppSurface(japp)
         surface.commit(Text(""))  # a blank line separates this turn from the previous one
         surface.commit(Text(f"{theme.GLYPH_PROMPT} {text}", style="prompt"))  # echo the ask
+        surface.commit(Text(""))  # a blank line between the user's message and the response
         parsed = commands.parse(text)
         if parsed is not None:
             out, action = route_command(*parsed, base_url=base_url, cwd=cwd, width=japp._cols())
