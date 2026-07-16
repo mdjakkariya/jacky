@@ -42,7 +42,6 @@ class TurnDriver:
         self._cmd_label: str | None = None  # the running command's label ($ …) while buffering
         self._cmd_lines: list[str] = []  # its captured output (shown as a live preview)
         self._gated = False  # a permission gate just showed the command → don't echo it again
-        self._activity_shown = False  # tool/plan lines committed since the last reply block
 
     async def run_turn(
         self,
@@ -55,8 +54,9 @@ class TurnDriver:
         snap = self._snapshot(self._cwd)
         self._cmd_label, self._cmd_lines = None, []  # no command buffering carried across turns
         self._gated = False
-        self._activity_shown = False
         _log.info("turn start turn_no=%d", turn_no)
+        # Spacing is owned by the transcript composer: every committed block is separated from
+        # its neighbours by a blank line, so the driver just commits blocks (no manual blanks).
         try:
             while True:
                 phase = await self._consume_until_phase(events)
@@ -64,17 +64,16 @@ class TurnDriver:
                     return
                 seg = classify(phase)
                 if seg.kind == "plan":
-                    self._commit_reply(render.render_reply(seg.text))  # the plan is content
+                    self._surface.commit(render.render_reply(seg.text))  # the plan is content
                     ans = await self._surface.ask(seg)
                     events = answer_stream(ans.value, ans.text)
                     continue
                 if seg.kind == "pending":
                     self._gated = True  # the gate shows the command; don't echo it again on start
-                    self._spacer_if_activity()  # blank line above the "Run this command?" prompt
                     ans = await self._surface.ask(seg)
                     events = answer_stream(ans.value, ans.text)
                     continue
-                self._commit_reply(render.render_rich(seg))  # done / error
+                self._surface.commit(render.render_rich(seg))  # done / error
                 if phase.get("status") == "done":
                     diff = self._diff_since(self._cwd, snap)
                     if diff:
@@ -88,23 +87,6 @@ class TurnDriver:
             raise
         finally:
             self._surface.clear_activity()
-
-    def _spacer_if_activity(self) -> None:
-        """Commit a blank line iff tool activity was shown since the last block boundary.
-
-        Separates a reply/plan/gate prompt from the ⎿ tool lines above it. Guarded so a
-        tool-less turn (whose user-message spacer already sits above) doesn't double the gap.
-        """
-        from rich.text import Text
-
-        if self._activity_shown:
-            self._surface.commit(Text(""))
-            self._activity_shown = False
-
-    def _commit_reply(self, renderable: Any) -> None:
-        """Commit an assistant reply (⏺ / plan / error), with a blank line above it."""
-        self._spacer_if_activity()
-        self._surface.commit(renderable)
 
     async def _consume_until_phase(
         self, events: AsyncIterator[dict[str, Any]]
@@ -151,10 +133,9 @@ class TurnDriver:
                 self._cmd_label = seg.text  # "$ <command>"
                 self._cmd_lines = []
             elif name == "update_plan":
-                pass  # the checklist itself is the display (live panel); no ⎿ "Update plan" line
+                pass  # the checklist itself is the display (live panel); no "Update plan" line
             else:
-                self._surface.commit(render.render_tool(seg))  # other tools keep their ⎿ label
-                self._activity_shown = True
+                self._surface.commit(render.render_tool(seg))  # a dim, indented verb line
             self._surface.set_activity(live_region.action_label(name))  # "Reading file", etc.
         elif seg.kind == "tool" and event == "end":
             if name == "run_command" and self._cmd_label is not None:
@@ -163,7 +144,6 @@ class TurnDriver:
                 self._cmd_label = None
                 self._cmd_lines = []
                 self._gated = False  # consumed by this command
-                self._activity_shown = True
             self._surface.set_activity(live_region.DEFAULT_ACTION)  # back to "Working"
         elif seg.kind == "output":
             self._cmd_lines.append(seg.text)  # buffered for the card; not previewed live

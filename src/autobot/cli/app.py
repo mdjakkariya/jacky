@@ -187,9 +187,8 @@ class _CommandBlock(_Block):
         if n > len(shown):
             header += f"  (last {len(shown)} of {n} lines)"
         body = Text("\n".join(shown) or "(no output)", style="tool")
-        # Blank lines above and below so the expanded output reads as its own block, not a
-        # dense wall cumulated against the neighbouring lines.
-        return Group(Text(""), Text(header, style="prompt"), body, Text(""))
+        # The composer separates this block from its neighbours with blank lines already.
+        return Group(Text(header, style="prompt"), body)
 
 
 class _TranscriptControl(FormattedTextControl):
@@ -349,17 +348,24 @@ class JackApp:
         return ANSI(self._transcript)
 
     def _recompose(self) -> None:
-        """Rebuild the composed transcript + per-block start lines from ``self._blocks``."""
+        """Rebuild the composed transcript + per-block start lines, one blank line between blocks.
+
+        The composer owns spacing: every block (user turn, each activity line, the reply, a
+        command card) is separated from its neighbours by exactly one blank line, so the
+        transcript reads as airy, self-contained blocks. Callers just commit blocks — they
+        never emit blank lines themselves.
+        """
         width = self._cols()
-        parts: list[str] = []
+        parts = [block.render(width) for block in self._blocks]
+        # Each rendered part ends in "\n"; joining with "\n" inserts one blank line between them.
+        self._transcript = "\n".join(parts)
         starts: list[int] = []
         line = 0
-        for block in self._blocks:
+        for i, part in enumerate(parts):
+            if i:
+                line += 1  # the blank-line separator that precedes this block
             starts.append(line)
-            text = block.render(width)
-            parts.append(text)
-            line += text.count("\n")
-        self._transcript = "".join(parts)
+            line += part.count("\n")
         self._block_starts = starts
 
     def _status_text(self) -> list[tuple[str, str]]:
@@ -640,20 +646,16 @@ class JackApp:
         except Exception:  # a bad renderable must never crash the turn
             _log.exception("rendering a transcript line failed; dropping it")
             return
-        # Append incrementally (earlier blocks don't change), so this stays O(1) not O(n).
         # Do NOT force-follow: if the user scrolled up to read, new output must not yank them
         # to the bottom — following resumes only on a fresh turn or on scrolling to the bottom.
-        self._block_starts.append(self._total_lines())
         self._blocks.append(_PlainBlock(ansi))
-        self._transcript += ansi
+        self._recompose()  # the composer inserts the blank-line separator between blocks
         self.app.invalidate()
 
     def commit_command_block(self, label: str, output: list[str], *, gated: bool) -> None:
         """Append a finished command as a collapsible block (compact card; ^O toggles output)."""
-        block = _CommandBlock(label, list(output), gated)
-        self._block_starts.append(self._total_lines())
-        self._blocks.append(block)
-        self._transcript += block.render(self._cols())
+        self._blocks.append(_CommandBlock(label, list(output), gated))
+        self._recompose()
         self.app.invalidate()
 
     def clear_transcript(self) -> None:

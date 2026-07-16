@@ -62,7 +62,9 @@ def test_tool_line_and_reply_each_committed_once() -> None:
     assert sum("Done — 1 file." in t for t in flat) == 1
 
 
-def test_blank_line_precedes_reply_after_activity() -> None:
+def test_driver_commits_blocks_without_manual_blanks() -> None:
+    # Spacing is owned by the transcript composer (a blank line between every block), so the
+    # driver commits only real blocks — the tool line then the reply, no blank spacers.
     s = FakeSurface()
     _run(
         [
@@ -72,32 +74,8 @@ def test_blank_line_precedes_reply_after_activity() -> None:
         None,
         s,
     )
-    assert len(s.commits) == 3  # ⎿ tool line, a blank spacer, then the ⏺ reply
-    assert _render_text(s.commits[1]).strip() == ""  # the spacer is genuinely blank
-
-
-def test_blank_line_precedes_pending_gate_after_activity() -> None:
-    s = FakeSurface(answers=[Answer("no")])
-    _run(
-        [
-            {"type": "tool", "event": "start", "name": "read_file", "label": "Read a.py"},
-            {"status": "pending", "prompt": "Run this command?"},
-        ],
-        {("no", ""): [{"status": "done", "reply": "ok"}]},
-        s,
-    )
-    # ⎿ tool line, then a blank spacer, before the gate is asked — so "Run this command?"
-    # isn't packed against the tool activity above it.
-    assert _render_text(s.commits[1]).strip() == ""
-    assert s.asked and s.asked[0].kind == "pending"
-
-
-def test_no_extra_blank_before_reply_when_no_activity() -> None:
-    s = FakeSurface()
-    _run([{"status": "done", "reply": "ok"}], None, s)
-    # No tool activity ran, so the shell's user-message spacer already sits above the reply —
-    # the driver must NOT add a second blank (which would double the gap).
-    assert len(s.commits) == 1
+    assert len(s.commits) == 2  # tool line + reply, nothing else
+    assert not any(_render_text(r).strip() == "" for r in s.commits)  # no blank-line blocks
 
 
 def test_done_commits_diff_when_present() -> None:

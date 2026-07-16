@@ -133,9 +133,9 @@ def run(base_url: str, cwd: str) -> None:  # pragma: no cover - launches the int
     async def run_turn(text: str, turn_no: int) -> None:
         japp = holder["app"]
         surface = AppSurface(japp)
-        surface.commit(Text(""))  # a blank line separates this turn from the previous one
-        surface.commit(Text(f"{theme.GLYPH_PROMPT} {text}", style="prompt"))  # echo the ask
-        surface.commit(Text(""))  # a blank line between the user's message and the response
+        # Echo the user's turn as its own block; the transcript composer supplies the blank
+        # lines that separate it from the previous turn and from the response below.
+        surface.commit(Text(f"{theme.GLYPH_PROMPT} {text}", style="prompt"))
         parsed = commands.parse(text)
         if parsed is not None:
             if parsed[0] == "/output":  # client-side: expand a stashed command's output

@@ -221,6 +221,25 @@ def test_enter_includes_a_folder_without_descending(tmp_path: Any) -> None:
     assert japp._input.text == "@src/ "  # folder included (trailing space), not descended
 
 
+def test_transcript_separates_blocks_with_a_blank_line() -> None:
+    import re
+
+    from rich.text import Text
+
+    async def noop(_t: str, _n: int) -> None:
+        return None
+
+    japp = JackApp(cwd="/x", run_turn=noop, commands={}, input=DummyInput(), output=DummyOutput())
+    japp.append_transcript(Text("first block"))
+    japp.append_transcript(Text("second block"))
+    plain = re.sub(r"\x1b\[[0-9;]*m", "", japp._transcript)
+    lines = [ln.strip() for ln in plain.split("\n")]
+    i = lines.index("first block")
+    j = lines.index("second block")
+    assert j == i + 2  # exactly one blank line between the two blocks
+    assert lines[i + 1] == ""
+
+
 def test_expand_output_when_nothing_stored_is_false() -> None:
     async def noop(_t: str, _n: int) -> None:
         return None
