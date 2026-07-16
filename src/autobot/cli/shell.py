@@ -128,6 +128,7 @@ def run(base_url: str, cwd: str) -> None:  # pragma: no cover - launches the int
     async def run_turn(text: str, turn_no: int) -> None:
         japp = holder["app"]
         surface = AppSurface(japp)
+        surface.commit(Text(""))  # a blank line separates this turn from the previous one
         surface.commit(Text(f"{theme.GLYPH_PROMPT} {text}", style="prompt"))  # echo the ask
         parsed = commands.parse(text)
         if parsed is not None:

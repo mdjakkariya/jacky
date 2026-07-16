@@ -77,9 +77,14 @@ _CONTINUATION_PROMPT = (
 
 
 def render_ansi(renderable: Any, width: int) -> str:
-    """Render a rich renderable (or str) to an ANSI string at ``width`` (for the transcript)."""
+    """Render a rich renderable (or str) to an ANSI string for the transcript.
+
+    A left/right margin is applied to every committed block so transcript content lines up
+    with the input box's prompt glyph (col 2) and never sits flush against the terminal edge.
+    """
     buf = StringIO()
     from rich.console import Console
+    from rich.padding import Padding
 
     Console(
         file=buf,
@@ -88,7 +93,7 @@ def render_ansi(renderable: Any, width: int) -> str:
         theme=jack_theme(),
         width=max(20, width),
         soft_wrap=False,
-    ).print(renderable)
+    ).print(Padding(renderable, (0, 1, 0, 2)))  # (top, right, bottom, left)
     return buf.getvalue()
 
 
@@ -193,17 +198,19 @@ class JackApp:
         return ANSI(self._transcript)
 
     def _status_text(self) -> list[tuple[str, str]]:
-        """The docked status bar: autonomy mode + key hints + context."""
+        """The docked status bar: just the session context (autonomy · model · branch).
+
+        Deliberately hint-free — no esc/​/help/​^C clutter. The 'esc to interrupt' hint lives
+        in the loading line, shown only while a turn runs (where it's actionable).
+        """
         autonomy = self._context.get("autonomy", "auto")
         model = self._context.get("model", "")
         branch = self._context.get("branch", "")
-        right = "  ·  ".join(p for p in (model, branch) if p)
-        frags: list[tuple[str, str]] = [
-            ("class:status.key", f" {autonomy} mode "),
-            ("class:status", " · esc to interrupt · /help · ^C quit "),
-        ]
-        if right:
-            frags.append(("class:status", f"· {right} "))
+        rest = "  ·  ".join(p for p in (model, branch) if p)
+        frags: list[tuple[str, str]] = [("class:status.key", f"  {autonomy} mode")]
+        if rest:
+            frags.append(("class:status", f"  ·  {rest}"))
+        frags.append(("class:status", "  "))
         return frags
 
     def _live_content(self) -> list[tuple[str, str]]:
