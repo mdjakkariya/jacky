@@ -64,7 +64,9 @@ def tool_label(call: ToolCall) -> str:
         return f"Edited {args.get('path', '')}".strip()
     if call.name == "spawn_agent":
         return f"Spawned subagent: {str(args.get('label') or args.get('task', ''))[:70]}".strip()
-    return call.name
+    # Fallback for any other tool: humanize the raw name so casing stays consistent with the
+    # verb-prefixed labels above (e.g. "repo_map" → "Repo map", "update_plan" → "Update plan").
+    return call.name.replace("_", " ").strip().capitalize()
 
 
 class AgentHarness:

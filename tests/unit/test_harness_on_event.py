@@ -45,7 +45,9 @@ def test_tool_label_maps_common_calls() -> None:
     assert tool_label(ToolCall(name="run_command", arguments={"command": "pytest -q"})).startswith(
         "$ "
     )
-    assert tool_label(ToolCall(name="mystery", arguments={})) == "mystery"
+    # Unknown tools fall back to a humanized name (consistent casing with the labels above).
+    assert tool_label(ToolCall(name="mystery", arguments={})) == "Mystery"
+    assert tool_label(ToolCall(name="repo_map", arguments={})) == "Repo map"
 
 
 def test_run_turn_emits_tool_start_and_end(tmp_path: Any) -> None:

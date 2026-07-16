@@ -26,6 +26,7 @@ from typing import TYPE_CHECKING, Any
 
 from prompt_toolkit.application import Application
 from prompt_toolkit.buffer import Buffer
+from prompt_toolkit.data_structures import Point
 from prompt_toolkit.filters import Condition
 from prompt_toolkit.formatted_text import ANSI
 from prompt_toolkit.history import History, InMemoryHistory
@@ -156,6 +157,8 @@ class JackApp:
         self._task: asyncio.Task[None] | None = None
         self._ticker: asyncio.Task[None] | None = None
         self._transcript = ""  # accumulated ANSI text shown in the scrollable region
+        self._follow = True  # auto-tail the transcript to the bottom (PgUp detaches)
+        self._scroll_pos = 0  # manual scroll offset when not following
         # Live-region state (painted by _live_content on the app loop — single owner):
         self._verb = live_region.verb_for(0)
         self._activity: str | None = None
@@ -174,7 +177,14 @@ class JackApp:
             multiline=True,  # box grows for multi-line paste/typing (Enter submits; ^J newline)
         )
         self._transcript_window = Window(
-            FormattedTextControl(self._transcript_text, focusable=False),
+            FormattedTextControl(
+                self._transcript_text,
+                focusable=False,
+                show_cursor=False,
+                # A hidden cursor on the last line makes the Window auto-scroll to the bottom
+                # (tail). PgUp moves the cursor up to scroll back; new output re-tails it.
+                get_cursor_position=lambda: Point(x=0, y=self._cursor_y()),
+            ),
             wrap_lines=True,
         )
         self.app: Application[None] = Application(
@@ -202,6 +212,18 @@ class JackApp:
             return self.app.output.get_size().columns or 100
         except Exception:
             return 100
+
+    def _total_lines(self) -> int:
+        """Number of logical lines in the transcript (0-based index of the last line)."""
+        return self._transcript.count("\n")
+
+    def _cursor_y(self) -> int:
+        """The transcript cursor line: the last line (tail) while following, else the scroll pos.
+
+        The Window scrolls to keep this line visible, so pointing it at the last line tails the
+        transcript to the bottom; PgUp parks it earlier to scroll back.
+        """
+        return self._total_lines() if self._follow else min(self._scroll_pos, self._total_lines())
 
     def _transcript_text(self) -> ANSI:
         """The transcript region's content (seed the intro lazily once width is known)."""
@@ -312,13 +334,19 @@ class JackApp:
 
         @kb.add("pageup")
         def _pgup(event: Any) -> None:
-            self._transcript_window.vertical_scroll = max(
-                0, self._transcript_window.vertical_scroll - 10
-            )
+            info = self._transcript_window.render_info
+            page = max(1, (info.window_height - 1) if info is not None else 10)
+            current = self._cursor_y()  # where the cursor (view anchor) currently is
+            self._follow = False
+            self._scroll_pos = max(0, current - page)
 
         @kb.add("pagedown")
         def _pgdn(event: Any) -> None:
-            self._transcript_window.vertical_scroll += 10
+            info = self._transcript_window.render_info
+            page = max(1, (info.window_height - 1) if info is not None else 10)
+            self._scroll_pos = self._cursor_y() + page
+            if self._scroll_pos >= self._total_lines():  # reached the bottom → resume tailing
+                self._follow = True
 
         @kb.add(Keys.BracketedPaste)
         def _paste(event: Any) -> None:
@@ -400,7 +428,7 @@ class JackApp:
         self._modal = fut
         self._modal_seg = seg
         hint = "[y]es · [n]o · or type a change" if seg.kind == "plan" else "approve? [y]es · [n]o"
-        self._modal_hint = [("class:amber", f"  {hint}")]
+        self._modal_hint = [("class:amber", f" {hint}")]
         self.app.invalidate()
         try:
             return await fut
@@ -417,7 +445,7 @@ class JackApp:
         except Exception:  # a bad renderable must never crash the turn
             _log.exception("rendering a transcript line failed; dropping it")
             return
-        self._transcript_window.vertical_scroll = 10**9  # clamped to bottom at render (tail)
+        self._follow = True  # new output re-tails to the bottom (see _transcript_scroll)
         self.app.invalidate()
 
     def clear_transcript(self) -> None:
