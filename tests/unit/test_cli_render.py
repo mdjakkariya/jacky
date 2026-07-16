@@ -138,3 +138,24 @@ def test_permission_card_shows_yn_not_numbers() -> None:
     out = console.export_text()
     assert "[y/n]" in out
     assert "[1]" not in out and "Proceed" not in out
+
+
+def test_format_command_gate_splits_a_chained_command_line_by_line() -> None:
+    from autobot.cli.render import format_command_gate
+
+    prompt = 'Run this command?\n\n  $ echo "a; b" ; cat x.js 2>/dev/null || cat y.js ; ls'
+    out = format_command_gate(prompt)
+    lines = [ln for ln in out.split("\n") if ln.strip()]
+    # Header preserved; each sub-command on its own line; the quoted ";" is NOT split.
+    assert lines[0] == "Run this command?"
+    assert '  $ echo "a; b" ;' in lines  # first segment keeps the $ and its quoted semicolon
+    assert "    cat x.js 2>/dev/null ||" in lines  # || split, pipe/redirs stay inline
+    assert "    cat y.js ;" in lines
+    assert "    ls" in lines
+
+
+def test_format_command_gate_leaves_a_simple_command_alone() -> None:
+    from autobot.cli.render import format_command_gate
+
+    prompt = "Run this command?\n\n  $ npm install"
+    assert format_command_gate(prompt) == prompt  # single command → unchanged

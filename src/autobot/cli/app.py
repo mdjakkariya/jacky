@@ -190,12 +190,12 @@ class _CommandBlock(_Block):
             card.append(summary, style="tool")
             return card
         shown = self.output[-MAX_EXPAND_LINES:]
-        header = f"{theme.NEST_INDENT}output of {self.label}"
+        header = f"{theme.NEST_INDENT}Command result"  # simple label — not the full command again
         if n > len(shown):
             header += f"  (last {len(shown)} of {n} lines)"
         body = Text("\n".join(shown) or "(no output)", style="tool")
         # The composer separates this block from its neighbours with blank lines already.
-        return Group(Text(header, style="prompt"), body)
+        return Group(Text(header, style="tool"), body)
 
 
 class _TranscriptControl(FormattedTextControl):
@@ -827,5 +827,8 @@ class AppSurface:
         if seg.kind == "pending":
             from rich.text import Text
 
-            self.commit(Text(seg.text, style="amber"))
+            from autobot.cli.render import format_command_gate
+
+            # Pretty-print a chained command line-by-line so it's reviewable before approving.
+            self.commit(Text(format_command_gate(seg.text), style="amber"))
         return await self._japp.begin_modal(seg)

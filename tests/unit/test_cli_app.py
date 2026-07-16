@@ -132,7 +132,7 @@ def test_command_output_carded_then_expanded() -> None:
     assert "3 lines" in japp._transcript and "^O to view" in japp._transcript  # compact card
     assert "PASS a" not in japp._transcript  # full output NOT in the card
     assert japp.expand_output() is True  # ^O / /output expands it in place
-    assert "output of $ npm test" in japp._transcript
+    assert "Command result" in japp._transcript  # simple header (not the full command again)
     assert "PASS a" in japp._transcript and "PASS c" in japp._transcript
 
 
@@ -145,7 +145,7 @@ def test_ctrl_o_toggles_expand_and_collapse() -> None:
     assert japp.expand_output() is True  # first ^O expands
     assert "a" in japp._transcript and "b" in japp._transcript
     assert japp.expand_output() is True  # ^O again collapses (a toggle, not a no-op)
-    assert "output of $ ls" not in japp._transcript  # back to the compact card
+    assert "Command result" not in japp._transcript  # back to the compact card
     assert "2 lines · ^O to view" in japp._transcript
 
 

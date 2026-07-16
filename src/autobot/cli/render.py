@@ -121,6 +121,63 @@ def render_permission_card(prompt_text: str) -> RenderableType:
     return Group(Text(prompt_text, style="amber"), Text(""), choices)
 
 
+def _split_command(cmd: str) -> list[tuple[str, str]]:
+    """Split a shell command into ``(segment, connector)`` at top-level ``;`` / ``&&`` / ``||``.
+
+    Quote-aware (splits are ignored inside ``'…'`` / ``"…"``) and pipes (single ``|``) are left
+    inline — a pipeline is one logical step. Used only to pretty-print a command for preview.
+    """
+    parts: list[tuple[str, str]] = []
+    buf: list[str] = []
+    quote: str | None = None
+    i, n = 0, len(cmd)
+    while i < n:
+        c = cmd[i]
+        if quote:
+            buf.append(c)
+            if c == quote:
+                quote = None
+            i += 1
+        elif c in ("'", '"'):
+            quote = c
+            buf.append(c)
+            i += 1
+        elif cmd[i : i + 2] in ("&&", "||"):
+            parts.append(("".join(buf).strip(), cmd[i : i + 2]))
+            buf, i = [], i + 2
+        elif c == ";":
+            parts.append(("".join(buf).strip(), ";"))
+            buf, i = [], i + 1
+        else:
+            buf.append(c)
+            i += 1
+    tail = "".join(buf).strip()
+    if tail:
+        parts.append((tail, ""))
+    return parts
+
+
+def format_command_gate(prompt: str) -> str:
+    """Reformat a ``Run this command?`` prompt so a chained command reads line-by-line.
+
+    The daemon builds the prompt with the command on one ``  $ …`` line; a long ``;``/``&&``/``||``
+    chain is hard to scan there. This splits that line into one sub-command per line (connectors
+    kept as trailing markers) so the user can review it before approving. Any other prompt (no
+    ``$`` command line, or a single command) is returned unchanged.
+    """
+    out: list[str] = []
+    for line in prompt.split("\n"):
+        if line.strip().startswith("$ "):
+            segments = _split_command(line.strip()[2:])
+            if len(segments) > 1:
+                for idx, (segment, connector) in enumerate(segments):
+                    prefix = "  $ " if idx == 0 else "    "
+                    out.append(f"{prefix}{segment}{f' {connector}' if connector else ''}")
+                continue
+        out.append(line)
+    return "\n".join(out)
+
+
 def render_welcome(ctx: dict[str, str]) -> RenderableType:
     """The startup banner: just the cwd + a tip (no title line).
 
