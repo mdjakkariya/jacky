@@ -32,12 +32,12 @@ This is the **automated** path: pushing a `vX.Y.Z` tag builds the Python engine
 attaches them all to one GitHub Release.
 
 ```bash
-git checkout -b release/v0.8.0 main
-make release-cli VERSION=0.8.0
-make changelog-cli VERSION=0.8.0
-git commit -am "chore(release): v0.8.0" && gh pr create --fill   # merge when green
+git checkout -b release/v0.8.1 main
+make release-cli VERSION=0.8.1
+make changelog-cli VERSION=0.8.1
+git commit -am "chore(release): v0.8.1" && gh pr create --fill   # merge when green
 git checkout main && git pull
-git tag v0.8.0 && git push origin v0.8.0     # CI builds wheel + 5 jack binaries
+git tag v0.8.1 && git push origin v0.8.1     # CI builds wheel + 5 jack binaries
 ```
 
 `make release-cli` rewrites `pyproject.toml` and `src/autobot/__init__.py` (the
@@ -61,10 +61,10 @@ Pushing the tag triggers `.github/workflows/release.yml`, which:
    binary for every published platform, in parallel (`fail-fast: false`, so one
    platform breaking doesn't cancel the rest).
 
-What ends up attached to the `v0.8.0` Release:
+What ends up attached to the `v0.8.1` Release:
 
 - `autobot-*.whl` / `autobot-*.tar.gz` — the Python engine (wheel + sdist).
-- `jack-0.8.0-<os>-<arch>.(tar.gz|zip)` + a matching `.sha256` for each of:
+- `jack-0.8.1-<os>-<arch>.(tar.gz|zip)` + a matching `.sha256` for each of:
   macOS arm64, macOS x64, Linux x64, Linux arm64, Windows x64.
 
 `install.sh`/`install.ps1` and `jack update` both consume those assets directly —
