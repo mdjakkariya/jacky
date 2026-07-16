@@ -42,6 +42,7 @@ from prompt_toolkit.layout import (
 from prompt_toolkit.layout.controls import BufferControl, FormattedTextControl
 from prompt_toolkit.layout.menus import CompletionsMenu
 from prompt_toolkit.styles import Style
+from prompt_toolkit.widgets import Frame
 
 from autobot.cli import live_region, theme
 from autobot.cli.prompt import Answer, JackCompleter
@@ -65,6 +66,7 @@ _STYLE = Style.from_dict(
         "amber": "#e6b25f",
         "status": "#c7d0cb bg:#1a231f",
         "status.key": "#4fd6b8 bg:#1a231f",
+        "inputframe": "#4fd6b8",  # teal border around the input box
     }
 )
 
@@ -226,10 +228,12 @@ class JackApp:
             height=1,
         )
         entry = Window(BufferControl(buffer=self._input), height=1)
-        input_row = VSplit([glyph, entry])
+        # A bordered input box (a distinct widget) so the input reads as separate from the
+        # transcript above and the status bar below — not one clumped block.
+        input_box = Frame(VSplit([Window(width=1), glyph, entry]), style="class:inputframe")
         status = Window(FormattedTextControl(self._status_text), height=1, style="class:status")
         body = FloatContainer(
-            HSplit([self._transcript_window, live, input_row, status]),
+            HSplit([self._transcript_window, live, input_box, status]),
             floats=[Float(xcursor=True, ycursor=True, content=CompletionsMenu(max_height=8))],
         )
         return Layout(body, focused_element=entry)

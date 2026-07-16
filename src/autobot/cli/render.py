@@ -134,19 +134,20 @@ def render_permission_card(prompt_text: str) -> RenderableType:
 
 
 def render_welcome(ctx: dict[str, str]) -> RenderableType:
-    """The startup banner: a rule-framed title + the live context line + a tip."""
+    """The startup banner: a rule-framed title + the cwd + a tip.
+
+    Deliberately minimal: model, autonomy, and branch live in the always-visible bottom
+    status bar, so repeating them here would just duplicate. Only the cwd (not in the status
+    bar) and the tip appear.
+    """
     from rich.console import Group
     from rich.text import Text
 
     title = Text(f"{theme.RULE_CHAR * 3} Jack ", style="teal")
     title.append(theme.RULE_CHAR * 40, style="dim")
-    ctx_line = Text("  ")
-    ctx_line.append(ctx.get("model", "?"), style="teal")
-    ctx_line.append(f"  ·  {ctx.get('autonomy', '?')}", style="amber")
-    ctx_line.append(f"  ·  {ctx.get('branch', '?')}", style="blue")
-    ctx_line.append(f"  ·  {ctx.get('cwd', '?')}", style="dim")
+    cwd = Text(f"  {ctx.get('cwd', '')}", style="dim")
     tip = Text("  tip  type / for commands, @ to add a file", style="dim")
-    return Group(title, ctx_line, tip)
+    return Group(title, cwd, tip)
 
 
 def render_footer(ctx: dict[str, str], width: int) -> str:
