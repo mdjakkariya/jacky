@@ -128,24 +128,25 @@ def test_command_output_carded_then_expanded() -> None:
     japp = JackApp(cwd="/x", run_turn=noop, commands={}, input=DummyInput(), output=DummyOutput())
     surface = AppSurface(japp)
     surface.commit_command("$ npm test", ["PASS a", "PASS b", "PASS c"], gated=False)
-    assert japp._outputs == [("$ npm test", ["PASS a", "PASS b", "PASS c"])]
+    japp._transcript_text()  # force a compose
     assert "3 lines" in japp._transcript and "^O to view" in japp._transcript  # compact card
     assert "PASS a" not in japp._transcript  # full output NOT in the card
-    assert japp.expand_output() is True  # ^O / /output expands it into the transcript
+    assert japp.expand_output() is True  # ^O / /output expands it in place
     assert "output of $ npm test" in japp._transcript
     assert "PASS a" in japp._transcript and "PASS c" in japp._transcript
 
 
-def test_ctrl_o_expand_is_idempotent_for_the_same_command() -> None:
+def test_ctrl_o_toggles_expand_and_collapse() -> None:
     async def noop(_t: str, _n: int) -> None:
         return None
 
     japp = JackApp(cwd="/x", run_turn=noop, commands={}, input=DummyInput(), output=DummyOutput())
     AppSurface(japp).commit_command("$ ls", ["a", "b"], gated=False)
     assert japp.expand_output() is True  # first ^O expands
-    assert japp.expand_output() is False  # ^O again on the same command → no-op (no re-append)
-    AppSurface(japp).commit_command("$ pwd", ["/x"], gated=False)  # a new command
-    assert japp.expand_output() is True  # ^O now expands the new one
+    assert "a" in japp._transcript and "b" in japp._transcript
+    assert japp.expand_output() is True  # ^O again collapses (a toggle, not a no-op)
+    assert "output of $ ls" not in japp._transcript  # back to the compact card
+    assert "2 lines · ^O to view" in japp._transcript
 
 
 def test_growing_transcript_stays_scrollable_when_scrolled_up() -> None:

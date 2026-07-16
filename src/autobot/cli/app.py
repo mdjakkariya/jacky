@@ -21,6 +21,7 @@ from __future__ import annotations
 import asyncio
 import time
 from collections.abc import Awaitable, Callable
+from dataclasses import dataclass, field
 from io import StringIO
 from typing import TYPE_CHECKING, Any
 
@@ -63,6 +64,7 @@ _log = get_logger("cli")
 _RunTurn = Callable[[str, int], Awaitable[None]]
 _TICK_INTERVAL_S = 0.12  # live-region repaint cadence (spinner frame + elapsed seconds)
 _DOUBLE_ESC_S = 0.6  # a second Esc within this window clears the input
+_WHEEL_STEP = 6  # lines scrolled per mouse-wheel notch (higher = snappier trackpad scrolling)
 MAX_INPUT_LINES = 10  # the input box grows up to this many lines, then scrolls within
 MAX_EXPAND_LINES = 300  # cap when expanding a command's output (^O / /output) — last N lines
 
@@ -124,6 +126,71 @@ def parse_gate_answer(seg: Segment, line: str) -> Answer:
     return Answer("yes") if low in ("y", "yes") else Answer("no")
 
 
+class _Block:
+    """One transcript block; renders to an ANSI string at a given width.
+
+    The transcript is a list of these (not a flat string) so ^O can flip every command block
+    between its compact card and full output *in place* and recompose, keeping the view stable.
+    """
+
+    def render(self, width: int) -> str:
+        """Return this block's ANSI text at ``width``."""
+        raise NotImplementedError
+
+
+@dataclass
+class _PlainBlock(_Block):
+    """A finished renderable, pre-rendered to ANSI at commit-time width (never reflows)."""
+
+    ansi: str
+
+    def render(self, width: int) -> str:
+        """Return the pre-rendered ANSI (width is ignored — it was fixed at commit time)."""
+        return self.ansi
+
+
+@dataclass
+class _CommandBlock(_Block):
+    """A finished command: a compact card when collapsed, full output when expanded (^O).
+
+    Renders are cached per ``(width, expanded)`` so recomposing the transcript on every append
+    stays cheap (a command re-renders only when the width or its expand state changes).
+    """
+
+    label: str
+    output: list[str]
+    gated: bool
+    expanded: bool = False
+    _cache: dict[tuple[int, bool], str] = field(default_factory=dict, repr=False, compare=False)
+
+    def render(self, width: int) -> str:
+        """Return the card (collapsed) or the full output block (expanded), cached per key."""
+        key = (width, self.expanded)
+        cached = self._cache.get(key)
+        if cached is None:
+            cached = render_ansi(self._renderable(), width)
+            self._cache[key] = cached
+        return cached
+
+    def _renderable(self) -> Any:
+        from rich.console import Group
+        from rich.text import Text
+
+        n = len(self.output)
+        if not self.expanded:
+            head = "" if self.gated else f"{self.label} · "  # auto mode leads with the command
+            summary = f"{n} lines · ^O to view" if n else "done"
+            return Text(f"{theme.GLYPH_TOOL} {head}{summary}", style="tool")
+        shown = self.output[-MAX_EXPAND_LINES:]
+        header = f"{theme.GLYPH_TOOL} output of {self.label}"
+        if n > len(shown):
+            header += f"  (last {len(shown)} of {n} lines)"
+        body = Text("\n".join(shown) or "(no output)", style="tool")
+        # Blank lines above and below so the expanded output reads as its own block, not a
+        # dense wall cumulated against the neighbouring lines.
+        return Group(Text(""), Text(header, style="prompt"), body, Text(""))
+
+
 class _TranscriptControl(FormattedTextControl):
     """A transcript control that forwards mouse-wheel scroll to a callback (signed line delta)."""
 
@@ -140,10 +207,10 @@ class _TranscriptControl(FormattedTextControl):
         (instead of translating a trackpad scroll into arrow keys the input would swallow).
         """
         if mouse_event.event_type == MouseEventType.SCROLL_UP:
-            self._on_scroll(-3)
+            self._on_scroll(-_WHEEL_STEP)
             return None
         if mouse_event.event_type == MouseEventType.SCROLL_DOWN:
-            self._on_scroll(3)
+            self._on_scroll(_WHEEL_STEP)
             return None
         return super().mouse_handler(mouse_event)
 
@@ -183,7 +250,9 @@ class JackApp:
         self._last_esc = 0.0  # monotonic time of the last Esc (for double-Esc = clear input)
         self._task: asyncio.Task[None] | None = None
         self._ticker: asyncio.Task[None] | None = None
-        self._transcript = ""  # accumulated ANSI text shown in the scrollable region
+        self._blocks: list[_Block] = []  # transcript blocks (plain + collapsible command cards)
+        self._block_starts: list[int] = []  # each block's start line in the composed transcript
+        self._transcript = ""  # composed ANSI (rebuilt from _blocks); shown in the scroll region
         self._follow = True  # auto-tail the transcript to the bottom (PgUp detaches)
         self._scroll_pos = 0  # manual scroll offset when not following
         # Live-region state (painted by _live_content on the app loop — single owner):
@@ -199,8 +268,6 @@ class JackApp:
         self._modal_edit = False  # True while typing a plan refinement (after pressing 'e')
         self._pending_pickups: list[dict[str, Any]] = []
         self._pastes = PasteStore()  # large pastes stashed behind [Pasted #N] placeholders
-        self._outputs: list[tuple[str, list[str]]] = []  # finished commands' (label, output)
-        self._last_expanded = -1  # index last expanded via ^O (so repeats don't re-append)
         self._input = Buffer(
             accept_handler=self._on_accept,
             completer=JackCompleter(commands, cwd),
@@ -275,9 +342,24 @@ class JackApp:
     def _transcript_text(self) -> ANSI:
         """The transcript region's content (seed the intro lazily once width is known)."""
         if not self._seeded and self._intro is not None:
-            self._transcript = render_ansi(self._intro, self._cols())
+            self._blocks.insert(0, _PlainBlock(render_ansi(self._intro, self._cols())))
+            self._recompose()
             self._seeded = True
         return ANSI(self._transcript)
+
+    def _recompose(self) -> None:
+        """Rebuild the composed transcript + per-block start lines from ``self._blocks``."""
+        width = self._cols()
+        parts: list[str] = []
+        starts: list[int] = []
+        line = 0
+        for block in self._blocks:
+            starts.append(line)
+            text = block.render(width)
+            parts.append(text)
+            line += text.count("\n")
+        self._transcript = "".join(parts)
+        self._block_starts = starts
 
     def _status_text(self) -> list[tuple[str, str]]:
         """The docked status bar: just the session context (autonomy · model · branch).
@@ -526,56 +608,98 @@ class JackApp:
             self.app.invalidate()
 
     def append_transcript(self, renderable: Any) -> None:
-        """Render ``renderable`` (rich → ANSI) into the transcript; tail only if following."""
+        """Append a finished renderable (rich → ANSI) as a plain block; tail only if following."""
         try:
-            self._transcript += render_ansi(renderable, self._cols())
+            ansi = render_ansi(renderable, self._cols())
         except Exception:  # a bad renderable must never crash the turn
             _log.exception("rendering a transcript line failed; dropping it")
             return
-        # Do NOT force-follow here: if the user scrolled up to read, new output must not yank
-        # them back to the bottom. Following is (re)enabled only when they submit a turn or
-        # scroll to the bottom — so a growing chat stays scrollable.
+        # Append incrementally (earlier blocks don't change), so this stays O(1) not O(n).
+        # Do NOT force-follow: if the user scrolled up to read, new output must not yank them
+        # to the bottom — following resumes only on a fresh turn or on scrolling to the bottom.
+        self._block_starts.append(self._total_lines())
+        self._blocks.append(_PlainBlock(ansi))
+        self._transcript += ansi
+        self.app.invalidate()
+
+    def commit_command_block(self, label: str, output: list[str], *, gated: bool) -> None:
+        """Append a finished command as a collapsible block (compact card; ^O toggles output)."""
+        block = _CommandBlock(label, list(output), gated)
+        self._block_starts.append(self._total_lines())
+        self._blocks.append(block)
+        self._transcript += block.render(self._cols())
         self.app.invalidate()
 
     def clear_transcript(self) -> None:
         """Empty the transcript region (the ``/clear`` command)."""
-        self._transcript = ""
+        self._blocks = []
+        self._recompose()
         self.app.invalidate()
 
     def expand_pastes(self, text: str) -> str:
         """Expand any ``[Pasted #N]`` placeholders in ``text`` back to their real content."""
         return self._pastes.expand(text)
 
-    def store_output(self, label: str, output: list[str]) -> int:
-        """Stash a finished command's full output; return its 1-based index (for /output N)."""
-        self._outputs.append((label, list(output)))
-        return len(self._outputs)
-
     def expand_output(self, index: int | None = None) -> bool:
-        """Commit a stashed command's full output into the transcript (last one if no index).
+        """Toggle command output expansion in place, preserving the view position (^O / /output).
 
-        Capped to the last :data:`MAX_EXPAND_LINES` lines (with a note) so an enormous output
-        still can't bloat the terminal. Returns ``False`` if there's nothing to show.
+        No ``index`` (``^O`` / bare ``/output``): toggle *all* commands — collapse everything if
+        it's all expanded, else expand everything. With ``index`` (``/output N``): toggle just the
+        Nth command's output. Returns ``False`` when there are no commands to toggle.
         """
-        if not self._outputs:
+        commands = [b for b in self._blocks if isinstance(b, _CommandBlock)]
+        if not commands:
             return False
-        i = (index - 1) if index is not None else (len(self._outputs) - 1)
-        if not 0 <= i < len(self._outputs):
-            return False
-        if index is None and i == self._last_expanded:
-            return False  # ^O again on the same (most-recent) command → no-op, don't re-append
-        self._last_expanded = i
-        from rich.console import Group
-        from rich.text import Text
+        if index is None:
+            target = not all(b.expanded for b in commands)  # collapse-all if all open, else open
 
-        label, lines = self._outputs[i]
-        shown = lines[-MAX_EXPAND_LINES:]
-        header = f"{theme.GLYPH_TOOL} output of {label}"
-        if len(lines) > len(shown):
-            header += f"  (last {len(shown)} of {len(lines)} lines)"
-        body = Text("\n".join(shown) or "(no output)", style="tool")
-        self.append_transcript(Group(Text(header, style="prompt"), body))
+            def _apply_all() -> None:
+                for block in commands:
+                    block.expanded = target
+
+            self._recompose_preserving_view(_apply_all)
+            return True
+        i = index - 1
+        if not 0 <= i < len(commands):
+            return False
+
+        def _toggle_one() -> None:
+            commands[i].expanded = not commands[i].expanded
+
+        self._recompose_preserving_view(_toggle_one)
         return True
+
+    def _recompose_preserving_view(self, mutate: Callable[[], Any]) -> None:
+        """Apply ``mutate`` (flip expand flags), recompose, and keep the viewport anchored.
+
+        When following, stay pinned to the bottom. Otherwise anchor on the block the viewport
+        currently rests on: after content above it grows/shrinks, shift ``_scroll_pos`` by the
+        same delta so that block stays at the same screen row — the view never jumps.
+        """
+        if self._follow:
+            mutate()
+            self._recompose()
+            self.app.invalidate()
+            return
+        bi, within = self._locate(self._cursor_y())  # anchor block + offset, in the old layout
+        mutate()
+        self._recompose()
+        new_start = self._block_starts[bi] if 0 <= bi < len(self._block_starts) else 0
+        self._scroll_pos = max(0, new_start + within)
+        self.app.invalidate()
+
+    def _locate(self, line: int) -> tuple[int, int]:
+        """Return the block index containing ``line`` and the line offset within that block."""
+        starts = self._block_starts
+        if not starts:
+            return 0, 0
+        bi = 0
+        for i, start in enumerate(starts):
+            if start <= line:
+                bi = i
+            else:
+                break
+        return bi, max(0, line - starts[bi])
 
     def set_activity(self, text: str) -> None:
         """Set the live region's sub-activity line (the app owns the spinner + verb + timer)."""
@@ -644,18 +768,12 @@ class AppSurface:
         self._japp.append_transcript(renderable)
 
     def commit_command(self, label: str, output: list[str], *, gated: bool) -> None:
-        """Stash a finished command's output and commit a compact result card (expand with ^O).
+        """Append a finished command as a collapsible block (compact card; ^O toggles output).
 
         In confirm mode (``gated``) the permission gate already showed the command, so the card
         is result-only; in auto mode the card leads with the command so it's shown once.
         """
-        from rich.text import Text
-
-        self._japp.store_output(label, output)
-        n = len(output)
-        head = "" if gated else f"{label} · "  # auto mode: include the command in the card
-        summary = f"{n} lines · ^O to view" if n else "done"
-        self.commit(Text(f"{theme.GLYPH_TOOL} {head}{summary}", style="tool"))
+        self._japp.commit_command_block(label, output, gated=gated)
 
     def set_activity(self, text: str) -> None:
         """Set the live region's current-activity line."""
