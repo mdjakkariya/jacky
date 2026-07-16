@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import time
 from collections.abc import AsyncIterator
 from typing import Any
 
@@ -150,3 +151,39 @@ def test_aiter_blocking_yields_all_items_in_order() -> None:
         return [x async for x in drv.aiter_blocking(sync_gen())]
 
     assert asyncio.run(_collect()) == [{"a": 1}, {"a": 2}]
+
+
+def test_aiter_blocking_swallows_close_error_when_cancelled_mid_read() -> None:
+    """Cancelling mid-read must not let close()'s 'generator already executing' crash the turn."""
+    import threading
+
+    started = threading.Event()
+
+    class _BlockingStream:
+        def __iter__(self) -> Any:
+            return self
+
+        def __next__(self) -> dict[str, Any]:
+            started.set()
+            time.sleep(0.3)  # simulate a urllib SSE read blocking in the executor thread
+            raise StopIteration
+
+        def close(self) -> None:
+            raise ValueError("generator already executing")
+
+    async def _go() -> str:
+        async def consume() -> None:
+            async for _ in drv.aiter_blocking(_BlockingStream()):
+                pass
+
+        task = asyncio.create_task(consume())
+        await asyncio.get_running_loop().run_in_executor(None, started.wait, 2.0)
+        await asyncio.sleep(0.05)
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            return "cancelled-clean"  # the ValueError from close() was swallowed
+        return "unexpected"
+
+    assert asyncio.run(_go()) == "cancelled-clean"

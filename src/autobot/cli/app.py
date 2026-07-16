@@ -142,6 +142,7 @@ class JackApp:
         self._seeded = False
         self._turn_no = 0
         self._exiting = False
+        self._last_turn_text = ""  # restored into the input when a turn is esc-interrupted
         self._task: asyncio.Task[None] | None = None
         self._ticker: asyncio.Task[None] | None = None
         self._transcript = ""  # accumulated ANSI text shown in the scrollable region
@@ -262,6 +263,11 @@ class JackApp:
         def _interrupt(event: Any) -> None:
             if self._task is not None and not self._task.done():
                 self._task.cancel()
+                if self._last_turn_text and not self._input.text:
+                    # Refill the input with the interrupted turn's text so it can be edited
+                    # and resent (only if the user hasn't already started typing something new).
+                    self._input.text = self._last_turn_text
+                    self._input.cursor_position = len(self._last_turn_text)
 
         @kb.add("pageup")
         def _pgup(event: Any) -> None:
@@ -287,6 +293,7 @@ class JackApp:
         if not text or self.busy:
             return False
         buff.reset()
+        self._last_turn_text = text  # so esc can refill it for editing/resending
         self._task = asyncio.create_task(self._drive(text, self._turn_no))
         self._turn_no += 1
         return False

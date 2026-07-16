@@ -94,6 +94,33 @@ def test_appsurface_set_activity_updates_fragments() -> None:
     assert japp._activity is None
 
 
+def test_escape_refills_the_input_with_the_interrupted_text() -> None:
+    async def slow_run_turn(text: str, turn_no: int) -> None:
+        await asyncio.sleep(10)
+
+    japp: JackApp
+
+    async def _drive() -> str:
+        nonlocal japp
+        with create_pipe_input() as inp:
+            japp = JackApp(
+                cwd="/x", run_turn=slow_run_turn, commands={}, input=inp, output=DummyOutput()
+            )
+
+            async def feed() -> None:
+                inp.send_text("fix the parser bug\r")  # start a turn (input cleared)
+                await asyncio.sleep(0.2)
+                inp.send_text("\x1b")  # ESC → cancel + refill input
+                await asyncio.sleep(0.2)
+                inp.send_text("\x04")  # quit
+
+            asyncio.get_running_loop().create_task(feed())
+            await japp.run_async()
+        return japp._input.text
+
+    assert asyncio.run(_drive()) == "fix the parser bug"  # refilled for editing/resending
+
+
 def test_begin_modal_resolves_from_typed_line() -> None:
     got: list[Answer] = []
 

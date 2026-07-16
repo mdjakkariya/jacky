@@ -152,4 +152,10 @@ async def aiter_blocking(
     finally:
         close = getattr(sync_iter, "close", None)
         if callable(close):
-            close()  # release the underlying urllib SSE response
+            try:
+                close()  # release the underlying urllib SSE response
+            except (ValueError, RuntimeError):
+                # Cancelled mid-read: the generator is still executing in the executor thread,
+                # so it can't be closed now ("generator already executing"). It's released when
+                # that blocked next() finally returns. Swallow so the CancelledError survives.
+                _log.debug("stream close deferred (generator busy in executor)")
