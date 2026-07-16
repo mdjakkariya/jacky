@@ -1,8 +1,10 @@
-"""Pure composer for the live region: a single spinner line describing the current action.
+"""Pure composer for the live region: a spinner action line plus a windowed todo checklist.
 
 No terminal I/O and no threads — it only turns state (the current-action label, frame char,
-elapsed) into prompt_toolkit ``(style, text)`` fragments. The running Application paints
-these; that single owner is what removes the threaded-``Live`` write race (rich#1530).
+elapsed, and the model's todo list) into prompt_toolkit ``(style, text)`` fragments. The
+running Application paints these; that single owner is what removes the threaded-``Live``
+write race (rich#1530). Keeping the todos here (under the spinner) rather than committing a
+line per delta keeps the transcript clean — the checklist updates in place while the turn runs.
 """
 
 from __future__ import annotations
@@ -25,6 +27,17 @@ _ACTIONS: dict[str, str] = {
 
 # The label shown while the model is thinking (no tool running yet).
 DEFAULT_ACTION = "Working"
+
+# status → (glyph, style class). Anything else (e.g. "pending") falls back to _PENDING.
+_MARKS: dict[str, tuple[str, str]] = {
+    "done": ("☑", "teal"),
+    "in_progress": ("◐", "verb"),
+    "blocked": ("⊘", "amber"),
+}
+_PENDING = ("☐", "dim")
+
+# Show at most this many checklist rows under the spinner before collapsing (done/overflow).
+MAX_TODO_ROWS = 5
 
 
 def action_label(name: str) -> str:
@@ -50,15 +63,63 @@ def byline(elapsed_s: float, width: int) -> str:
     return ""
 
 
-def live_fragments(
-    label: str, frame_char: str, elapsed_s: float, width: int
+def todo_panel(
+    todos: list[tuple[str, str]], width: int, *, max_rows: int = MAX_TODO_ROWS
 ) -> list[tuple[str, str]]:
-    """Compose the live region as a single line of prompt_toolkit ``(style, text)`` fragments.
+    """Windowed checklist fragments (each a new indented row) shown under the spinner.
 
-    The line is ``<glyph> <label>…  ·  <byline>`` — the label is the current action
-    (``Reading file``, ``Running command``, …). No secondary preview line: the region stays a
-    single, calm status line. Styles are prompt_toolkit class names (resolved by the app's
-    ``Style`` map), not rich styles.
+    ``todos`` is ``(status, step)`` in list order. With ``max_rows`` or fewer, every step is
+    shown. With more, the done steps before the focused (in-progress) step collapse into one
+    ``☑ N done`` summary, the focused step and the pending steps that fit are shown, and any
+    overflow becomes a ``☐ +N more`` summary — so the focused step is always visible and the
+    panel never exceeds ``max_rows`` rows.
+    """
+    if not todos:
+        return []
+    frags: list[tuple[str, str]] = []
+
+    def row(glyph: str, style: str, text: str) -> None:
+        frags.append(("", "\n "))  # own row, aligned to the 1-col left margin
+        frags.append((f"class:{style}", f"  {glyph} {text[: max(1, width - 6)]}"))
+
+    if len(todos) <= max_rows:
+        for status, step in todos:
+            glyph, style = _MARKS.get(status, _PENDING)
+            row(glyph, style, step)
+        return frags
+
+    focus = next((i for i, (s, _) in enumerate(todos) if s == "in_progress"), None)
+    if focus is None:  # nothing running → focus the first unfinished step (else the last)
+        focus = next((i for i, (s, _) in enumerate(todos) if s != "done"), len(todos) - 1)
+    done_before = sum(1 for i, (s, _) in enumerate(todos) if i < focus and s == "done")
+    budget = max_rows - (1 if done_before else 0)
+    window = todos[focus : focus + budget]
+    if len(todos) - (focus + len(window)) > 0:  # reserve a row for the "+N more" summary
+        window = window[:-1]
+    remaining = len(todos) - (focus + len(window))
+
+    if done_before:
+        row("☑", "teal", f"{done_before} done")
+    for status, step in window:
+        glyph, style = _MARKS.get(status, _PENDING)
+        row(glyph, style, step)
+    if remaining > 0:
+        row("☐", "dim", f"+{remaining} more")
+    return frags
+
+
+def live_fragments(
+    label: str,
+    frame_char: str,
+    elapsed_s: float,
+    todos: list[tuple[str, str]],
+    width: int,
+) -> list[tuple[str, str]]:
+    """Compose the live region: a spinner action line, then the windowed todo checklist.
+
+    Line 1 is ``<glyph> <label>…  ·  <byline>`` — the current action. Any ``todos`` render as
+    indented rows below it (see :func:`todo_panel`). Styles are prompt_toolkit class names
+    (resolved by the app's ``Style`` map), not rich styles.
     """
     frags: list[tuple[str, str]] = [
         ("", " "),  # left margin — aligns the spinner with the transcript's 1-col margin
@@ -68,4 +129,5 @@ def live_fragments(
     tail = byline(elapsed_s, width)
     if tail:
         frags.append(("class:dim", f"  ·  {tail}"))
+    frags.extend(todo_panel(todos, width))
     return frags

@@ -45,6 +45,7 @@ from prompt_toolkit.layout import (
 from prompt_toolkit.layout.controls import BufferControl, FormattedTextControl
 from prompt_toolkit.layout.dimension import Dimension
 from prompt_toolkit.layout.menus import CompletionsMenu
+from prompt_toolkit.mouse_events import MouseEvent, MouseEventType
 from prompt_toolkit.styles import Style
 from prompt_toolkit.widgets import Frame
 
@@ -69,6 +70,7 @@ _STYLE = Style.from_dict(
     {
         "spinner": "#4fd6b8",
         "verb": "bold",
+        "teal": "#4fd6b8",
         "dim": "#5b665f",
         "prompt": "#4fd6b8 bold",
         "amber": "#e6b25f",
@@ -122,6 +124,30 @@ def parse_gate_answer(seg: Segment, line: str) -> Answer:
     return Answer("yes") if low in ("y", "yes") else Answer("no")
 
 
+class _TranscriptControl(FormattedTextControl):
+    """A transcript control that forwards mouse-wheel scroll to a callback (signed line delta)."""
+
+    def __init__(self, *args: Any, on_scroll: Callable[[int], None], **kwargs: Any) -> None:
+        """Wrap ``FormattedTextControl`` with an ``on_scroll(delta_lines)`` wheel callback."""
+        super().__init__(*args, **kwargs)
+        self._on_scroll = on_scroll
+
+    def mouse_handler(self, mouse_event: MouseEvent) -> Any:
+        """Route wheel up/down to the scroll callback; defer everything else to the base.
+
+        On a Mac laptop PageUp/PageDown mean Fn+↑/↓ — awkward — so the trackpad/wheel is the
+        natural way to scroll. With mouse tracking on, the terminal sends wheel events here
+        (instead of translating a trackpad scroll into arrow keys the input would swallow).
+        """
+        if mouse_event.event_type == MouseEventType.SCROLL_UP:
+            self._on_scroll(-3)
+            return None
+        if mouse_event.event_type == MouseEventType.SCROLL_DOWN:
+            self._on_scroll(3)
+            return None
+        return super().mouse_handler(mouse_event)
+
+
 class JackApp:
     """A full-screen app: scrollable transcript, live region, docked input + status bar."""
 
@@ -161,8 +187,10 @@ class JackApp:
         self._follow = True  # auto-tail the transcript to the bottom (PgUp detaches)
         self._scroll_pos = 0  # manual scroll offset when not following
         # Live-region state (painted by _live_content on the app loop — single owner):
-        # _activity is the current-action label shown by the spinner (None hides the region).
+        # _activity is the current-action label shown by the spinner (None hides the region);
+        # _todos is the model's live checklist, shown as a windowed panel under the spinner.
         self._activity: str | None = None
+        self._todos: list[tuple[str, str]] = []
         self._modal_hint: list[tuple[str, str]] | None = None
         self._turn_started = 0.0
         self._frame_i = 0
@@ -181,13 +209,14 @@ class JackApp:
             multiline=True,  # box grows for multi-line paste/typing (Enter submits; ^J newline)
         )
         self._transcript_window = Window(
-            FormattedTextControl(
+            _TranscriptControl(
                 self._transcript_text,
                 focusable=False,
                 show_cursor=False,
                 # A hidden cursor on the last line makes the Window auto-scroll to the bottom
-                # (tail). PgUp moves the cursor up to scroll back; new output re-tails it.
+                # (tail). Wheel / PgUp move the cursor up to scroll back; new output re-tails it.
                 get_cursor_position=lambda: Point(x=0, y=self._cursor_y()),
+                on_scroll=self._scroll_by,
             ),
             wrap_lines=True,
         )
@@ -196,7 +225,7 @@ class JackApp:
             key_bindings=merge_key_bindings([load_key_bindings(), self._bindings()]),
             style=_STYLE,
             full_screen=True,  # docks input + status bar at the bottom, transcript above
-            mouse_support=False,  # mouse OFF → native select/copy works; scroll is PgUp/PgDn
+            mouse_support=True,  # capture wheel → scroll the transcript (Mac trackpad-friendly)
             input=input,
             output=output,
         )
@@ -274,7 +303,7 @@ class JackApp:
             return []
         elapsed = time.monotonic() - self._turn_started
         frame = theme.SPINNER_FRAMES[self._frame_i % len(theme.SPINNER_FRAMES)]
-        return live_region.live_fragments(self._activity, frame, elapsed, self._cols())
+        return live_region.live_fragments(self._activity, frame, elapsed, self._todos, self._cols())
 
     def _build_layout(self) -> Layout:
         live = ConditionalContainer(
@@ -459,6 +488,7 @@ class JackApp:
                 self._ticker.cancel()
                 self._ticker = None
             self._activity = None
+            self._todos = []  # the live checklist vanishes with the live region at turn end
             self._modal_hint = None
             self._modal = None
             self._modal_seg = None
@@ -552,9 +582,15 @@ class JackApp:
         self._activity = text
         self.app.invalidate()
 
+    def set_todos(self, todos: list[tuple[str, str]]) -> None:
+        """Replace the live checklist (``(status, step)`` rows) shown under the spinner."""
+        self._todos = list(todos)
+        self.app.invalidate()
+
     def clear_activity(self) -> None:
         """Clear the live region."""
         self._activity = None
+        self._todos = []
         self.app.invalidate()
 
     def on_task_finished(self, events: list[dict[str, Any]]) -> None:
@@ -624,6 +660,10 @@ class AppSurface:
     def set_activity(self, text: str) -> None:
         """Set the live region's current-activity line."""
         self._japp.set_activity(text)
+
+    def set_todos(self, todos: list[tuple[str, str]]) -> None:
+        """Replace the live checklist shown under the spinner."""
+        self._japp.set_todos(todos)
 
     def clear_activity(self) -> None:
         """Clear the live region."""

@@ -73,22 +73,6 @@ def render_tool(seg: Segment) -> RenderableType:
     return Text(f"{theme.GLYPH_TOOL} {seg.text}", style="tool")
 
 
-def render_todo(status: str, step: str) -> RenderableType:
-    """A single todo progress line: a status glyph + the step text.
-
-    ``done`` → ``☑`` (teal), ``in_progress`` → ``◐`` (dim), ``blocked`` → ``⊘`` (amber),
-    anything else (e.g. ``pending``) → ``☐`` (dim).
-    """
-    from rich.text import Text
-
-    glyph, style = {
-        "done": ("☑", "teal"),
-        "in_progress": ("◐", "dim"),
-        "blocked": ("⊘", "amber"),
-    }.get(status, ("☐", "dim"))
-    return Text(f"{glyph} {step}", style=style)
-
-
 def render_task_pickup(events: list[dict[str, Any]]) -> RenderableType:
     """A notice that finished background task(s) are being auto-picked-up (auto-resume).
 

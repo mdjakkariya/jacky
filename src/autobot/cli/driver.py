@@ -112,7 +112,6 @@ class TurnDriver:
         (``plan``/``pending``/``done``/``error``), or ``None`` if the stream ended without
         one (e.g. a dropped connection).
         """
-        prev: dict[str, str] = {}
         self._surface.set_activity(live_region.DEFAULT_ACTION)  # "Working" until a tool starts
         async for evt in events:
             status = evt.get("status")
@@ -120,7 +119,7 @@ class TurnDriver:
                 return evt
             if evt.get("type") == "plan_update":
                 self._surface.set_activity("Planning")  # the model is managing its plan
-                self._commit_plan_updates(evt, prev)
+                self._push_todos(evt)  # live checklist under the spinner (not committed lines)
                 continue
             try:
                 self._commit_activity(evt)
@@ -147,6 +146,8 @@ class TurnDriver:
                 # (confirm) or by the result card (auto). Just start buffering its output.
                 self._cmd_label = seg.text  # "$ <command>"
                 self._cmd_lines = []
+            elif name == "update_plan":
+                pass  # the checklist itself is the display (live panel); no ⎿ "Update plan" line
             else:
                 self._surface.commit(render.render_tool(seg))  # other tools keep their ⎿ label
                 self._activity_shown = True
@@ -163,16 +164,19 @@ class TurnDriver:
         elif seg.kind == "output":
             self._cmd_lines.append(seg.text)  # buffered for the card; not previewed live
 
-    def _commit_plan_updates(self, evt: dict[str, Any], prev: dict[str, str]) -> None:
-        """Commit ◐/☑/⊘ delta lines for changed todo steps (dedup via ``prev``)."""
-        for todo in evt.get("todos") or []:
-            step = str(todo.get("step", ""))
-            status = str(todo.get("status", ""))
-            if step and prev.get(step) != status and status in ("in_progress", "done", "blocked"):
-                self._surface.commit(render.render_todo(status, step))
-                self._activity_shown = True
-            if step:
-                prev[step] = status
+    def _push_todos(self, evt: dict[str, Any]) -> None:
+        """Send the model's full checklist to the live region (shown under the spinner).
+
+        Each ``plan_update`` event carries the whole list, so we replace it wholesale rather
+        than committing a line per delta — that keeps the transcript free of ``Update plan``
+        churn while the checklist updates in place.
+        """
+        todos = [
+            (str(t.get("status", "")), str(t.get("step", "")))
+            for t in evt.get("todos") or []
+            if t.get("step")
+        ]
+        self._surface.set_todos(todos)
 
 
 async def aiter_blocking(

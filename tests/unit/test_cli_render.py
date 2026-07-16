@@ -137,21 +137,3 @@ def test_permission_card_shows_yn_not_numbers() -> None:
     out = console.export_text()
     assert "[y/n]" in out
     assert "[1]" not in out and "Proceed" not in out
-
-
-def test_render_todo_glyphs_per_status() -> None:
-    from rich.console import Console
-
-    from autobot.cli import render
-
-    def _text(status: str, step: str) -> str:
-        con = Console(width=80)
-        with con.capture() as cap:
-            con.print(render.render_todo(status, step))
-        return cap.get()
-
-    assert "☑" in _text("done", "run the suite") and "run the suite" in _text(
-        "done", "run the suite"
-    )
-    assert "◐" in _text("in_progress", "y")
-    assert "⊘" in _text("blocked", "z")

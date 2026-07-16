@@ -17,6 +17,7 @@ class FakeSurface:
         self.commits: list[Any] = []
         self.activity: list[str] = []
         self.commands: list[tuple[str, list[str]]] = []  # (label, output) per finished command
+        self.todos: list[list[tuple[str, str]]] = []  # each set_todos snapshot, in order
         self._answers: deque[Answer] = deque(answers or [])
         self.asked: list[Segment] = []
 
@@ -31,6 +32,10 @@ class FakeSurface:
     def set_activity(self, text: str) -> None:
         """Record an activity-line update."""
         self.activity.append(text)
+
+    def set_todos(self, todos: list[tuple[str, str]]) -> None:
+        """Record a live-checklist snapshot."""
+        self.todos.append(list(todos))
 
     def clear_activity(self) -> None:
         """Record a live-region clear (as an empty activity)."""

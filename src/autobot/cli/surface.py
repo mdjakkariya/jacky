@@ -37,6 +37,14 @@ class Surface(Protocol):
         """Set the live region's current-activity line (transient; empty clears it)."""
         ...
 
+    def set_todos(self, todos: list[tuple[str, str]]) -> None:
+        """Replace the live checklist (``(status, step)`` rows) shown under the spinner.
+
+        The list updates in place while the turn runs (never committed as per-delta lines), so
+        the transcript stays clean; it clears when the live region does (turn end).
+        """
+        ...
+
     def clear_activity(self) -> None:
         """Clear the live region (equivalent to ``set_activity('')``)."""
         ...

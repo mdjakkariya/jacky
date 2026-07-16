@@ -166,11 +166,10 @@ def test_gated_command_is_not_echoed_again_before_its_card() -> None:
     assert s.commands == [("$ npm test", ["PASS"])]  # buffered + carded
 
 
-def test_plan_update_deltas_committed_once_per_transition() -> None:
+def test_plan_updates_go_to_live_checklist_not_the_transcript() -> None:
     s = FakeSurface()
     _run(
         [
-            {"type": "plan_update", "todos": [{"step": "run suite", "status": "in_progress"}]},
             {"type": "plan_update", "todos": [{"step": "run suite", "status": "in_progress"}]},
             {"type": "plan_update", "todos": [{"step": "run suite", "status": "done"}]},
             {"status": "done", "reply": "ok"},
@@ -179,8 +178,23 @@ def test_plan_update_deltas_committed_once_per_transition() -> None:
         s,
     )
     flat = [_render_text(r) for r in s.commits]
-    # dedup: the unchanged in_progress repeat does not re-commit
-    assert sum("run suite" in t for t in flat) == 2  # one in_progress, one done
+    assert not any("run suite" in t for t in flat)  # no per-delta ⎿ lines pollute the transcript
+    assert s.todos[-1] == [("done", "run suite")]  # the live checklist holds the latest state
+
+
+def test_update_plan_tool_line_is_suppressed() -> None:
+    s = FakeSurface()
+    _run(
+        [
+            {"type": "tool", "event": "start", "name": "update_plan", "label": "Update plan"},
+            {"type": "tool", "event": "end", "name": "update_plan", "label": "Update plan"},
+            {"status": "done", "reply": "ok"},
+        ],
+        None,
+        s,
+    )
+    flat = [_render_text(r) for r in s.commits]
+    assert not any("Update plan" in t for t in flat)  # the checklist panel is the display
 
 
 def test_cancelled_mid_turn_commits_interrupted_and_reraises() -> None:
