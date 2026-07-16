@@ -356,7 +356,9 @@ class JackApp:
 
         @kb.add(Keys.BracketedPaste)
         def _paste(event: Any) -> None:
-            data = event.data
+            # Normalize line endings first: a terminal paste often uses \r (or \r\n) as the
+            # separator, which otherwise reads as one giant "line" (and crashed the path check).
+            data = event.data.replace("\r\n", "\n").replace("\r", "\n")
             mention = paste.is_existing_path(data, self._cwd)
             if mention is not None:
                 self._input.insert_text(f"@{mention} ")  # reuse the @-file attachment path

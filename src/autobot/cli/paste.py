@@ -38,18 +38,28 @@ def placeholder(n: int, text: str) -> str:
     return f"[Pasted #{n} · {summary(text)}]"
 
 
+_MAX_PATH_LEN = 4096  # skip the existence check above this — it can't be a real path anyway
+
+
 def is_existing_path(text: str, cwd: str) -> str | None:
     """Return the (stripped) path if ``text`` is a single-line existing file/dir, else ``None``.
 
     Relative paths are resolved against ``cwd`` for the existence check, but the original
-    (as-pasted) string is returned so the mention is inserted verbatim.
+    (as-pasted) string is returned so the mention is inserted verbatim. Multi-line text (any
+    newline or carriage return) is never a path. The check is fully guarded: an over-long blob
+    is rejected before any ``stat`` (a huge paste is not a filename), and ``Path.exists()`` —
+    which raises on ``ENAMETOOLONG`` rather than swallowing it — is wrapped so a paste never
+    crashes the app.
     """
     s = text.strip()
-    if not s or "\n" in s:
+    if not s or "\n" in s or "\r" in s or len(s) > _MAX_PATH_LEN:
         return None
-    p = Path(s).expanduser()
-    candidate = p if p.is_absolute() else Path(cwd) / p
-    return s if candidate.exists() else None
+    try:
+        p = Path(s).expanduser()
+        candidate = p if p.is_absolute() else Path(cwd) / p
+        return s if candidate.exists() else None
+    except OSError:  # ENAMETOOLONG, permission, invalid path — not a usable mention
+        return None
 
 
 def trailing_placeholder(text_before_cursor: str) -> str | None:

@@ -25,6 +25,15 @@ def test_placeholder_format() -> None:
     assert paste.placeholder(2, "x" * 500) == "[Pasted #2 · 500 chars]"
 
 
+def test_is_existing_path_never_raises_on_huge_or_odd_input(tmp_path: Path) -> None:
+    # Regression: a long paste (esp. one whose lines are \r-separated, so it looks like a
+    # single "line") must not reach os.stat and crash with ENAMETOOLONG.
+    huge = "All done. " + "x" * 5000
+    assert paste.is_existing_path(huge, str(tmp_path)) is None
+    assert paste.is_existing_path("line1\rline2\rline3", str(tmp_path)) is None  # \r is multi-line
+    assert paste.is_existing_path("a" * 400, str(tmp_path)) is None  # long but under cap, no crash
+
+
 def test_is_existing_path(tmp_path: Path) -> None:
     (tmp_path / "note.txt").write_text("hi", encoding="utf-8")
     assert paste.is_existing_path("note.txt", str(tmp_path)) == "note.txt"
