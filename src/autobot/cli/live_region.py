@@ -61,6 +61,9 @@ def live_fragments(
     if tail:
         frags.append(("class:dim", f"  ·  {tail}"))
     if activity:
-        frags.append(("", "\n "))  # newline + left margin
-        frags.append(("class:dim", activity))
+        # Each activity line on its own row (a command's rolling output preview can be several
+        # lines), indented to the 1-col margin and clipped to the width.
+        for line in activity.split("\n"):
+            frags.append(("", "\n "))
+            frags.append(("class:dim", line[: max(1, width - 2)]))
     return frags

@@ -39,6 +39,8 @@ class TurnDriver:
         self._cwd = cwd
         self._snapshot = snapshot
         self._diff_since = diff_since
+        self._cmd_label: str | None = None  # the running command's label ($ …) while buffering
+        self._cmd_lines: list[str] = []  # its captured output (shown as a live preview)
 
     async def run_turn(
         self,
@@ -49,6 +51,7 @@ class TurnDriver:
     ) -> None:
         """Drive a turn: commit tool/output lines, resolve gates, commit reply + diff."""
         snap = self._snapshot(self._cwd)
+        self._cmd_label, self._cmd_lines = None, []  # no command buffering carried across turns
         _log.info("turn start turn_no=%d", turn_no)
         try:
             while True:
@@ -107,15 +110,34 @@ class TurnDriver:
         return None
 
     def _commit_activity(self, evt: dict[str, Any]) -> None:
-        """Commit a tool-start or command-output line and refresh the activity label."""
-        seg = classify(evt)
-        if seg.kind == "tool" and evt.get("event") == "start":
-            self._surface.commit(render.render_tool(seg))
-            self._surface.set_activity(seg.text[:60])  # the tool now running
-        elif seg.kind == "output":
-            from rich.text import Text
+        """Handle a tool start/end or command-output event.
 
-            self._surface.commit(Text(seg.text, style="tool"))
+        A ``run_command`` is special-cased so its (possibly huge) output never bloats the
+        transcript: while it runs, output is buffered and shown as a rolling live preview (last
+        few lines); when it ends, one compact card is committed and the full output is stashed
+        for on-demand expand. Other tools just commit their ⎿ label on start.
+        """
+        seg = classify(evt)
+        name = evt.get("name")
+        event = evt.get("event")
+        if seg.kind == "tool" and event == "start":
+            if name == "run_command":
+                self._cmd_label = seg.text  # "$ <command>"
+                self._cmd_lines = []
+                self._surface.set_activity(self._cmd_label)
+            else:
+                self._surface.commit(render.render_tool(seg))
+                self._surface.set_activity(seg.text[:60])  # the tool now running
+        elif seg.kind == "tool" and event == "end":
+            if name == "run_command" and self._cmd_label is not None:
+                self._surface.commit_command(self._cmd_label, self._cmd_lines)
+                self._cmd_label = None
+                self._cmd_lines = []
+        elif seg.kind == "output":
+            self._cmd_lines.append(seg.text)
+            preview = "\n".join(self._cmd_lines[-4:])  # last 4 lines, shown live
+            label = self._cmd_label or ""
+            self._surface.set_activity(f"{label}\n{preview}" if label else preview)
 
     def _commit_plan_updates(self, evt: dict[str, Any], prev: dict[str, str]) -> None:
         """Commit ◐/☑/⊘ delta lines for changed todo steps (dedup via ``prev``)."""

@@ -20,6 +20,7 @@ COMMANDS: dict[str, str] = {
     "/autonomy": "show or set autonomy (plan|confirm|auto)",
     "/sessions": "list sessions (or /sessions resume <id>)",
     "/new": "start a fresh session",
+    "/output": "show a command's full output (/output [N]; or press ^O)",
     "/cost": "show usage & cost (/cost open for the dashboard)",
     "/debug": "write a shareable debug report of this session (to paste for help)",
     "/exit": "quit jack",

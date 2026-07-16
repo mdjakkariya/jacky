@@ -22,6 +22,15 @@ class Surface(Protocol):
         """Commit a finished renderable to the terminal's scrollback (permanent)."""
         ...
 
+    def commit_command(self, label: str, output: list[str]) -> None:
+        """Commit a compact card for a finished command and stash its full output.
+
+        ``label`` is the command line (e.g. ``$ npm test``); ``output`` is its captured lines.
+        The card stays compact (line count + an expand hint) so long output never bloats the
+        transcript; the full output is available on demand (``Ctrl-O`` / ``/output``).
+        """
+        ...
+
     def set_activity(self, text: str) -> None:
         """Set the live region's current-activity line (transient; empty clears it)."""
         ...

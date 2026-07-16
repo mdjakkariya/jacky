@@ -104,6 +104,24 @@ def test_permission_yes_then_done() -> None:
     assert s.asked[0].kind == "pending"
 
 
+def test_run_command_buffers_output_and_commits_a_card() -> None:
+    s = FakeSurface()
+    _run(
+        [
+            {"type": "tool", "event": "start", "name": "run_command", "label": "$ npm test"},
+            {"type": "output", "text": "PASS a"},
+            {"type": "output", "text": "PASS b"},
+            {"type": "tool", "event": "end", "name": "run_command", "label": "$ npm test"},
+            {"status": "done", "reply": "ok"},
+        ],
+        None,
+        s,
+    )
+    flat = [_render_text(r) for r in s.commits]
+    assert not any("PASS a" in t for t in flat)  # output is NOT dumped into the transcript
+    assert s.commands == [("$ npm test", ["PASS a", "PASS b"])]  # buffered, carded on end
+
+
 def test_plan_update_deltas_committed_once_per_transition() -> None:
     s = FakeSurface()
     _run(

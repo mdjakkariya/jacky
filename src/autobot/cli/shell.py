@@ -138,6 +138,11 @@ def run(base_url: str, cwd: str) -> None:  # pragma: no cover - launches the int
         surface.commit(Text(""))  # a blank line between the user's message and the response
         parsed = commands.parse(text)
         if parsed is not None:
+            if parsed[0] == "/output":  # client-side: expand a stashed command's output
+                arg = parsed[1].strip()
+                if not japp.expand_output(int(arg) if arg.isdigit() else None):
+                    surface.commit(Text("No command output to show yet.", style="dim"))
+                return
             out, action = route_command(*parsed, base_url=base_url, cwd=cwd, width=japp._cols())
             if action == "exit":
                 japp._exiting = True

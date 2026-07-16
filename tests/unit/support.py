@@ -16,12 +16,17 @@ class FakeSurface:
         """Optionally preload ``answers`` returned by successive ``ask`` calls."""
         self.commits: list[Any] = []
         self.activity: list[str] = []
+        self.commands: list[tuple[str, list[str]]] = []  # (label, output) per finished command
         self._answers: deque[Answer] = deque(answers or [])
         self.asked: list[Segment] = []
 
     def commit(self, renderable: Any) -> None:
         """Record a committed renderable."""
         self.commits.append(renderable)
+
+    def commit_command(self, label: str, output: list[str]) -> None:
+        """Record a finished command's compact card + its full output."""
+        self.commands.append((label, list(output)))
 
     def set_activity(self, text: str) -> None:
         """Record an activity-line update."""

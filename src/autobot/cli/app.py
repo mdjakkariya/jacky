@@ -63,6 +63,7 @@ _RunTurn = Callable[[str, int], Awaitable[None]]
 _TICK_INTERVAL_S = 0.12  # live-region repaint cadence (spinner frame + elapsed seconds)
 _DOUBLE_ESC_S = 0.6  # a second Esc within this window clears the input
 MAX_INPUT_LINES = 10  # the input box grows up to this many lines, then scrolls within
+MAX_EXPAND_LINES = 300  # cap when expanding a command's output (^O / /output) — last N lines
 
 _STYLE = Style.from_dict(
     {
@@ -169,6 +170,7 @@ class JackApp:
         self._modal_seg: Segment | None = None
         self._pending_pickups: list[dict[str, Any]] = []
         self._pastes = PasteStore()  # large pastes stashed behind [Pasted #N] placeholders
+        self._outputs: list[tuple[str, list[str]]] = []  # finished commands' (label, output)
         self._input = Buffer(
             accept_handler=self._on_accept,
             completer=JackCompleter(commands, cwd),
@@ -332,6 +334,10 @@ class JackApp:
         def _newline(event: Any) -> None:
             self._input.insert_text("\n")  # Ctrl-J inserts a literal newline (multi-line input)
 
+        @kb.add("c-o")
+        def _expand_output(event: Any) -> None:
+            self.expand_output()  # Ctrl-O expands the most recent command's full output
+
         @kb.add("pageup")
         def _pgup(event: Any) -> None:
             info = self._transcript_window.render_info
@@ -457,6 +463,34 @@ class JackApp:
         """Expand any ``[Pasted #N]`` placeholders in ``text`` back to their real content."""
         return self._pastes.expand(text)
 
+    def store_output(self, label: str, output: list[str]) -> int:
+        """Stash a finished command's full output; return its 1-based index (for /output N)."""
+        self._outputs.append((label, list(output)))
+        return len(self._outputs)
+
+    def expand_output(self, index: int | None = None) -> bool:
+        """Commit a stashed command's full output into the transcript (last one if no index).
+
+        Capped to the last :data:`MAX_EXPAND_LINES` lines (with a note) so an enormous output
+        still can't bloat the terminal. Returns ``False`` if there's nothing to show.
+        """
+        if not self._outputs:
+            return False
+        i = (index - 1) if index is not None else (len(self._outputs) - 1)
+        if not 0 <= i < len(self._outputs):
+            return False
+        from rich.console import Group
+        from rich.text import Text
+
+        label, lines = self._outputs[i]
+        shown = lines[-MAX_EXPAND_LINES:]
+        header = f"{theme.GLYPH_TOOL} output of {label}"
+        if len(lines) > len(shown):
+            header += f"  (last {len(shown)} of {len(lines)} lines)"
+        body = Text("\n".join(shown) or "(no output)", style="tool")
+        self.append_transcript(Group(Text(header, style="prompt"), body))
+        return True
+
     def set_activity(self, text: str) -> None:
         """Set the live region's sub-activity line (the app owns the spinner + verb + timer)."""
         self._activity = text
@@ -515,6 +549,19 @@ class AppSurface:
     def commit(self, renderable: Any) -> None:
         """Commit a finished renderable into the scrollable transcript."""
         self._japp.append_transcript(renderable)
+
+    def commit_command(self, label: str, output: list[str]) -> None:
+        """Stash a finished command's output and commit a compact card (expand with ^O)."""
+        from rich.text import Text
+
+        self._japp.store_output(label, output)
+        n = len(output)
+        text = (
+            f"{theme.GLYPH_TOOL} {label} · {n} lines · ^O to view"
+            if n
+            else (f"{theme.GLYPH_TOOL} {label} · done")
+        )
+        self.commit(Text(text, style="tool"))
 
     def set_activity(self, text: str) -> None:
         """Set the live region's current-activity line."""

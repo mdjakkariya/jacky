@@ -121,6 +121,29 @@ def test_bracketed_paste_existing_path_becomes_a_mention(tmp_path: Any) -> None:
     assert japp._input.text.strip() == f"@{f}"  # a pasted path becomes an @mention
 
 
+def test_command_output_carded_then_expanded() -> None:
+    async def noop(_t: str, _n: int) -> None:
+        return None
+
+    japp = JackApp(cwd="/x", run_turn=noop, commands={}, input=DummyInput(), output=DummyOutput())
+    surface = AppSurface(japp)
+    surface.commit_command("$ npm test", ["PASS a", "PASS b", "PASS c"])
+    assert japp._outputs == [("$ npm test", ["PASS a", "PASS b", "PASS c"])]
+    assert "3 lines" in japp._transcript and "^O to view" in japp._transcript  # compact card
+    assert "PASS a" not in japp._transcript  # full output NOT in the card
+    assert japp.expand_output() is True  # ^O / /output expands it into the transcript
+    assert "output of $ npm test" in japp._transcript
+    assert "PASS a" in japp._transcript and "PASS c" in japp._transcript
+
+
+def test_expand_output_when_nothing_stored_is_false() -> None:
+    async def noop(_t: str, _n: int) -> None:
+        return None
+
+    japp = JackApp(cwd="/x", run_turn=noop, commands={}, input=DummyInput(), output=DummyOutput())
+    assert japp.expand_output() is False
+
+
 def test_parse_gate_answer_plan_and_permission() -> None:
     plan = Segment("plan", "the plan")
     assert parse_gate_answer(plan, "y") == Answer("approve")
