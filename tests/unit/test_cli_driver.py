@@ -98,6 +98,29 @@ def test_rejected_command_shows_red_and_no_card() -> None:
     assert s.commands == []  # no result card for a command that never ran
 
 
+def test_edit_tool_shows_inline_diff_and_skips_the_fallback() -> None:
+    s = FakeSurface()
+    _run(
+        [
+            {"type": "tool", "event": "start", "name": "edit_file", "label": "Edited app.py"},
+            {"type": "output", "name": "edit_file", "text": "--- app.py"},
+            {"type": "output", "name": "edit_file", "text": "+++ app.py"},
+            {"type": "output", "name": "edit_file", "text": "@@ -1 +1 @@"},
+            {"type": "output", "name": "edit_file", "text": "-old line"},
+            {"type": "output", "name": "edit_file", "text": "+new line"},
+            {"type": "tool", "event": "end", "name": "edit_file", "label": "Edited app.py"},
+            {"status": "done", "reply": "done"},
+        ],
+        None,
+        s,
+        diff="diff --git a/x b/x\n+SHOULD_NOT_SHOW",  # the fallback whole-turn diff
+    )
+    flat = "\n".join(_render_text(r) for r in s.commits)
+    assert "Edited app.py" in flat  # the activity line
+    assert "new line" in flat  # the inline per-edit diff rendered
+    assert "SHOULD_NOT_SHOW" not in flat  # fallback diff skipped — no duplication
+
+
 def test_done_commits_diff_when_present() -> None:
     s = FakeSurface()
     _run([{"status": "done", "reply": "ok"}], None, s, diff="diff --git a/x b/x\n+new")

@@ -22,6 +22,7 @@ _log = get_logger("cli")
 
 _AnswerStream = Callable[[str, str], "AsyncIterator[dict[str, Any]]"]
 _APPROVE = frozenset({"yes", "y", "approve", "once", "session"})  # gate answers that proceed
+_EDIT_TOOLS = frozenset({"write_file", "edit_file", "multi_edit"})  # stream an inline diff
 
 
 class TurnDriver:
@@ -43,6 +44,8 @@ class TurnDriver:
         self._cmd_label: str | None = None  # the running command's label ($ …) while buffering
         self._cmd_lines: list[str] = []  # its captured output (shown as a live preview)
         self._gated = False  # a permission gate just showed the command → don't echo it again
+        self._diff_lines: list[str] = []  # an edit tool's streamed unified-diff lines
+        self._showed_diff = False  # an inline per-edit diff was rendered this turn
 
     async def run_turn(
         self,
@@ -55,6 +58,7 @@ class TurnDriver:
         snap = self._snapshot(self._cwd)
         self._cmd_label, self._cmd_lines = None, []  # no command buffering carried across turns
         self._gated = False
+        self._diff_lines, self._showed_diff = [], False
         _log.info("turn start turn_no=%d", turn_no)
         # Spacing is owned by the transcript composer: every committed block is separated from
         # its neighbours by a blank line, so the driver just commits blocks (no manual blanks).
@@ -82,7 +86,9 @@ class TurnDriver:
                     events = answer_stream(ans.value, ans.text)
                     continue
                 self._surface.commit(render.render_rich(seg))  # done / error
-                if phase.get("status") == "done":
+                if phase.get("status") == "done" and not self._showed_diff:
+                    # Fallback whole-turn diff only when no per-edit diff was shown inline (e.g.
+                    # a run_command changed files); edit-tool changes already showed their diffs.
                     diff = self._diff_since(self._cwd, snap)
                     if diff:
                         self._surface.commit(render.render_diff_rich(diff, width=100))
@@ -144,6 +150,8 @@ class TurnDriver:
                 pass  # the checklist itself is the display (live panel); no "Update plan" line
             else:
                 self._surface.commit(render.render_tool(seg))  # a dim, indented verb line
+                if name in _EDIT_TOOLS:
+                    self._diff_lines = []  # collect this edit's streamed diff, shown on end
             self._surface.set_activity(live_region.action_label(name))  # "Reading file", etc.
         elif seg.kind == "tool" and event == "end":
             if name == "run_command" and self._cmd_label is not None:
@@ -152,9 +160,18 @@ class TurnDriver:
                 self._cmd_label = None
                 self._cmd_lines = []
                 self._gated = False  # consumed by this command
+            elif name in _EDIT_TOOLS and self._diff_lines:
+                diff = "\n".join(self._diff_lines)
+                self._surface.commit(render.render_diff_rich(diff, width=100))
+                self._diff_lines = []
+                self._showed_diff = True  # skip the fallback whole-turn diff (no duplication)
             self._surface.set_activity(live_region.DEFAULT_ACTION)  # back to "Working"
         elif seg.kind == "output":
-            self._cmd_lines.append(seg.text)  # buffered for the card; not previewed live
+            # An edit tool streams its diff; a command streams its output. Route by tool name.
+            if name in _EDIT_TOOLS:
+                self._diff_lines.append(seg.text)
+            else:
+                self._cmd_lines.append(seg.text)  # buffered for the card; not previewed live
 
     def _push_todos(self, evt: dict[str, Any]) -> None:
         """Send the model's full checklist to the live region (shown under the spinner).
