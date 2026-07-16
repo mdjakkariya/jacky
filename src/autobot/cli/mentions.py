@@ -57,9 +57,15 @@ def resolve_mentions(text: str, cwd: str, *, cap: int = _MENTION_CAP) -> str:
 
 
 def extract_file(path: Path, *, cap: int = _MENTION_CAP) -> str:
-    """A bounded text representation of ``path`` for the model (never raises)."""
+    """A bounded text representation of ``path`` for the model (never raises).
+
+    A directory mention (``@src/``) resolves to a one-level listing so the user can hand the
+    model a folder as context; a regular file is read/extracted by type.
+    """
     if not path.exists():
         return "(file not found)"
+    if path.is_dir():
+        return _bound(_list_dir(path), cap)
     if not path.is_file():
         return "(not a file)"
     try:
@@ -81,6 +87,18 @@ def extract_file(path: Path, *, cap: int = _MENTION_CAP) -> str:
     else:
         raw = _read_text(path, size)
     return _bound(raw, cap)
+
+
+def _list_dir(path: Path) -> str:
+    """A one-level directory listing (folders first, then files) for an ``@folder`` mention."""
+    try:
+        entries = sorted(path.iterdir(), key=lambda p: (not p.is_dir(), p.name.lower()))
+    except OSError as exc:
+        return f"(couldn't list directory: {exc})"
+    names = [f"{p.name}/" if p.is_dir() else p.name for p in entries]
+    if not names:
+        return "(empty directory)"
+    return f"(directory, {len(names)} entries)\n" + "\n".join(names)
 
 
 def _read_text(path: Path, size: str) -> str:

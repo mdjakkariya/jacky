@@ -61,18 +61,23 @@ class ReloadableLanguageModel:
         user_text: str,
         execute: ToolExecutor,
         on_event: Callable[[dict[str, Any]], None] | None = None,
+        should_cancel: Callable[[], bool] | None = None,
     ) -> str:
         """Rebuild from fresh settings if dirty, then handle the turn.
 
-        Forwards the optional ``on_event`` streaming callback to the inner model — the
-        concrete ``AgentHarness`` accepts it; it is intentionally not on the minimal
-        ``LanguageModel`` protocol (so 2-arg fakes/callers still satisfy it), hence the
-        ``call-arg`` ignore on the streaming branch.
+        Forwards the optional ``on_event`` streaming callback and ``should_cancel`` (the
+        esc-to-interrupt poll) to the inner model — the concrete ``AgentHarness`` accepts
+        both; they are intentionally not on the minimal ``LanguageModel`` protocol (so 2-arg
+        fakes/callers still satisfy it), hence the ``call-arg`` ignore. Each is passed only
+        when set, so a plain 2-arg inner still works.
         """
         inner = self._ensure()
-        if on_event is None:
-            return inner.run_turn(user_text, execute)
-        return inner.run_turn(user_text, execute, on_event=on_event)  # type: ignore[call-arg]
+        kwargs: dict[str, Any] = {}
+        if on_event is not None:
+            kwargs["on_event"] = on_event
+        if should_cancel is not None:
+            kwargs["should_cancel"] = should_cancel
+        return inner.run_turn(user_text, execute, **kwargs)
 
     def complete(self, prompt: str, *, temperature: float = 0.0) -> str:
         """Forward to the (lazily built) inner model; same reload semantics as run_turn."""

@@ -8,7 +8,7 @@ from autobot.cli import theme
 def test_glyph_constants_are_expected() -> None:
     assert theme.GLYPH_ASSISTANT == "⏺"  # ⏺
     assert theme.GLYPH_USER == "▌"  # ▌
-    assert theme.GLYPH_TOOL == "⎿"  # ⎿
+    assert theme.NEST_INDENT == "  "  # nested activity lines are indented, not glyph-prefixed
     assert theme.GLYPH_PROMPT == "❯"  # noqa: RUF001, RUF003  # ❯
     assert len(theme.SPINNER_FRAMES) == 10  # braille orbit
 

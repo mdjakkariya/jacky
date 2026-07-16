@@ -20,6 +20,7 @@ from __future__ import annotations
 import json
 from collections.abc import Callable
 from dataclasses import replace
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from autobot.core.streaming import active_session_id, output_sink
@@ -49,22 +50,39 @@ def _call_key(call: ToolCall) -> str:
     return call.name + "\0" + json.dumps(call.arguments, sort_keys=True, default=str)
 
 
+def _file_name(raw: str) -> str:
+    """Just the file name for display (``/a/b/app.py`` or ``src/app.py`` → ``app.py``).
+
+    The activity line is a quick at-a-glance indicator, so the bare name reads easier than a
+    long path; falls back to the raw string when there's no name component. Pure — no fs I/O.
+    """
+    if not raw:
+        return raw
+    try:
+        return Path(raw).name or raw
+    except (OSError, ValueError):
+        return raw
+
+
 def tool_label(call: ToolCall) -> str:
-    """A short human label for a tool call, for the ⎿ activity line."""
+    """A short human label for a tool call, for the activity line (paths shown as the file name)."""
     args = call.arguments
     if call.name == "read_file":
-        return f"Read {args.get('path', '')}".strip()
+        return f"Read {_file_name(str(args.get('path', '')))}".strip()
     if call.name == "grep":
         return f'Searched "{args.get("pattern", "")}"'
     if call.name in ("glob", "list_dir"):
-        return f"Listed {args.get('pattern', args.get('path', ''))}".strip()
+        target = args.get("pattern") or _file_name(str(args.get("path", "")))
+        return f"Listed {target}".strip()
     if call.name == "run_command":
         return f"$ {str(args.get('command', ''))[:80]}"
     if call.name in ("write_file", "edit_file", "multi_edit"):
-        return f"Edited {args.get('path', '')}".strip()
+        return f"Edited {_file_name(str(args.get('path', '')))}".strip()
     if call.name == "spawn_agent":
         return f"Spawned subagent: {str(args.get('label') or args.get('task', ''))[:70]}".strip()
-    return call.name
+    # Fallback for any other tool: humanize the raw name so casing stays consistent with the
+    # verb-prefixed labels above (e.g. "repo_map" → "Repo map", "update_plan" → "Update plan").
+    return call.name.replace("_", " ").strip().capitalize()
 
 
 class AgentHarness:
@@ -121,12 +139,22 @@ class AgentHarness:
         return self._session
 
     def run_turn(
-        self, user_text: str, execute: ToolExecutor, on_event: OnEvent | None = None
+        self,
+        user_text: str,
+        execute: ToolExecutor,
+        on_event: OnEvent | None = None,
+        should_cancel: Callable[[], bool] | None = None,
     ) -> str:
         """Handle one user turn end-to-end; tool calls run through ``execute`` (the gate).
 
         When ``on_event`` is provided, emits ``{"type": "tool", "event": "start"/"end", ...}``
         around each executed tool call (and token events come from the provider's ``send``).
+
+        When ``should_cancel`` is provided, it is polled at the top of every tool round; the
+        first time it returns ``True`` the turn stops cooperatively (the current round is not
+        started) and returns a short interrupted reply. The turn is still finalized, so the
+        partial conversation is persisted. Cancellation is between rounds — an in-flight
+        provider ``send`` or tool call is not force-killed (see ``esc``/``/coder/interrupt``).
         """
 
         def emit(evt: dict[str, Any]) -> None:
@@ -148,6 +176,10 @@ class AgentHarness:
         reply = ""
         unproductive = 0  # consecutive rounds that ran tools but produced no successful result
         for _ in range(self._max_rounds):
+            if should_cancel is not None and should_cancel():
+                _log.info("turn interrupted (cancel requested)")
+                reply = "Interrupted."
+                break
             resp = self._model.send(self._session, on_event)
             if not resp.tool_calls:
                 reply = resp.text

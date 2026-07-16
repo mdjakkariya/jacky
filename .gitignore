@@ -62,3 +62,6 @@ docs/testing
 ui/orb-shell/src-tauri/voices/
 # Bundled system-audio sidecar binary (built by `make build-syscap`)
 ui/orb-shell/src-tauri/syscap/
+
+# Per-workspace jack CLI runtime state (sessions, settings)
+.jack/

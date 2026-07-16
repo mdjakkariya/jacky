@@ -972,6 +972,10 @@ class Orchestrator:
         self._record_transcript(lambda: self._transcript.user(text, 1.0))
         yield from self._record_coder_events(self.coder_driver.start_stream(text))
 
+    def interrupt_coder(self) -> bool:
+        """Request the running coder turn stop (esc-to-interrupt); True if one was active."""
+        return self.coder_driver.interrupt() if self.coder_driver is not None else False
+
     def reply_coder_stream(self, value: str, text: str = "") -> Iterator[dict[str, Any]]:
         """Deliver the CLI's answer and stream the next phase's events (coder profile only)."""
         if self.coder_driver is None:

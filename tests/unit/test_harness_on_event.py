@@ -45,7 +45,20 @@ def test_tool_label_maps_common_calls() -> None:
     assert tool_label(ToolCall(name="run_command", arguments={"command": "pytest -q"})).startswith(
         "$ "
     )
-    assert tool_label(ToolCall(name="mystery", arguments={})) == "mystery"
+    # Unknown tools fall back to a humanized name (consistent casing with the labels above).
+    assert tool_label(ToolCall(name="mystery", arguments={})) == "Mystery"
+    assert tool_label(ToolCall(name="repo_map", arguments={})) == "Repo map"
+
+
+def test_tool_label_shows_just_the_file_name() -> None:
+    # Paths collapse to the bare file name — a long absolute or nested path is hard to scan.
+    assert tool_label(ToolCall("read_file", {"path": "/work/proj/package.json"})) == (
+        "Read package.json"
+    )
+    assert tool_label(ToolCall("read_file", {"path": "src/support/app.py"})) == "Read app.py"
+    assert tool_label(ToolCall("edit_file", {"path": "/a/b/tests/data-integrity.js"})) == (
+        "Edited data-integrity.js"
+    )
 
 
 def test_run_turn_emits_tool_start_and_end(tmp_path: Any) -> None:

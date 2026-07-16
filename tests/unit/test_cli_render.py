@@ -73,7 +73,7 @@ def test_render_footer_has_context_and_gates_on_width() -> None:
     assert len(narrow) <= 20
 
 
-def test_render_tool_shows_connector_and_label() -> None:
+def test_render_tool_is_an_indented_verb_without_a_connector() -> None:
     pytest.importorskip("rich")
     from rich.console import Console
 
@@ -83,7 +83,8 @@ def test_render_tool_shows_connector_and_label() -> None:
     console = Console(record=True, width=80)
     console.print(render_tool(Segment("tool", "Read a.py")))
     out = console.export_text()
-    assert "Read a.py" in out and "⎿" in out
+    assert "Read a.py" in out and "⎿" not in out  # clean dim verb, no connector glyph
+    assert out.startswith("  ")  # indented under the reply
 
 
 def test_render_sessions_table_has_rows() -> None:
@@ -139,19 +140,22 @@ def test_permission_card_shows_yn_not_numbers() -> None:
     assert "[1]" not in out and "Proceed" not in out
 
 
-def test_render_todo_glyphs_per_status() -> None:
-    from rich.console import Console
+def test_format_command_gate_splits_a_chained_command_line_by_line() -> None:
+    from autobot.cli.render import format_command_gate
 
-    from autobot.cli import render
+    prompt = 'Run this command?\n\n  $ echo "a; b" ; cat x.js 2>/dev/null || cat y.js ; ls'
+    out = format_command_gate(prompt)
+    lines = [ln for ln in out.split("\n") if ln.strip()]
+    # Header preserved; each sub-command on its own line; the quoted ";" is NOT split.
+    assert lines[0] == "Run this command?"
+    assert '  $ echo "a; b" ;' in lines  # first segment keeps the $ and its quoted semicolon
+    assert "    cat x.js 2>/dev/null ||" in lines  # || split, pipe/redirs stay inline
+    assert "    cat y.js ;" in lines
+    assert "    ls" in lines
 
-    def _text(status: str, step: str) -> str:
-        con = Console(width=80)
-        with con.capture() as cap:
-            con.print(render.render_todo(status, step))
-        return cap.get()
 
-    assert "☑" in _text("done", "run the suite") and "run the suite" in _text(
-        "done", "run the suite"
-    )
-    assert "◐" in _text("in_progress", "y")
-    assert "⊘" in _text("blocked", "z")
+def test_format_command_gate_leaves_a_simple_command_alone() -> None:
+    from autobot.cli.render import format_command_gate
+
+    prompt = "Run this command?\n\n  $ npm install"
+    assert format_command_gate(prompt) == prompt  # single command → unchanged

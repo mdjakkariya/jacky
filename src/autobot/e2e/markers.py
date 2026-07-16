@@ -20,19 +20,23 @@ def reply_present(screen: str) -> bool:
     return theme.GLYPH_ASSISTANT in screen
 
 
+# Leading verbs of the nested activity lines (rendered as dim, indented verbs — no glyph).
+_ACTIVITY_VERBS = ("Read ", "Listed ", "Searched ", "Edited ", "Ran ", "Mapped ", "Spawned ")
+
+
 def tool_line(screen: str) -> bool:
-    """A nested tool-activity line (``⎿``) is on screen."""
-    return theme.GLYPH_TOOL in screen
+    """A nested tool-activity line (a dim, indented verb like ``Read …`` or ``$ …``) is present."""
+    return "^O to view" in screen or any(verb in screen for verb in _ACTIVITY_VERBS)
 
 
 def plan_card(screen: str) -> bool:
-    """The plan-approval single-key prompt (its ``(e) edit`` option distinguishes it)."""
-    return "(e) edit" in screen
+    """The plan-approval gate affordance (its ``or type a change`` option distinguishes it)."""
+    return "or type a change" in screen
 
 
 def permission_card(screen: str) -> bool:
-    """The command-permission single-key prompt (``(y) yes  (n) no``, no edit option)."""
-    return "(y) yes" in screen and "(n) no" in screen and "(e) edit" not in screen
+    """The command-permission gate affordance (``Approve? [y]es · [n]o``, no plan edit)."""
+    return "approve?" in screen.lower() and "or type a change" not in screen
 
 
 def any_gate(screen: str) -> bool:
@@ -41,8 +45,12 @@ def any_gate(screen: str) -> bool:
 
 
 def working(screen: str) -> bool:
-    """A turn is actively running — the spinner byline (``esc to interrupt``) is up."""
-    return "esc to interrupt" in screen
+    """A turn is actively running — a spinner frame is up in the live region.
+
+    Keyed on the braille spinner glyph, NOT ``esc to interrupt`` — that hint now lives in the
+    always-present status bar, so it can't distinguish a running turn from idle.
+    """
+    return any(frame in screen for frame in theme.SPINNER_FRAMES)
 
 
 def turn_started(screen: str) -> bool:
@@ -51,12 +59,10 @@ def turn_started(screen: str) -> bool:
 
 
 def awaiting_reply(screen: str) -> bool:
-    """A gate is *live* — its single-key prompt is on screen, waiting for a choice.
+    """A gate is *live* — its affordance is on screen in the live region, awaiting a choice.
 
-    The confirm/plan prompt is a transient single-key region (``erase_when_done``): it is on
-    screen *only* while awaiting an answer and vanishes the instant it's answered. So — unlike
-    the old committed ``Proceed?`` card that lingered in scrollback — the mere presence of the
-    gate's choice line IS the reliable "awaiting now" signal, with no stale-card problem.
+    The gate affordance is shown in the transient live region only while awaiting an answer
+    and vanishes the instant it's answered, so its mere presence IS the "awaiting now" signal.
     """
     return any_gate(screen)
 
@@ -72,18 +78,19 @@ def error(screen: str) -> bool:
 
 
 def idle_prompt(screen: str) -> bool:
-    """The REPL prompt is the last line AND *empty* — a turn finished, ready for input.
+    """The input prompt is *empty* and nothing is running — a turn finished, ready for input.
 
-    Requires nothing after the prompt glyph. A prompt still showing un-submitted input
-    (``❯ do a thing``) is **not** idle — otherwise a just-typed command, sitting in the
-    input during the latency before its turn produces output, would be mistaken for a
-    completed turn and the harness would race ahead / tear down mid-turn.
+    The docked input renders as ``❯`` with nothing typed (the status bar sits below it). So
+    idle = an empty ``❯`` line is present AND no turn (spinner) or gate is active. A prompt
+    still showing un-submitted input (``❯ do a thing``) is **not** idle — otherwise a
+    just-typed command awaiting its turn's first output would look like a completed turn.
     """
-    lines = [ln for ln in screen.splitlines() if ln.strip()]
-    if not lines:
+    if working(screen) or any_gate(screen):
         return False
-    last = lines[-1].lstrip()
-    return last.startswith(theme.GLYPH_PROMPT) and not last[len(theme.GLYPH_PROMPT) :].strip()
+    # The input is drawn inside a Frame, so the prompt line carries border cells around the
+    # glyph. Strip those (the box-drawing bar) before comparing, so an empty framed prompt
+    # still reads as idle while a prompt holding un-submitted text does not.
+    return any(ln.replace("│", "").strip() == theme.GLYPH_PROMPT for ln in screen.splitlines())
 
 
 BY_NAME: dict[str, Marker] = {

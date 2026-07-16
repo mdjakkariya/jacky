@@ -106,6 +106,21 @@ def test_edit_file_applies_whitespace_tolerant_edit(tmp_path: Path) -> None:
     assert "edited" in out.lower()
 
 
+def test_edit_file_streams_a_unified_diff(tmp_path: Path) -> None:
+    from autobot.core.streaming import output_sink
+
+    f = tmp_path / "m.py"
+    f.write_text("x = 1\n", encoding="utf-8")
+    lines: list[str] = []
+    token = output_sink.set(lines.append)
+    try:
+        edit_file(str(f), "x = 1", "x = 2", _broker(tmp_path))
+    finally:
+        output_sink.reset(token)
+    joined = "\n".join(lines)
+    assert "-x = 1" in joined and "+x = 2" in joined  # streamed the change as a unified diff
+
+
 def test_edit_file_reports_ambiguous_without_writing(tmp_path: Path) -> None:
     f = tmp_path / "m.py"
     f.write_text("x = 1\nx = 1\n")

@@ -18,7 +18,9 @@ class _EmittingLLM:
     def __init__(self) -> None:
         self.plans = 0
 
-    def run_turn(self, user_text: str, execute: Any, on_event: Any = None) -> str:
+    def run_turn(
+        self, user_text: str, execute: Any, on_event: Any = None, should_cancel: Any = None
+    ) -> str:
         if "PLANNING" in user_text:
             self.plans += 1
             return "1. run the script"

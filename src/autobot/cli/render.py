@@ -26,7 +26,7 @@ def render_plain(seg: Segment) -> str:
     if seg.kind == "token":
         return seg.text
     if seg.kind == "tool":
-        return f"{theme.GLYPH_TOOL}  {seg.text}"
+        return f"{theme.NEST_INDENT}{seg.text}"
     return seg.text  # pending / done
 
 
@@ -67,26 +67,14 @@ def render_reply(text: str) -> RenderableType:
 
 
 def render_tool(seg: Segment) -> RenderableType:
-    """A dim nested tool-activity line: ``⎿ <label>``."""
-    from rich.text import Text
+    """A dim, indented nested tool-activity line (a friendly verb, no connector glyph).
 
-    return Text(f"{theme.GLYPH_TOOL}  {seg.text}", style="tool")
-
-
-def render_todo(status: str, step: str) -> RenderableType:
-    """A single todo progress line: a status glyph + the step text.
-
-    ``done`` → ``☑`` (teal), ``in_progress`` → ``◐`` (dim), ``blocked`` → ``⊘`` (amber),
-    anything else (e.g. ``pending``) → ``☐`` (dim).
+    Reads as ``  Read foo.py`` / ``  Searched "…"`` sitting under the reply — cleaner than the
+    old ``⎿`` connector, which read as a cryptic corner rather than meaningful activity.
     """
     from rich.text import Text
 
-    glyph, style = {
-        "done": ("☑", "teal"),
-        "in_progress": ("◐", "dim"),
-        "blocked": ("⊘", "amber"),
-    }.get(status, ("☐", "dim"))
-    return Text(f"{glyph} {step}", style=style)
+    return Text(f"{theme.NEST_INDENT}{seg.text}", style="tool")
 
 
 def render_task_pickup(events: list[dict[str, Any]]) -> RenderableType:
@@ -133,20 +121,76 @@ def render_permission_card(prompt_text: str) -> RenderableType:
     return Group(Text(prompt_text, style="amber"), Text(""), choices)
 
 
+def _split_command(cmd: str) -> list[tuple[str, str]]:
+    """Split a shell command into ``(segment, connector)`` at top-level ``;`` / ``&&`` / ``||``.
+
+    Quote-aware (splits are ignored inside ``'…'`` / ``"…"``) and pipes (single ``|``) are left
+    inline — a pipeline is one logical step. Used only to pretty-print a command for preview.
+    """
+    parts: list[tuple[str, str]] = []
+    buf: list[str] = []
+    quote: str | None = None
+    i, n = 0, len(cmd)
+    while i < n:
+        c = cmd[i]
+        if quote:
+            buf.append(c)
+            if c == quote:
+                quote = None
+            i += 1
+        elif c in ("'", '"'):
+            quote = c
+            buf.append(c)
+            i += 1
+        elif cmd[i : i + 2] in ("&&", "||"):
+            parts.append(("".join(buf).strip(), cmd[i : i + 2]))
+            buf, i = [], i + 2
+        elif c == ";":
+            parts.append(("".join(buf).strip(), ";"))
+            buf, i = [], i + 1
+        else:
+            buf.append(c)
+            i += 1
+    tail = "".join(buf).strip()
+    if tail:
+        parts.append((tail, ""))
+    return parts
+
+
+def format_command_gate(prompt: str) -> str:
+    """Reformat a ``Run this command?`` prompt so a chained command reads line-by-line.
+
+    The daemon builds the prompt with the command on one ``  $ …`` line; a long ``;``/``&&``/``||``
+    chain is hard to scan there. This splits that line into one sub-command per line (connectors
+    kept as trailing markers) so the user can review it before approving. Any other prompt (no
+    ``$`` command line, or a single command) is returned unchanged.
+    """
+    out: list[str] = []
+    for line in prompt.split("\n"):
+        if line.strip().startswith("$ "):
+            segments = _split_command(line.strip()[2:])
+            if len(segments) > 1:
+                for idx, (segment, connector) in enumerate(segments):
+                    prefix = "  $ " if idx == 0 else "    "
+                    out.append(f"{prefix}{segment}{f' {connector}' if connector else ''}")
+                continue
+        out.append(line)
+    return "\n".join(out)
+
+
 def render_welcome(ctx: dict[str, str]) -> RenderableType:
-    """The startup banner: a rule-framed title + the live context line + a tip."""
+    """The startup banner: just the cwd + a tip (no title line).
+
+    Deliberately minimal and clean: model, autonomy, and branch live in the always-visible
+    bottom status bar (no duplication), and the left margin is applied by the transcript
+    renderer — so no leading spaces here. Only the cwd and the tip appear.
+    """
     from rich.console import Group
     from rich.text import Text
 
-    title = Text(f"{theme.RULE_CHAR * 3} Jack ", style="teal")
-    title.append(theme.RULE_CHAR * 40, style="dim")
-    ctx_line = Text("  ")
-    ctx_line.append(ctx.get("model", "?"), style="teal")
-    ctx_line.append(f"  ·  {ctx.get('autonomy', '?')}", style="amber")
-    ctx_line.append(f"  ·  {ctx.get('branch', '?')}", style="blue")
-    ctx_line.append(f"  ·  {ctx.get('cwd', '?')}", style="dim")
-    tip = Text("  tip  type / for commands, @ to add a file", style="dim")
-    return Group(title, ctx_line, tip)
+    cwd = Text(ctx.get("cwd", ""), style="dim")
+    tip = Text("💡 Tip  type / for commands, @ to add a file", style="dim")
+    return Group(cwd, Text(""), tip)
 
 
 def render_footer(ctx: dict[str, str], width: int) -> str:

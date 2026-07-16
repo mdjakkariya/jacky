@@ -11,9 +11,11 @@ audit log apply exactly as they do for the assistant's file tools.
 
 from __future__ import annotations
 
+import difflib
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from autobot.core.streaming import output_sink
 from autobot.core.types import Risk
 from autobot.logging_setup import get_logger
 from autobot.tools.access import AccessBroker, AccessDeniedError
@@ -31,6 +33,26 @@ _log = get_logger("coder")
 
 _READ_CHAR_CAP = 100_000  # max chars returned into the conversation
 _READ_LINE_CAP = 2000  # max lines returned in one read_file call
+_MAX_DIFF_LINES = 160  # cap the diff streamed to the UI so a big rewrite can't flood the view
+
+
+def _emit_diff(old: str, new: str, name: str) -> None:
+    """Stream a unified diff of an edit to the UI (via ``output_sink``) for inline review.
+
+    A no-op when no turn is streaming (``output_sink`` unset) or nothing changed. Capped at
+    :data:`_MAX_DIFF_LINES` lines so a large rewrite shows a bounded, reviewable hunk.
+    """
+    sink = output_sink.get()
+    if sink is None or old == new:
+        return
+    diff = difflib.unified_diff(
+        old.splitlines(), new.splitlines(), fromfile=name, tofile=name, lineterm=""
+    )
+    for i, line in enumerate(diff):
+        if i >= _MAX_DIFF_LINES:
+            sink(f"… (diff truncated at {_MAX_DIFF_LINES} lines)")
+            break
+        sink(line)
 
 
 def _read_text(resolved: Path) -> tuple[str | None, str]:
@@ -100,6 +122,7 @@ def write_file(path: str, content: str, broker: AccessBroker) -> str:
         resolved.write_text(content, encoding="utf-8")
     except OSError as exc:
         return f"I couldn't write {resolved.name}: {exc}"
+    _emit_diff("", content, resolved.name)  # new file → all-additions diff for inline review
     n = len(content)
     _log.info("write_file name=%r chars=%d", resolved.name, n)
     return f"Wrote {n} character{'s' if n != 1 else ''} to {resolved.name}."
@@ -127,6 +150,7 @@ def edit_file(
         resolved.write_text(result.content, encoding="utf-8")
     except OSError as exc:
         return f"I couldn't save {resolved.name}: {exc}"
+    _emit_diff(text, result.content, resolved.name)  # inline diff of what changed
     _log.info("edit_file name=%r detail=%r", resolved.name, result.detail)
     return f"Edited {resolved.name} ({result.detail})."
 
@@ -175,6 +199,7 @@ def multi_edit(path: str, edits: list[dict[str, str]] | None, broker: AccessBrok
         resolved.write_text(working, encoding="utf-8")
     except OSError as exc:
         return f"I couldn't save {resolved.name}: {exc}"
+    _emit_diff(text, working, resolved.name)  # inline diff of the combined edits
     n = len(edits)
     _log.info("multi_edit name=%r edits=%d", resolved.name, n)
     return f"Applied {n} edit{'s' if n != 1 else ''} to {resolved.name}."

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import queue
 import threading
+import time
 from collections.abc import Callable
 from typing import Any
 
@@ -48,7 +49,7 @@ class _ScriptedLLM:
         self.route_error = route_error  # if True, complete() raises (router failure)
         self.completes = 0
 
-    def run_turn(self, user_text: str, execute, on_event=None) -> str:  # type: ignore[no-untyped-def]
+    def run_turn(self, user_text: str, execute, on_event=None, should_cancel=None) -> str:  # type: ignore[no-untyped-def]
         if "PLANNING" in user_text:
             self.plans += 1
             return self.plan_reply
@@ -89,6 +90,7 @@ class _TodoScriptedLLM:
         user_text: str,
         execute: ToolExecutor,
         on_event: Callable[[dict[str, Any]], None] | None = None,
+        should_cancel: Callable[[], bool] | None = None,
     ) -> str:
         if "PLANNING" in user_text:
             return self.plan_reply
@@ -266,6 +268,43 @@ def test_auto_route_failure_defaults_to_plan() -> None:
 def test_reply_without_active_turn_errors() -> None:
     d = _driver(_ScriptedLLM("1. x", "y"))
     assert list(d.reply_stream("yes"))[-1]["status"] == "error"
+
+
+def test_interrupt_when_idle_returns_false() -> None:
+    d = _driver(_ScriptedLLM("1. x", "y"))
+    assert d.interrupt() is False  # nothing running
+
+
+class _BlockingLLM:
+    """A fake whose act turn blocks until cancel is requested — a turn stuck 'running'."""
+
+    def __init__(self) -> None:
+        self.started = threading.Event()
+
+    def run_turn(self, user_text, execute, on_event=None, should_cancel=None) -> str:  # type: ignore[no-untyped-def]
+        self.started.set()
+        while not (should_cancel is not None and should_cancel()):
+            time.sleep(0.02)
+        return "stopped"
+
+    def complete(self, prompt: str, *, temperature: float = 0.0) -> str:
+        return "CONFIRM"  # auto-route straight to act (no plan gate to park at)
+
+
+def test_interrupt_stops_a_running_turn_and_frees_the_driver() -> None:
+    llm = _BlockingLLM()
+    d = _driver(llm, autonomy="auto")  # routes to confirm → straight into the blocking act turn
+    result: queue.Queue[list[dict[str, Any]]] = queue.Queue()
+    threading.Thread(target=lambda: result.put(list(d.start_stream("do it"))), daemon=True).start()
+    assert llm.started.wait(_JOIN_TIMEOUT_S)  # the turn is actively running
+    assert d.interrupt() is True  # a turn was active; cancel requested
+    events = result.get(timeout=_JOIN_TIMEOUT_S)
+    assert events[-1]["status"] == "done"  # the turn stopped and finalized
+    assert d.interrupt() is False  # the driver is idle again (freed)
+    # A fresh turn is not refused now that the interrupted one has stopped.
+    d2 = _ScriptedLLM("Hi!", "x")
+    d._llm = d2  # swap in a quick fake for the follow-up turn
+    assert list(d.start_stream("hi again"))[-1]["status"] == "done"
 
 
 def test_reclaimed_parked_turn_does_not_block_fresh_start() -> None:

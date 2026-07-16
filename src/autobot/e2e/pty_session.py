@@ -27,6 +27,15 @@ _log = get_logger("e2e")
 _KEYS = {"enter": "\r", "esc": "\x1b", "tab": "\t"}
 
 
+def _set_winsize(fd: int, *, cols: int, rows: int) -> None:
+    """Set the PTY window size so a full-screen TUI queries the real rows/cols (not 24x80)."""
+    import fcntl
+    import struct
+    import termios
+
+    fcntl.ioctl(fd, termios.TIOCSWINSZ, struct.pack("HHHH", rows, cols, 0, 0))
+
+
 def jack_argv(port: int) -> list[str]:
     """Argv to launch the real `jack` TUI: the console script next to this interpreter."""
     jack = Path(sys.executable).with_name("jack")
@@ -77,6 +86,7 @@ class PtySession:
         """Fork ``argv`` on a new PTY at ``cwd`` and start draining it."""
         self = cls(cols=cols, rows=rows)
         master, slave = os.openpty()
+        _set_winsize(slave, cols=cols, rows=rows)  # so a full-screen TUI fills the real size
         env = {**os.environ, "TERM": "xterm-256color", "COLUMNS": str(cols), "LINES": str(rows)}
         self._proc = subprocess.Popen(  # the real jack TUI
             argv,
