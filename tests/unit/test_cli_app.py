@@ -178,6 +178,34 @@ def test_growing_transcript_stays_scrollable_when_scrolled_up() -> None:
     assert japp._cursor_y() == japp._total_lines()
 
 
+def test_tab_descends_into_a_folder(tmp_path: Any) -> None:
+    (tmp_path / "src" / "cli").mkdir(parents=True)
+    (tmp_path / "src" / "app.py").write_text("")
+
+    async def feed(inp: Any, japp: JackApp) -> None:
+        inp.send_text("@s")  # completes to the only match, the "src" folder
+        await asyncio.sleep(0.1)
+        inp.send_text("\t")  # Tab accepts + descends → "@src/"
+        await asyncio.sleep(0.1)
+
+    japp = _run_with_feed(feed, cwd=str(tmp_path))
+    assert japp._input.text == "@src/"  # folder accepted with a trailing slash (still descending)
+
+
+def test_tab_selects_a_file(tmp_path: Any) -> None:
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "app.py").write_text("")
+
+    async def feed(inp: Any, japp: JackApp) -> None:
+        inp.send_text("@src/app")
+        await asyncio.sleep(0.1)
+        inp.send_text("\t")  # Tab selects the file (no trailing slash, no further descent)
+        await asyncio.sleep(0.1)
+
+    japp = _run_with_feed(feed, cwd=str(tmp_path))
+    assert japp._input.text == "@src/app.py"
+
+
 def test_expand_output_when_nothing_stored_is_false() -> None:
     async def noop(_t: str, _n: int) -> None:
         return None

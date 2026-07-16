@@ -457,6 +457,26 @@ class JackApp:
             else:
                 self._input.validate_and_handle()
 
+        @kb.add("tab")
+        def _tab_complete(event: Any) -> None:
+            # Tab drives @-file / /command completion: accept the highlighted match (or the
+            # first, if none is highlighted). Accepting a folder (its text ends with "/")
+            # re-opens completion on its contents, so Tab keeps descending; accepting a file
+            # just inserts it. Arrow keys move the selection within the menu (prompt_toolkit
+            # default). Nothing to complete → a no-op (the chat input has no other use for Tab).
+            buf = self._input
+            cs = buf.complete_state
+            if cs is None:
+                buf.start_completion(select_first=True)
+                return
+            if not cs.completions:
+                return
+            idx = cs.complete_index if cs.complete_index is not None else 0
+            completion = cs.completions[idx]
+            buf.apply_completion(completion)
+            if completion.text.endswith("/"):
+                buf.start_completion(select_first=False)  # descend into the folder
+
         @kb.add("c-j")
         def _newline(event: Any) -> None:
             self._input.insert_text("\n")  # Ctrl-J inserts a literal newline (multi-line input)
