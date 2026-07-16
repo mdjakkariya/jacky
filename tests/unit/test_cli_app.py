@@ -67,16 +67,19 @@ def test_escape_cancels_a_running_turn() -> None:
 
             async def feed() -> None:
                 inp.send_text("do it\r")  # start a slow turn
-                await asyncio.sleep(0.1)  # let the task actually start
-                inp.send_text("\x1b")  # ESC → cancel
-                await asyncio.sleep(0.1)
-                inp.send_text("\x04")  # Ctrl-D → exit
+                await asyncio.sleep(0.2)  # let the task actually start
+                inp.send_text("\x1b")  # ESC → interrupt
+                for _ in range(60):  # wait (≤3s) for ESC to actually cancel the turn
+                    if cancelled.is_set():
+                        break
+                    await asyncio.sleep(0.05)
+                inp.send_text("\x04")  # Ctrl-D → exit (only after ESC has cancelled)
 
             asyncio.get_running_loop().create_task(feed())
             await japp.run_async()
 
     asyncio.run(_drive())
-    assert cancelled.is_set()
+    assert cancelled.is_set()  # ESC — not shutdown teardown — cancelled the turn
 
 
 def test_appsurface_set_activity_updates_fragments() -> None:

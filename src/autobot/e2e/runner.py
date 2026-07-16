@@ -49,8 +49,8 @@ class Result:
 
 
 def _approve(session: Any, log: list[dict[str, Any]]) -> None:
-    # The confirm/plan prompt resolves on a single keypress (no Enter) — type y.
-    session.send_key("y")
+    # The gate reads its answer from the submitted input line — type "y" then Enter.
+    session.send("y")
     log.append({"action": "approve"})
 
 

@@ -120,25 +120,24 @@ def run(base_url: str, cwd: str) -> None:  # pragma: no cover - launches the int
     from autobot.cli.driver import TurnDriver, aiter_blocking
     from autobot.cli.theme import jack_theme
 
-    console = Console(theme=jack_theme())
-    console.print(render.render_welcome(gather_context(cwd)))
+    console = Console(theme=jack_theme())  # only for the post-exit session footer
+    context = gather_context(cwd)
     events = BackgroundEvents(base_url)
     holder: dict[str, JackApp] = {}
 
     async def run_turn(text: str, turn_no: int) -> None:
         japp = holder["app"]
-        surface = AppSurface(japp, console)
+        surface = AppSurface(japp)
         surface.commit(Text(f"{theme.GLYPH_PROMPT} {text}", style="prompt"))  # echo the ask
         parsed = commands.parse(text)
         if parsed is not None:
-            out, action = route_command(*parsed, base_url=base_url, cwd=cwd, width=console.width)
+            out, action = route_command(*parsed, base_url=base_url, cwd=cwd, width=japp._cols())
             if action == "exit":
+                japp._exiting = True
                 japp.app.exit()
                 return
             if action == "clear":
-                from prompt_toolkit.application import run_in_terminal
-
-                run_in_terminal(console.clear)
+                japp.clear_transcript()
                 return
             if out is not None:
                 surface.commit(out)
@@ -161,7 +160,13 @@ def run(base_url: str, cwd: str) -> None:  # pragma: no cover - launches the int
             turn_no=turn_no,
         )
 
-    japp = JackApp(cwd=cwd, run_turn=run_turn, commands=commands.COMMANDS, pickup_console=console)
+    japp = JackApp(
+        cwd=cwd,
+        run_turn=run_turn,
+        commands=commands.COMMANDS,
+        context=context,
+        intro=render.render_welcome(context),
+    )
     holder["app"] = japp
 
     def _waker() -> None:

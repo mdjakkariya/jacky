@@ -1,16 +1,19 @@
-"""The one long-lived prompt_toolkit Application for the coding-agent CLI.
+"""The one full-screen prompt_toolkit Application for the coding-agent CLI.
 
-A single render owner: the pinned input + a transient live region are painted by this one
-app loop; finished lines are committed to native scrollback via ``run_in_terminal`` (see
-``AppSurface``). A submitted line spawns the turn as an asyncio task, so the input stays
-pinned mid-turn and ``escape`` **detaches the client** from the turn — it cancels the local
-drive coroutine and re-pins the prompt. (It does *not* yet abort the turn server-side; the
-daemon has no cancel endpoint, so a tool already running there runs to completion. A
-daemon-side abort is a tracked follow-up.)
+Full-screen so the input + status bar are **docked at the bottom** by construction, with a
+scrollable transcript above and a transient live region (spinner / current tool / gate
+affordance) between them. Finished lines are rendered (rich → ANSI) into the transcript
+buffer — no ``run_in_terminal`` (which is CPR-dependent and renders the input mid-screen in
+inline mode). The turn runs as a cancellable asyncio task, so the input stays pinned mid-turn
+and ``escape`` detaches the client (cancels the local drive; the daemon has no abort endpoint
+yet — a tracked follow-up).
 
-Plan/permission gates are answered through the *same* pinned input (type ``y``/``n`` or, for
-a plan, type the change you want) — a future handshake between the turn task (awaiting the
+Plan/permission gates are answered through the *same* pinned input (type ``y``/``n`` or, for a
+plan, type the change you want) — a future handshake between the turn task (awaiting the
 answer) and the accept handler (resolving it). No nested Application, no dynamic key layers.
+
+Tradeoff vs. the old inline shell: the transcript scrolls *within* the app (PgUp/PgDn/mouse),
+not the terminal's native scrollback — the cost of a truly pinned bottom.
 """
 
 from __future__ import annotations
@@ -18,11 +21,13 @@ from __future__ import annotations
 import asyncio
 import time
 from collections.abc import Awaitable, Callable
+from io import StringIO
 from typing import TYPE_CHECKING, Any
 
-from prompt_toolkit.application import Application, run_in_terminal
+from prompt_toolkit.application import Application
 from prompt_toolkit.buffer import Buffer
 from prompt_toolkit.filters import Condition
+from prompt_toolkit.formatted_text import ANSI
 from prompt_toolkit.key_binding import KeyBindings, merge_key_bindings
 from prompt_toolkit.key_binding.defaults import load_key_bindings
 from prompt_toolkit.layout import (
@@ -40,6 +45,7 @@ from prompt_toolkit.styles import Style
 
 from autobot.cli import live_region, theme
 from autobot.cli.prompt import Answer, JackCompleter
+from autobot.cli.theme import jack_theme
 from autobot.logging_setup import get_logger
 
 if TYPE_CHECKING:
@@ -57,6 +63,8 @@ _STYLE = Style.from_dict(
         "dim": "#5b665f",
         "prompt": "#4fd6b8 bold",
         "amber": "#e6b25f",
+        "status": "#c7d0cb bg:#1a231f",
+        "status.key": "#4fd6b8 bg:#1a231f",
     }
 )
 
@@ -64,6 +72,22 @@ _CONTINUATION_PROMPT = (
     "A background task you started has finished (its result is included above). Continue the "
     "task using that result; if everything is now complete, briefly confirm what happened."
 )
+
+
+def render_ansi(renderable: Any, width: int) -> str:
+    """Render a rich renderable (or str) to an ANSI string at ``width`` (for the transcript)."""
+    buf = StringIO()
+    from rich.console import Console
+
+    Console(
+        file=buf,
+        force_terminal=True,
+        color_system="truecolor",
+        theme=jack_theme(),
+        width=max(20, width),
+        soft_wrap=False,
+    ).print(renderable)
+    return buf.getvalue()
 
 
 def parse_gate_answer(seg: Segment, line: str) -> Answer:
@@ -84,7 +108,7 @@ def parse_gate_answer(seg: Segment, line: str) -> Answer:
 
 
 class JackApp:
-    """Owns the Application: pinned input, live region, gates, and turn-task lifecycle."""
+    """A full-screen app: scrollable transcript, live region, docked input + status bar."""
 
     def __init__(
         self,
@@ -92,27 +116,32 @@ class JackApp:
         cwd: str,
         run_turn: _RunTurn,
         commands: dict[str, str],
+        context: dict[str, str] | None = None,
+        intro: Any | None = None,
         input: Any | None = None,
         output: Any | None = None,
-        pickup_console: Any | None = None,
     ) -> None:
         """Wire the app; ``run_turn(text, turn_no)`` is the injected turn coroutine.
 
-        ``input``/``output`` are forwarded to the ``Application`` (tests inject a pipe input
-        + ``DummyOutput``); ``pickup_console`` renders background-task pickup notices.
+        ``context`` populates the status bar (model/autonomy/branch); ``intro`` seeds the
+        transcript (the welcome banner). ``input``/``output`` are forwarded to the
+        ``Application`` (tests inject a pipe input + ``DummyOutput``).
         """
         self._cwd = cwd
         self._run_turn = run_turn
         self._commands = commands
-        self._pickup_console = pickup_console
+        self._context = context or {}
+        self._intro = intro
+        self._seeded = False
         self._turn_no = 0
         self._exiting = False
         self._task: asyncio.Task[None] | None = None
         self._ticker: asyncio.Task[None] | None = None
-        # Live-region state (all painted by _live_content on the app loop — single owner):
-        self._verb = live_region.verb_for(0)  # set per turn in _drive
-        self._activity: str | None = None  # None = no spinner region; str = sub-activity line
-        self._modal_hint: list[tuple[str, str]] | None = None  # gate affordance, when awaiting
+        self._transcript = ""  # accumulated ANSI text shown in the scrollable region
+        # Live-region state (painted by _live_content on the app loop — single owner):
+        self._verb = live_region.verb_for(0)
+        self._activity: str | None = None
+        self._modal_hint: list[tuple[str, str]] | None = None
         self._turn_started = 0.0
         self._frame_i = 0
         self._modal: asyncio.Future[Answer] | None = None
@@ -124,12 +153,16 @@ class JackApp:
             complete_while_typing=True,
             multiline=False,
         )
+        self._transcript_window = Window(
+            FormattedTextControl(self._transcript_text, focusable=False),
+            wrap_lines=True,
+        )
         self.app: Application[None] = Application(
             layout=self._build_layout(),
             key_bindings=merge_key_bindings([load_key_bindings(), self._bindings()]),
             style=_STYLE,
-            full_screen=False,  # inline: output flows into native scrollback
-            erase_when_done=False,
+            full_screen=True,  # docks input + status bar at the bottom, transcript above
+            mouse_support=True,
             input=input,
             output=output,
         )
@@ -141,8 +174,35 @@ class JackApp:
 
     @property
     def turn_no(self) -> int:
-        """How many turns have been started this session (for the exit footer)."""
+        """How many turns have been started this session."""
         return self._turn_no
+
+    def _cols(self) -> int:
+        try:
+            return self.app.output.get_size().columns or 100
+        except Exception:
+            return 100
+
+    def _transcript_text(self) -> ANSI:
+        """The transcript region's content (seed the intro lazily once width is known)."""
+        if not self._seeded and self._intro is not None:
+            self._transcript = render_ansi(self._intro, self._cols())
+            self._seeded = True
+        return ANSI(self._transcript)
+
+    def _status_text(self) -> list[tuple[str, str]]:
+        """The docked status bar: autonomy mode + key hints + context."""
+        autonomy = self._context.get("autonomy", "auto")
+        model = self._context.get("model", "")
+        branch = self._context.get("branch", "")
+        right = "  ·  ".join(p for p in (model, branch) if p)
+        frags: list[tuple[str, str]] = [
+            ("class:status.key", f" {autonomy} mode "),
+            ("class:status", " · esc to interrupt · /help · ^C quit "),
+        ]
+        if right:
+            frags.append(("class:status", f"· {right} "))
+        return frags
 
     def _live_content(self) -> list[tuple[str, str]]:
         """Compose the live-region fragments from current state (called each paint)."""
@@ -152,12 +212,11 @@ class JackApp:
             return []
         elapsed = time.monotonic() - self._turn_started
         frame = theme.SPINNER_FRAMES[self._frame_i % len(theme.SPINNER_FRAMES)]
-        width = self.app.output.get_size().columns or 80
-        return live_region.live_fragments(self._verb, frame, elapsed, self._activity, width)
+        return live_region.live_fragments(self._verb, frame, elapsed, self._activity, self._cols())
 
     def _build_layout(self) -> Layout:
         live = ConditionalContainer(
-            Window(FormattedTextControl(self._live_content)),
+            Window(FormattedTextControl(self._live_content), dont_extend_height=True),
             filter=Condition(lambda: self._modal_hint is not None or self._activity is not None),
         )
         glyph = Window(
@@ -167,9 +226,10 @@ class JackApp:
             height=1,
         )
         entry = Window(BufferControl(buffer=self._input), height=1)
-        row = VSplit([glyph, entry])
+        input_row = VSplit([glyph, entry])
+        status = Window(FormattedTextControl(self._status_text), height=1, style="class:status")
         body = FloatContainer(
-            HSplit([live, row]),
+            HSplit([self._transcript_window, live, input_row, status]),
             floats=[Float(xcursor=True, ycursor=True, content=CompletionsMenu(max_height=8))],
         )
         return Layout(body, focused_element=entry)
@@ -177,20 +237,30 @@ class JackApp:
     def _bindings(self) -> KeyBindings:
         kb = KeyBindings()
 
+        @kb.add("c-c")
         @kb.add("c-d")
-        def _eof(event: Any) -> None:
+        def _quit(event: Any) -> None:
             if self._modal is not None and not self._modal.done():
-                return  # a gate is pending — a stray Ctrl-D must not quit
-            if not self._input.text:
-                self._exiting = True  # stop any queued auto-resume from spawning at shutdown
-                if self._task is not None and not self._task.done():
-                    self._task.cancel()
-                event.app.exit()
+                return  # a gate is pending — a stray quit key must not exit
+            self._exiting = True  # blocks any queued auto-resume from spawning at shutdown
+            if self._task is not None and not self._task.done():
+                self._task.cancel()  # cancel the in-flight turn, then quit
+            event.app.exit()
 
         @kb.add("escape", eager=True)
         def _interrupt(event: Any) -> None:
             if self._task is not None and not self._task.done():
                 self._task.cancel()
+
+        @kb.add("pageup")
+        def _pgup(event: Any) -> None:
+            self._transcript_window.vertical_scroll = max(
+                0, self._transcript_window.vertical_scroll - 10
+            )
+
+        @kb.add("pagedown")
+        def _pgdn(event: Any) -> None:
+            self._transcript_window.vertical_scroll += 10
 
         return kb
 
@@ -260,6 +330,21 @@ class JackApp:
             self._modal_seg = None
             self.app.invalidate()
 
+    def append_transcript(self, renderable: Any) -> None:
+        """Render ``renderable`` (rich → ANSI) into the transcript and tail to the bottom."""
+        try:
+            self._transcript += render_ansi(renderable, self._cols())
+        except Exception:  # a bad renderable must never crash the turn
+            _log.exception("rendering a transcript line failed; dropping it")
+            return
+        self._transcript_window.vertical_scroll = 10**9  # clamped to bottom at render (tail)
+        self.app.invalidate()
+
+    def clear_transcript(self) -> None:
+        """Empty the transcript region (the ``/clear`` command)."""
+        self._transcript = ""
+        self.app.invalidate()
+
     def set_activity(self, text: str) -> None:
         """Set the live region's sub-activity line (the app owns the spinner + verb + timer)."""
         self._activity = text
@@ -299,43 +384,25 @@ class JackApp:
 
         events = self._pending_pickups[:]
         self._pending_pickups.clear()
-        self._render_pickup(render.render_task_pickup(events))
+        self.append_transcript(render.render_task_pickup(events))
         self._task = asyncio.create_task(self._drive(_CONTINUATION_PROMPT, self._turn_no))
         self._turn_no += 1
 
-    def _render_pickup(self, renderable: Any) -> None:
-        console = self._pickup_console
-        if console is None:  # tests: no console wired
-            return
-        run_in_terminal(lambda: console.print(renderable))  # pragma: no cover - live terminal
-
     async def run_async(self) -> None:
-        """Run the app to completion (EOF exits)."""
+        """Run the app to completion (Ctrl-C / Ctrl-D at idle exits)."""
         await self.app.run_async()
 
 
 class AppSurface:
-    """The real ``Surface``: commits to scrollback and paints the app's live region."""
+    """The real ``Surface``: appends to the transcript and paints the app's live region."""
 
-    def __init__(self, japp: JackApp, console: Any) -> None:
-        """Bind to a ``JackApp`` and a rich ``Console`` for committed lines."""
+    def __init__(self, japp: JackApp, console: Any = None) -> None:
+        """Bind to a ``JackApp``. ``console`` is unused (kept for call-site compatibility)."""
         self._japp = japp
-        self._console = console
 
     def commit(self, renderable: Any) -> None:
-        """Commit a finished renderable above the app via ``run_in_terminal``.
-
-        The print runs in a scheduled ``run_in_terminal`` task, so it is guarded here (a bad
-        renderable must never surface as an unretrieved-task error or crash the turn).
-        """
-
-        def _print() -> None:  # pragma: no cover - needs a live terminal
-            try:
-                self._console.print(renderable)
-            except Exception:
-                _log.exception("committing a renderable failed; dropping it")
-
-        run_in_terminal(_print)  # pragma: no cover - needs a live terminal
+        """Commit a finished renderable into the scrollable transcript."""
+        self._japp.append_transcript(renderable)
 
     def set_activity(self, text: str) -> None:
         """Set the live region's current-activity line."""
