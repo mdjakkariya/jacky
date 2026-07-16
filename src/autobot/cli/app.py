@@ -42,6 +42,7 @@ from prompt_toolkit.layout import (
     Window,
 )
 from prompt_toolkit.layout.controls import BufferControl, FormattedTextControl
+from prompt_toolkit.layout.dimension import Dimension
 from prompt_toolkit.layout.menus import CompletionsMenu
 from prompt_toolkit.styles import Style
 from prompt_toolkit.widgets import Frame
@@ -59,6 +60,8 @@ _log = get_logger("cli")
 
 _RunTurn = Callable[[str, int], Awaitable[None]]
 _TICK_INTERVAL_S = 0.12  # live-region repaint cadence (spinner frame + elapsed seconds)
+_DOUBLE_ESC_S = 0.6  # a second Esc within this window clears the input
+MAX_INPUT_LINES = 10  # the input box grows up to this many lines, then scrolls within
 
 _STYLE = Style.from_dict(
     {
@@ -149,6 +152,7 @@ class JackApp:
         self._turn_no = 0
         self._exiting = False
         self._last_turn_text = ""  # restored into the input when a turn is esc-interrupted
+        self._last_esc = 0.0  # monotonic time of the last Esc (for double-Esc = clear input)
         self._task: asyncio.Task[None] | None = None
         self._ticker: asyncio.Task[None] | None = None
         self._transcript = ""  # accumulated ANSI text shown in the scrollable region
@@ -167,7 +171,7 @@ class JackApp:
             completer=JackCompleter(commands, cwd),
             complete_while_typing=True,
             history=history or InMemoryHistory(),  # ↑/↓ recall previous submissions
-            multiline=False,
+            multiline=True,  # box grows for multi-line paste/typing (Enter submits; ^J newline)
         )
         self._transcript_window = Window(
             FormattedTextControl(self._transcript_text, focusable=False),
@@ -178,7 +182,7 @@ class JackApp:
             key_bindings=merge_key_bindings([load_key_bindings(), self._bindings()]),
             style=_STYLE,
             full_screen=True,  # docks input + status bar at the bottom, transcript above
-            mouse_support=True,
+            mouse_support=False,  # let the terminal own selection/copy (native Cmd/Ctrl-C)
             input=input,
             output=output,
         )
@@ -243,7 +247,12 @@ class JackApp:
             dont_extend_width=True,
             height=1,
         )
-        entry = Window(BufferControl(buffer=self._input), height=1)
+        # The input grows with content (1 → MAX_INPUT_LINES lines), then scrolls within.
+        entry = Window(
+            BufferControl(buffer=self._input),
+            height=Dimension(min=1, max=MAX_INPUT_LINES),
+            wrap_lines=True,
+        )
         # A bordered input box (a distinct widget) so the input reads as separate from the
         # transcript above and the status bar below — not one clumped block.
         input_box = Frame(VSplit([Window(width=1), glyph, entry]), style="class:inputframe")
@@ -269,6 +278,12 @@ class JackApp:
 
         @kb.add("escape", eager=True)
         def _interrupt(event: Any) -> None:
+            now = time.monotonic()
+            double = (now - self._last_esc) < _DOUBLE_ESC_S
+            self._last_esc = now
+            if double:  # a quick second Esc clears whatever is in the input
+                self._input.reset()
+                return
             if self._task is not None and not self._task.done():
                 self._task.cancel()
                 if self._on_interrupt is not None:
@@ -280,6 +295,20 @@ class JackApp:
                     # and resent (only if the user hasn't already started typing something new).
                     self._input.text = self._last_turn_text
                     self._input.cursor_position = len(self._last_turn_text)
+
+        @kb.add("enter")
+        def _enter(event: Any) -> None:
+            # Enter submits (the buffer is multiline, so this overrides the default newline).
+            # With the completion menu open and an item highlighted, Enter accepts it instead.
+            cs = self._input.complete_state
+            if cs is not None and cs.current_completion is not None:
+                self._input.apply_completion(cs.current_completion)
+            else:
+                self._input.validate_and_handle()
+
+        @kb.add("c-j")
+        def _newline(event: Any) -> None:
+            self._input.insert_text("\n")  # Ctrl-J inserts a literal newline (multi-line input)
 
         @kb.add("pageup")
         def _pgup(event: Any) -> None:

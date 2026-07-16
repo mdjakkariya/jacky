@@ -8,9 +8,10 @@ from autobot.cli import paste
 
 
 def test_should_collapse_by_lines_or_chars() -> None:
-    assert paste.should_collapse("a\nb\nc\nd")  # 4 lines
-    assert paste.should_collapse("x" * 400)  # long single line
-    assert not paste.should_collapse("a\nb\nc")  # 3 short lines
+    assert paste.should_collapse("\n".join("x" for _ in range(11)))  # 11 lines
+    assert paste.should_collapse("x" * 1000)  # very long single line
+    assert not paste.should_collapse("a\nb\nc\nd")  # 4 short lines fit in the growing box
+    assert not paste.should_collapse("x" * 300)  # short single line
     assert not paste.should_collapse("short")
 
 

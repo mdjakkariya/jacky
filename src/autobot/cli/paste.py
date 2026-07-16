@@ -15,8 +15,8 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-PASTE_LINE_THRESHOLD = 4  # collapse a paste with at least this many lines,
-PASTE_CHAR_THRESHOLD = 400  # …or at least this many characters.
+PASTE_LINE_THRESHOLD = 11  # collapse a paste with at least this many lines (bigger than the
+PASTE_CHAR_THRESHOLD = 1000  # input box's growth cap), …or at least this many characters.
 
 # The placeholder token shown in the input for a stashed paste. Its exact shape (with the
 # ``·`` separator) makes it safe to match/strip and unlikely to be typed by hand.

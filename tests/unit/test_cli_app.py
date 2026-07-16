@@ -44,19 +44,31 @@ def _bracketed(text: str) -> str:
 
 
 def test_bracketed_paste_large_text_collapses_and_expands() -> None:
-    big = "\n".join(f"line {i}" for i in range(10))
+    big = "\n".join(f"line {i}" for i in range(14))  # > MAX_INPUT_LINES → collapses
 
     async def feed(inp: Any, japp: JackApp) -> None:
         inp.send_text(_bracketed(big))
         await asyncio.sleep(0.15)
 
     japp = _run_with_feed(feed)
-    assert "[Pasted #1 · 10 lines]" in japp._input.text  # collapsed in the input
+    assert "[Pasted #1 · 14 lines]" in japp._input.text  # collapsed in the input
     assert japp.expand_pastes(japp._input.text) == big  # expands back to the real content on send
 
 
+def test_bracketed_paste_small_multiline_shows_inline() -> None:
+    small = "line a\nline b\nline c"  # fits in the growing box → not collapsed
+
+    async def feed(inp: Any, japp: JackApp) -> None:
+        inp.send_text(_bracketed(small))
+        await asyncio.sleep(0.15)
+
+    japp = _run_with_feed(feed)
+    assert japp._input.text == small  # shown inline (box grows), no placeholder
+    assert "[Pasted" not in japp._input.text
+
+
 def test_backspace_removes_the_whole_pasted_block() -> None:
-    big = "\n".join(f"row {i}" for i in range(8))
+    big = "\n".join(f"row {i}" for i in range(14))
 
     async def feed(inp: Any, japp: JackApp) -> None:
         inp.send_text(_bracketed(big))
