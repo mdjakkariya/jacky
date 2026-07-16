@@ -203,7 +203,22 @@ def test_tab_selects_a_file(tmp_path: Any) -> None:
         await asyncio.sleep(0.1)
 
     japp = _run_with_feed(feed, cwd=str(tmp_path))
-    assert japp._input.text == "@src/app.py"
+    assert japp._input.text == "@src/app.py "  # file selected + a trailing space ends the mention
+
+
+def test_enter_includes_a_folder_without_descending(tmp_path: Any) -> None:
+    (tmp_path / "src" / "cli").mkdir(parents=True)
+
+    async def feed(inp: Any, japp: JackApp) -> None:
+        inp.send_text("@s")
+        await asyncio.sleep(0.1)
+        inp.send_text("\x1b[B")  # ↓ highlights the first match (the "src" folder)
+        await asyncio.sleep(0.1)
+        inp.send_text("\r")  # Enter INCLUDES the folder as-is (does not descend into it)
+        await asyncio.sleep(0.1)
+
+    japp = _run_with_feed(feed, cwd=str(tmp_path))
+    assert japp._input.text == "@src/ "  # folder included (trailing space), not descended
 
 
 def test_expand_output_when_nothing_stored_is_false() -> None:

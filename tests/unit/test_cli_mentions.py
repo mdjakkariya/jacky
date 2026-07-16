@@ -47,6 +47,13 @@ def test_binary_file_gets_a_note_not_bytes(tmp_path: Path) -> None:
     assert "binary file" in out
 
 
+def test_directory_mention_lists_its_contents(tmp_path: Path) -> None:
+    (tmp_path / "sub").mkdir()
+    (tmp_path / "a.txt").write_text("x", encoding="utf-8")
+    out = mentions.extract_file(tmp_path)
+    assert "directory" in out and "sub/" in out and "a.txt" in out  # folders first, with a slash
+
+
 def test_image_gets_a_vision_note(tmp_path: Path) -> None:
     (tmp_path / "logo.png").write_bytes(b"\x89PNG\r\n")
     out = mentions.extract_file(tmp_path / "logo.png")

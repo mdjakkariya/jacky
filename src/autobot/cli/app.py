@@ -450,10 +450,13 @@ class JackApp:
         @kb.add("enter")
         def _enter(event: Any) -> None:
             # Enter submits (the buffer is multiline, so this overrides the default newline).
-            # With the completion menu open and an item highlighted, Enter accepts it instead.
+            # With a completion highlighted, Enter INCLUDES it as-is — a folder is attached
+            # whole (Tab is what descends into it) — and ends the mention with a space so the
+            # menu doesn't reopen. A second Enter (nothing highlighted) then submits.
             cs = self._input.complete_state
             if cs is not None and cs.current_completion is not None:
                 self._input.apply_completion(cs.current_completion)
+                self._input.insert_text(" ")
             else:
                 self._input.validate_and_handle()
 
@@ -475,7 +478,9 @@ class JackApp:
             completion = cs.completions[idx]
             buf.apply_completion(completion)
             if completion.text.endswith("/"):
-                buf.start_completion(select_first=False)  # descend into the folder
+                buf.start_completion(select_first=False)  # folder → descend into its contents
+            else:
+                buf.insert_text(" ")  # file / command → select it and end the mention
 
         @kb.add("c-j")
         def _newline(event: Any) -> None:
