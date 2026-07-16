@@ -157,7 +157,7 @@ def run(base_url: str, cwd: str) -> None:  # pragma: no cover - launches the int
         resolved, attached = expand_mentions(japp.expand_pastes(text), cwd)
         if attached:
             surface.commit(
-                Text(f"{theme.GLYPH_TOOL}  attached: {', '.join(attached)}", style="tool")
+                Text(f"{theme.NEST_INDENT}attached: {', '.join(attached)}", style="tool")
             )
         driver = TurnDriver(
             surface, cwd=cwd, snapshot=gitdiff.snapshot, diff_since=gitdiff.diff_since

@@ -26,7 +26,7 @@ def render_plain(seg: Segment) -> str:
     if seg.kind == "token":
         return seg.text
     if seg.kind == "tool":
-        return f"{theme.GLYPH_TOOL}  {seg.text}"
+        return f"{theme.NEST_INDENT}{seg.text}"
     return seg.text  # pending / done
 
 
@@ -67,10 +67,14 @@ def render_reply(text: str) -> RenderableType:
 
 
 def render_tool(seg: Segment) -> RenderableType:
-    """A dim nested tool-activity line: ``⎿ <label>`` (single space, aligned with other gutters)."""
+    """A dim, indented nested tool-activity line (a friendly verb, no connector glyph).
+
+    Reads as ``  Read foo.py`` / ``  Searched "…"`` sitting under the reply — cleaner than the
+    old ``⎿`` connector, which read as a cryptic corner rather than meaningful activity.
+    """
     from rich.text import Text
 
-    return Text(f"{theme.GLYPH_TOOL} {seg.text}", style="tool")
+    return Text(f"{theme.NEST_INDENT}{seg.text}", style="tool")
 
 
 def render_task_pickup(events: list[dict[str, Any]]) -> RenderableType:

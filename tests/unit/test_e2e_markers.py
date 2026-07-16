@@ -13,7 +13,7 @@ from autobot.e2e import markers
 
 def test_reply_and_tool_and_idle() -> None:
     assert markers.reply_present("⏺ Done.")
-    assert markers.tool_line("  ⎿  Read foo.py")
+    assert markers.tool_line("  Read foo.py")  # clean dim verb, no connector glyph
     assert markers.idle_prompt("⏺ hi\n❯ ")
     assert markers.idle_prompt("⏺ hi\n❯")
     assert markers.idle_prompt("⏺ hi\n│ ❯                    │")  # framed empty input = idle

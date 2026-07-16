@@ -20,9 +20,13 @@ def reply_present(screen: str) -> bool:
     return theme.GLYPH_ASSISTANT in screen
 
 
+# Leading verbs of the nested activity lines (rendered as dim, indented verbs — no glyph).
+_ACTIVITY_VERBS = ("Read ", "Listed ", "Searched ", "Edited ", "Ran ", "Mapped ", "Spawned ")
+
+
 def tool_line(screen: str) -> bool:
-    """A nested tool-activity line (``⎿``) is on screen."""
-    return theme.GLYPH_TOOL in screen
+    """A nested tool-activity line (a dim, indented verb like ``Read …`` or ``$ …``) is present."""
+    return "^O to view" in screen or any(verb in screen for verb in _ACTIVITY_VERBS)
 
 
 def plan_card(screen: str) -> bool:

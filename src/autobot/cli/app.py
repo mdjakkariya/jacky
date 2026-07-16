@@ -179,10 +179,11 @@ class _CommandBlock(_Block):
         n = len(self.output)
         if not self.expanded:
             head = "" if self.gated else f"{self.label} · "  # auto mode leads with the command
-            summary = f"{n} lines · ^O to view" if n else "done"
-            return Text(f"{theme.GLYPH_TOOL} {head}{summary}", style="tool")
+            plural = "line" if n == 1 else "lines"
+            summary = f"{n} {plural} · ^O to view" if n else "done"
+            return Text(f"{theme.NEST_INDENT}{head}{summary}", style="tool")
         shown = self.output[-MAX_EXPAND_LINES:]
-        header = f"{theme.GLYPH_TOOL} output of {self.label}"
+        header = f"{theme.NEST_INDENT}output of {self.label}"
         if n > len(shown):
             header += f"  (last {len(shown)} of {n} lines)"
         body = Text("\n".join(shown) or "(no output)", style="tool")

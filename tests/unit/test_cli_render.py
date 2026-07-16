@@ -73,7 +73,7 @@ def test_render_footer_has_context_and_gates_on_width() -> None:
     assert len(narrow) <= 20
 
 
-def test_render_tool_shows_connector_and_label() -> None:
+def test_render_tool_is_an_indented_verb_without_a_connector() -> None:
     pytest.importorskip("rich")
     from rich.console import Console
 
@@ -83,7 +83,8 @@ def test_render_tool_shows_connector_and_label() -> None:
     console = Console(record=True, width=80)
     console.print(render_tool(Segment("tool", "Read a.py")))
     out = console.export_text()
-    assert "Read a.py" in out and "⎿" in out
+    assert "Read a.py" in out and "⎿" not in out  # clean dim verb, no connector glyph
+    assert out.startswith("  ")  # indented under the reply
 
 
 def test_render_sessions_table_has_rows() -> None:

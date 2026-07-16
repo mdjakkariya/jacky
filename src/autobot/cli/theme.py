@@ -14,7 +14,7 @@ if TYPE_CHECKING:
 # Gutter grammar + chrome glyphs.
 GLYPH_ASSISTANT = "⏺"  # ⏺  assistant turn
 GLYPH_USER = "▌"  # ▌  user turn block
-GLYPH_TOOL = "⎿"  # ⎿  nested tool result
+NEST_INDENT = "  "  # nested activity lines sit under the reply as a dim, indented verb (no glyph)
 GLYPH_PROMPT = "❯"  # noqa: RUF001, RUF003  # ❯  prompt / select pointer
 RULE_CHAR = "─"  # ─  border-as-rule
 
