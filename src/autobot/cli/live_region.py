@@ -53,7 +53,7 @@ def live_fragments(
     (resolved by the app's ``Style`` map), not rich styles.
     """
     frags: list[tuple[str, str]] = [
-        ("", "  "),  # left margin — aligns the spinner with the transcript + input (col 2)
+        ("", " "),  # left margin — aligns the spinner with the transcript's 1-col margin
         ("class:spinner", frame_char + " "),
         ("class:verb", f"{verb}…"),
     ]
@@ -61,6 +61,6 @@ def live_fragments(
     if tail:
         frags.append(("class:dim", f"  ·  {tail}"))
     if activity:
-        frags.append(("", "\n  "))  # newline + left margin
+        frags.append(("", "\n "))  # newline + left margin
         frags.append(("class:dim", activity))
     return frags

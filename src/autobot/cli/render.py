@@ -67,10 +67,10 @@ def render_reply(text: str) -> RenderableType:
 
 
 def render_tool(seg: Segment) -> RenderableType:
-    """A dim nested tool-activity line: ``⎿ <label>``."""
+    """A dim nested tool-activity line: ``⎿ <label>`` (single space, aligned with other gutters)."""
     from rich.text import Text
 
-    return Text(f"{theme.GLYPH_TOOL}  {seg.text}", style="tool")
+    return Text(f"{theme.GLYPH_TOOL} {seg.text}", style="tool")
 
 
 def render_todo(status: str, step: str) -> RenderableType:

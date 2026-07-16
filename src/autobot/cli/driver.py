@@ -74,7 +74,7 @@ class TurnDriver:
         except asyncio.CancelledError:
             from rich.text import Text
 
-            self._surface.commit(Text(f"{theme.GLYPH_TOOL}  interrupted", style="tool"))
+            self._surface.commit(Text(f"{theme.GLYPH_TOOL} interrupted", style="tool"))
             _log.info("turn interrupted turn_no=%d", turn_no)
             raise
         finally:

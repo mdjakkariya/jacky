@@ -79,8 +79,8 @@ _CONTINUATION_PROMPT = (
 def render_ansi(renderable: Any, width: int) -> str:
     """Render a rich renderable (or str) to an ANSI string for the transcript.
 
-    A left/right margin is applied to every committed block so transcript content lines up
-    with the input box's prompt glyph (col 2) and never sits flush against the terminal edge.
+    A single-column left/right margin keeps transcript content off the terminal edge without
+    over-indenting; every committed block gets the same margin so the gutter glyphs line up.
     """
     buf = StringIO()
     from rich.console import Console
@@ -93,7 +93,7 @@ def render_ansi(renderable: Any, width: int) -> str:
         theme=jack_theme(),
         width=max(20, width),
         soft_wrap=False,
-    ).print(Padding(renderable, (0, 1, 0, 2)))  # (top, right, bottom, left)
+    ).print(Padding(renderable, (0, 1, 0, 1)))  # (top, right, bottom, left) — a 1-col margin
     return buf.getvalue()
 
 
@@ -210,10 +210,10 @@ class JackApp:
         model = self._context.get("model", "")
         branch = self._context.get("branch", "")
         rest = "  ·  ".join(p for p in (model, branch) if p)
-        frags: list[tuple[str, str]] = [("class:status.key", f"  {autonomy} mode")]
+        frags: list[tuple[str, str]] = [("class:status.key", f" {autonomy} mode")]
         if rest:
             frags.append(("class:status", f"  ·  {rest}"))
-        frags.append(("class:status", "  "))
+        frags.append(("class:status", " "))
         return frags
 
     def _live_content(self) -> list[tuple[str, str]]:
