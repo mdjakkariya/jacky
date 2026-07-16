@@ -70,6 +70,7 @@ class TurnDriver:
                     continue
                 if seg.kind == "pending":
                     self._gated = True  # the gate shows the command; don't echo it again on start
+                    self._spacer_if_activity()  # blank line above the "Run this command?" prompt
                     ans = await self._surface.ask(seg)
                     events = answer_stream(ans.value, ans.text)
                     continue
@@ -88,18 +89,21 @@ class TurnDriver:
         finally:
             self._surface.clear_activity()
 
-    def _commit_reply(self, renderable: Any) -> None:
-        """Commit an assistant reply (⏺ / plan / error), with a blank line above it.
+    def _spacer_if_activity(self) -> None:
+        """Commit a blank line iff tool activity was shown since the last block boundary.
 
-        The blank separates the reply from any tool-activity lines committed above it. It's only
-        added when activity was shown this reply-block — otherwise the turn's existing
-        user-message spacer already sits above the reply and a second blank would double up.
+        Separates a reply/plan/gate prompt from the ⎿ tool lines above it. Guarded so a
+        tool-less turn (whose user-message spacer already sits above) doesn't double the gap.
         """
         from rich.text import Text
 
         if self._activity_shown:
             self._surface.commit(Text(""))
             self._activity_shown = False
+
+    def _commit_reply(self, renderable: Any) -> None:
+        """Commit an assistant reply (⏺ / plan / error), with a blank line above it."""
+        self._spacer_if_activity()
         self._surface.commit(renderable)
 
     async def _consume_until_phase(

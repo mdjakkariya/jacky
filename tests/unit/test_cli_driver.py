@@ -76,6 +76,22 @@ def test_blank_line_precedes_reply_after_activity() -> None:
     assert _render_text(s.commits[1]).strip() == ""  # the spacer is genuinely blank
 
 
+def test_blank_line_precedes_pending_gate_after_activity() -> None:
+    s = FakeSurface(answers=[Answer("no")])
+    _run(
+        [
+            {"type": "tool", "event": "start", "name": "read_file", "label": "Read a.py"},
+            {"status": "pending", "prompt": "Run this command?"},
+        ],
+        {("no", ""): [{"status": "done", "reply": "ok"}]},
+        s,
+    )
+    # ⎿ tool line, then a blank spacer, before the gate is asked — so "Run this command?"
+    # isn't packed against the tool activity above it.
+    assert _render_text(s.commits[1]).strip() == ""
+    assert s.asked and s.asked[0].kind == "pending"
+
+
 def test_no_extra_blank_before_reply_when_no_activity() -> None:
     s = FakeSurface()
     _run([{"status": "done", "reply": "ok"}], None, s)
