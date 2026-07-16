@@ -27,6 +27,7 @@ STYLES: dict[str, str] = {
     "assistant": "#4fd6b8 bold",
     "user": "#c7d0cb on #1a231f",
     "tool": "#5b665f",
+    "safe": "#e0e6e2",  # near-white: a command that ran freely (allowed, no gate)
     "prompt": "#4fd6b8 bold",
     "rule": "#5b665f",
     "dim": "#5b665f",

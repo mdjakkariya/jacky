@@ -78,6 +78,26 @@ def test_driver_commits_blocks_without_manual_blanks() -> None:
     assert not any(_render_text(r).strip() == "" for r in s.commits)  # no blank-line blocks
 
 
+def test_rejected_command_shows_red_and_no_card() -> None:
+    s = FakeSurface(answers=[Answer("no")])
+    _run(
+        [
+            {"type": "tool", "event": "start", "name": "run_command", "label": "$ rm -rf /"},
+            {"status": "pending", "prompt": "Run this command?\n\n  $ rm -rf /"},
+        ],
+        {
+            ("no", ""): [
+                {"type": "tool", "event": "end", "name": "run_command", "label": "$ rm -rf /"},
+                {"status": "done", "reply": "Cancelled."},
+            ]
+        },
+        s,
+    )
+    flat = [_render_text(r) for r in s.commits]
+    assert any("✗" in t and "rm -rf /" in t for t in flat)  # rejected command shown (red) with ✗
+    assert s.commands == []  # no result card for a command that never ran
+
+
 def test_done_commits_diff_when_present() -> None:
     s = FakeSurface()
     _run([{"status": "done", "reply": "ok"}], None, s, diff="diff --git a/x b/x\n+new")

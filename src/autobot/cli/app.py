@@ -178,10 +178,17 @@ class _CommandBlock(_Block):
 
         n = len(self.output)
         if not self.expanded:
-            head = "" if self.gated else f"{self.label} · "  # auto mode leads with the command
             plural = "line" if n == 1 else "lines"
             summary = f"{n} {plural} · ^O to view" if n else "done"
-            return Text(f"{theme.NEST_INDENT}{head}{summary}", style="tool")
+            card = Text(theme.NEST_INDENT)
+            if not self.gated:
+                # Auto mode ran the command WITHOUT a gate — show it in white ("safe"/allowed)
+                # so it's clearly legible in the dim activity stream, not lost as gray. Gated
+                # commands were shown (amber) by the gate; a rejected one is shown red there.
+                card.append(self.label, style="safe")
+                card.append(" · ", style="tool")
+            card.append(summary, style="tool")
+            return card
         shown = self.output[-MAX_EXPAND_LINES:]
         header = f"{theme.NEST_INDENT}output of {self.label}"
         if n > len(shown):

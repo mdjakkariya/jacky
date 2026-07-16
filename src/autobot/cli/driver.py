@@ -21,6 +21,7 @@ from autobot.logging_setup import get_logger
 _log = get_logger("cli")
 
 _AnswerStream = Callable[[str, str], "AsyncIterator[dict[str, Any]]"]
+_APPROVE = frozenset({"yes", "y", "approve", "once", "session"})  # gate answers that proceed
 
 
 class TurnDriver:
@@ -71,6 +72,13 @@ class TurnDriver:
                 if seg.kind == "pending":
                     self._gated = True  # the gate shows the command; don't echo it again on start
                     ans = await self._surface.ask(seg)
+                    if ans.value not in _APPROVE and self._cmd_label is not None:
+                        # A rejected command never runs → show it in red so the denial is
+                        # unmissable, and drop its (empty) result card by forgetting the label.
+                        from rich.text import Text
+
+                        self._surface.commit(Text(f"{theme.NEST_INDENT}✗ {self._cmd_label}", "red"))
+                        self._cmd_label, self._cmd_lines, self._gated = None, [], False
                     events = answer_stream(ans.value, ans.text)
                     continue
                 self._surface.commit(render.render_rich(seg))  # done / error

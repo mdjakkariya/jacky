@@ -20,6 +20,7 @@ from __future__ import annotations
 import json
 from collections.abc import Callable
 from dataclasses import replace
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from autobot.core.streaming import active_session_id, output_sink
@@ -49,19 +50,44 @@ def _call_key(call: ToolCall) -> str:
     return call.name + "\0" + json.dumps(call.arguments, sort_keys=True, default=str)
 
 
-def tool_label(call: ToolCall) -> str:
-    """A short human label for a tool call, for the ⎿ activity line."""
+def _short_path(raw: str, cwd: str) -> str:
+    """Shorten an absolute path for display: relative to ``cwd`` when inside it, else ~-abbreviated.
+
+    A file in the working directory shows as its name (``package.json``), a nested one as its
+    cwd-relative path (``src/app.py``), and one outside cwd as ``~/…`` (or unchanged if neither
+    applies). Paths the model already gave relatively are left as-is. Pure — no filesystem I/O.
+    """
+    if not raw or not cwd:
+        return raw
+    try:
+        path = Path(raw)
+        if not path.is_absolute():
+            return raw  # already relative — the model handed us a short path
+        try:
+            return str(path.relative_to(cwd))  # inside cwd → "package.json" / "src/app.py"
+        except ValueError:
+            try:
+                return "~/" + str(path.relative_to(Path.home()))  # under home → ~/…
+            except ValueError:
+                return raw  # elsewhere → leave the full path
+    except (OSError, ValueError):
+        return raw
+
+
+def tool_label(call: ToolCall, cwd: str = "") -> str:
+    """A short human label for a tool call, for the activity line (paths shortened vs ``cwd``)."""
     args = call.arguments
     if call.name == "read_file":
-        return f"Read {args.get('path', '')}".strip()
+        return f"Read {_short_path(str(args.get('path', '')), cwd)}".strip()
     if call.name == "grep":
         return f'Searched "{args.get("pattern", "")}"'
     if call.name in ("glob", "list_dir"):
-        return f"Listed {args.get('pattern', args.get('path', ''))}".strip()
+        target = args.get("pattern") or _short_path(str(args.get("path", "")), cwd)
+        return f"Listed {target}".strip()
     if call.name == "run_command":
         return f"$ {str(args.get('command', ''))[:80]}"
     if call.name in ("write_file", "edit_file", "multi_edit"):
-        return f"Edited {args.get('path', '')}".strip()
+        return f"Edited {_short_path(str(args.get('path', '')), cwd)}".strip()
     if call.name == "spawn_agent":
         return f"Spawned subagent: {str(args.get('label') or args.get('task', ''))[:70]}".strip()
     # Fallback for any other tool: humanize the raw name so casing stays consistent with the
@@ -195,7 +221,7 @@ class AgentHarness:
                             "type": "tool",
                             "event": "start",
                             "name": call.name,
-                            "label": tool_label(call),
+                            "label": tool_label(call, self._cwd),
                         }
                     )
 
@@ -216,7 +242,7 @@ class AgentHarness:
                             "type": "tool",
                             "event": "end",
                             "name": call.name,
-                            "label": tool_label(call),
+                            "label": tool_label(call, self._cwd),
                             "ok": ok,
                         }
                     )

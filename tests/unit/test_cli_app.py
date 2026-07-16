@@ -221,6 +221,16 @@ def test_enter_includes_a_folder_without_descending(tmp_path: Any) -> None:
     assert japp._input.text == "@src/ "  # folder included (trailing space), not descended
 
 
+def test_auto_command_card_colors_the_command_white_for_safety() -> None:
+    from autobot.cli.app import _CommandBlock
+
+    safe = "224;230;226"  # the near-white "safe" (#e0e6e2) truecolor code
+    auto = _CommandBlock("$ rm -rf build", ["x"], gated=False).render(80)
+    assert "$ rm -rf build" in auto and safe in auto  # auto-run command is white, not dim gray
+    gated = _CommandBlock("$ rm -rf build", ["x"], gated=True).render(80)
+    assert "$ rm -rf build" not in gated  # gated card is result-only (gate / red line shows it)
+
+
 def test_transcript_separates_blocks_with_a_blank_line() -> None:
     import re
 

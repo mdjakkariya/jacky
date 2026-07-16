@@ -50,6 +50,21 @@ def test_tool_label_maps_common_calls() -> None:
     assert tool_label(ToolCall(name="repo_map", arguments={})) == "Repo map"
 
 
+def test_tool_label_shortens_paths_relative_to_cwd() -> None:
+    cwd = "/work/proj"
+    # A file in cwd → just its name; nested → a cwd-relative path.
+    assert tool_label(ToolCall("read_file", {"path": "/work/proj/package.json"}), cwd) == (
+        "Read package.json"
+    )
+    assert tool_label(ToolCall("read_file", {"path": "/work/proj/src/app.py"}), cwd) == (
+        "Read src/app.py"
+    )
+    # Already-relative paths are left as-is; a path outside cwd keeps enough to locate it.
+    assert tool_label(ToolCall("read_file", {"path": "api.py"}), cwd) == "Read api.py"
+    outside = tool_label(ToolCall("read_file", {"path": "/etc/hosts"}), cwd)
+    assert "hosts" in outside and outside != "Read hosts"  # not collapsed to a bare name
+
+
 def test_run_turn_emits_tool_start_and_end(tmp_path: Any) -> None:
     from pathlib import Path
 
