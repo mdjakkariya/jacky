@@ -31,8 +31,8 @@ def plan_card(screen: str) -> bool:
 
 
 def permission_card(screen: str) -> bool:
-    """The command-permission gate affordance (``approve? [y]es · [n]o``, no plan edit)."""
-    return "approve?" in screen and "or type a change" not in screen
+    """The command-permission gate affordance (``Approve? [y]es · [n]o``, no plan edit)."""
+    return "approve?" in screen.lower() and "or type a change" not in screen
 
 
 def any_gate(screen: str) -> bool:

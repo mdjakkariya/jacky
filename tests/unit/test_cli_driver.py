@@ -122,6 +122,28 @@ def test_run_command_buffers_output_and_commits_a_card() -> None:
     assert s.commands == [("$ npm test", ["PASS a", "PASS b"])]  # buffered, carded on end
 
 
+def test_gated_command_is_not_echoed_again_before_its_card() -> None:
+    # In confirm mode the permission gate already shows the command, so the run_command start
+    # must NOT echo it again — only the result card is committed (command shown exactly once).
+    s = FakeSurface(answers=[Answer("yes")])
+    _run(
+        [{"status": "pending", "prompt": "Run this command?\n\n  $ npm test"}],
+        {
+            ("yes", ""): [
+                {"type": "tool", "event": "start", "name": "run_command", "label": "$ npm test"},
+                {"type": "output", "text": "PASS"},
+                {"type": "tool", "event": "end", "name": "run_command", "label": "$ npm test"},
+                {"status": "done", "reply": "ok"},
+            ]
+        },
+        s,
+    )
+    # The command "$ npm test" is committed by the gate (via ask), not echoed again on start.
+    flat = [_render_text(r) for r in s.commits]
+    assert sum("$ npm test" in t for t in flat) <= 1  # not duplicated as a ⎿ echo
+    assert s.commands == [("$ npm test", ["PASS"])]  # buffered + carded
+
+
 def test_plan_update_deltas_committed_once_per_transition() -> None:
     s = FakeSurface()
     _run(

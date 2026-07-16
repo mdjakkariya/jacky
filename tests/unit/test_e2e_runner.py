@@ -58,7 +58,7 @@ def test_unattended_auto_approves_gate_then_completes(tmp_path: Path) -> None:
     screens = [
         "❯ ",  # pre-send idle
         "⠹ Working…  ·  esc to interrupt · 1s",  # turn_started (spinner)
-        "Run this command?\n\n  $ x\napprove? [y]es · [n]o",  # awaiting_reply — a LIVE gate
+        "Run this command?\n\n  $ x\nApprove? [y]es · [n]o",  # awaiting_reply — a LIVE gate
         "⎿  Edited hello.py\n⠋ Working…  ·  esc to interrupt · 2s",  # act running
         "⏺ done\n❯ ",  # settled idle
     ]
@@ -97,7 +97,7 @@ def test_unattended_does_not_reapprove_a_stale_gate_card(tmp_path: Path) -> None
     screens = [
         "❯ ",
         "⠹ Working…  ·  esc to interrupt · 1s",  # turn_started
-        "Run this command?\n\n  $ x\napprove? [y]es · [n]o",  # live gate → approve once
+        "Run this command?\n\n  $ x\nApprove? [y]es · [n]o",  # live gate → approve once
         "⏺ done\n❯ ",  # answered; the gate affordance cleared, settled idle
     ]
     sess = _FakeSession(screens)

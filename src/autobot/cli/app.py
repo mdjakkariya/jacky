@@ -171,6 +171,7 @@ class JackApp:
         self._pending_pickups: list[dict[str, Any]] = []
         self._pastes = PasteStore()  # large pastes stashed behind [Pasted #N] placeholders
         self._outputs: list[tuple[str, list[str]]] = []  # finished commands' (label, output)
+        self._last_expanded = -1  # index last expanded via ^O (so repeats don't re-append)
         self._input = Buffer(
             accept_handler=self._on_accept,
             completer=JackCompleter(commands, cwd),
@@ -435,7 +436,7 @@ class JackApp:
         fut: asyncio.Future[Answer] = loop.create_future()
         self._modal = fut
         self._modal_seg = seg
-        hint = "[y]es · [n]o · or type a change" if seg.kind == "plan" else "approve? [y]es · [n]o"
+        hint = "[y]es · [n]o · or type a change" if seg.kind == "plan" else "Approve? [y]es · [n]o"
         self._modal_hint = [("class:amber", f" {hint}")]
         self.app.invalidate()
         try:
@@ -481,6 +482,9 @@ class JackApp:
         i = (index - 1) if index is not None else (len(self._outputs) - 1)
         if not 0 <= i < len(self._outputs):
             return False
+        if index is None and i == self._last_expanded:
+            return False  # ^O again on the same (most-recent) command → no-op, don't re-append
+        self._last_expanded = i
         from rich.console import Group
         from rich.text import Text
 
@@ -553,16 +557,16 @@ class AppSurface:
         self._japp.append_transcript(renderable)
 
     def commit_command(self, label: str, output: list[str]) -> None:
-        """Stash a finished command's output and commit a compact card (expand with ^O)."""
+        """Stash a finished command's output and commit a compact result card (expand with ^O).
+
+        The command itself is shown once already (by the permission gate, or the ⎿ echo on
+        start in auto mode), so the card carries only the result summary — not the command.
+        """
         from rich.text import Text
 
         self._japp.store_output(label, output)
         n = len(output)
-        text = (
-            f"{theme.GLYPH_TOOL} {label} · {n} lines · ^O to view"
-            if n
-            else (f"{theme.GLYPH_TOOL} {label} · done")
-        )
+        text = f"{theme.GLYPH_TOOL} {n} lines · ^O to view" if n else f"{theme.GLYPH_TOOL} done"
         self.commit(Text(text, style="tool"))
 
     def set_activity(self, text: str) -> None:

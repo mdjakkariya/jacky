@@ -136,6 +136,18 @@ def test_command_output_carded_then_expanded() -> None:
     assert "PASS a" in japp._transcript and "PASS c" in japp._transcript
 
 
+def test_ctrl_o_expand_is_idempotent_for_the_same_command() -> None:
+    async def noop(_t: str, _n: int) -> None:
+        return None
+
+    japp = JackApp(cwd="/x", run_turn=noop, commands={}, input=DummyInput(), output=DummyOutput())
+    AppSurface(japp).commit_command("$ ls", ["a", "b"])
+    assert japp.expand_output() is True  # first ^O expands
+    assert japp.expand_output() is False  # ^O again on the same command → no-op (no re-append)
+    AppSurface(japp).commit_command("$ pwd", ["/x"])  # a new command
+    assert japp.expand_output() is True  # ^O now expands the new one
+
+
 def test_expand_output_when_nothing_stored_is_false() -> None:
     async def noop(_t: str, _n: int) -> None:
         return None

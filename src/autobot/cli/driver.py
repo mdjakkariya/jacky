@@ -41,6 +41,7 @@ class TurnDriver:
         self._diff_since = diff_since
         self._cmd_label: str | None = None  # the running command's label ($ …) while buffering
         self._cmd_lines: list[str] = []  # its captured output (shown as a live preview)
+        self._gated = False  # a permission gate just showed the command → don't echo it again
 
     async def run_turn(
         self,
@@ -52,6 +53,7 @@ class TurnDriver:
         """Drive a turn: commit tool/output lines, resolve gates, commit reply + diff."""
         snap = self._snapshot(self._cwd)
         self._cmd_label, self._cmd_lines = None, []  # no command buffering carried across turns
+        self._gated = False
         _log.info("turn start turn_no=%d", turn_no)
         try:
             while True:
@@ -65,6 +67,7 @@ class TurnDriver:
                     events = answer_stream(ans.value, ans.text)
                     continue
                 if seg.kind == "pending":
+                    self._gated = True  # the gate shows the command; don't echo it again on start
                     ans = await self._surface.ask(seg)
                     events = answer_stream(ans.value, ans.text)
                     continue
@@ -124,6 +127,9 @@ class TurnDriver:
             if name == "run_command":
                 self._cmd_label = seg.text  # "$ <command>"
                 self._cmd_lines = []
+                if not self._gated:  # auto mode: no gate showed it, so echo the command once
+                    self._surface.commit(render.render_tool(seg))
+                self._gated = False
                 self._surface.set_activity(self._cmd_label)
             else:
                 self._surface.commit(render.render_tool(seg))

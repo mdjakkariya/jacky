@@ -32,14 +32,14 @@ def test_working_and_turn_started() -> None:
     # A turn has visibly started on a spinner, a tool line, or a gate — but not at idle.
     assert markers.turn_started(spinner)
     assert markers.turn_started("  ⎿  Read foo.py")
-    assert markers.turn_started("approve? [y]es · [n]o")
+    assert markers.turn_started("Approve? [y]es · [n]o")
     assert not markers.turn_started(status_bar_idle)
 
 
 def test_awaiting_reply_is_the_live_gate_prompt() -> None:
     # The gate affordance is transient (shown only while awaiting), so its presence is the
     # live-gate signal — no stale-card case to disambiguate.
-    assert markers.awaiting_reply("Run this command?\n\n  $ mkdir x\napprove? [y]es · [n]o")
+    assert markers.awaiting_reply("Run this command?\n\n  $ mkdir x\nApprove? [y]es · [n]o")
     assert markers.awaiting_reply("Approve this plan?\n[y]es · [n]o · or type a change")
     assert not markers.awaiting_reply("⏺ Done.\n❯ ")
     assert not markers.awaiting_reply("⠹ Working…  ·  esc to interrupt · 2s")
@@ -48,7 +48,7 @@ def test_awaiting_reply_is_the_live_gate_prompt() -> None:
 
 def test_plan_vs_permission_gate() -> None:
     plan = "Approve this plan?\n[y]es · [n]o · or type a change"
-    perm = "Run this command?\n\n  $ mkdir x\napprove? [y]es · [n]o"
+    perm = "Run this command?\n\n  $ mkdir x\nApprove? [y]es · [n]o"
     assert markers.plan_card(plan) and not markers.permission_card(plan)
     assert markers.permission_card(perm) and not markers.plan_card(perm)
     assert markers.any_gate(plan) and markers.any_gate(perm)
