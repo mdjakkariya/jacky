@@ -24,7 +24,7 @@ class FakeSurface:
         """Record a committed renderable."""
         self.commits.append(renderable)
 
-    def commit_command(self, label: str, output: list[str]) -> None:
+    def commit_command(self, label: str, output: list[str], *, gated: bool = False) -> None:
         """Record a finished command's compact card + its full output."""
         self.commands.append((label, list(output)))
 

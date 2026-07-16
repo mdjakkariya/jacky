@@ -62,6 +62,28 @@ def test_tool_line_and_reply_each_committed_once() -> None:
     assert sum("Done — 1 file." in t for t in flat) == 1
 
 
+def test_blank_line_precedes_reply_after_activity() -> None:
+    s = FakeSurface()
+    _run(
+        [
+            {"type": "tool", "event": "start", "name": "read_file", "label": "Read a.py"},
+            {"status": "done", "reply": "ok"},
+        ],
+        None,
+        s,
+    )
+    assert len(s.commits) == 3  # ⎿ tool line, a blank spacer, then the ⏺ reply
+    assert _render_text(s.commits[1]).strip() == ""  # the spacer is genuinely blank
+
+
+def test_no_extra_blank_before_reply_when_no_activity() -> None:
+    s = FakeSurface()
+    _run([{"status": "done", "reply": "ok"}], None, s)
+    # No tool activity ran, so the shell's user-message spacer already sits above the reply —
+    # the driver must NOT add a second blank (which would double the gap).
+    assert len(s.commits) == 1
+
+
 def test_done_commits_diff_when_present() -> None:
     s = FakeSurface()
     _run([{"status": "done", "reply": "ok"}], None, s, diff="diff --git a/x b/x\n+new")

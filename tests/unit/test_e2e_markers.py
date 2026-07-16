@@ -16,9 +16,11 @@ def test_reply_and_tool_and_idle() -> None:
     assert markers.tool_line("  ⎿  Read foo.py")
     assert markers.idle_prompt("⏺ hi\n❯ ")
     assert markers.idle_prompt("⏺ hi\n❯")
+    assert markers.idle_prompt("⏺ hi\n│ ❯                    │")  # framed empty input = idle
     assert not markers.idle_prompt("⏺ working…")
     # A prompt holding un-submitted input is NOT idle — the turn hasn't run yet.
     assert not markers.idle_prompt("⏺ hi\n❯ do a thing")
+    assert not markers.idle_prompt("⏺ hi\n│ ❯ do a thing        │")  # framed, with text
 
 
 def test_working_and_turn_started() -> None:

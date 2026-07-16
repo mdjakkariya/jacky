@@ -127,7 +127,7 @@ def test_command_output_carded_then_expanded() -> None:
 
     japp = JackApp(cwd="/x", run_turn=noop, commands={}, input=DummyInput(), output=DummyOutput())
     surface = AppSurface(japp)
-    surface.commit_command("$ npm test", ["PASS a", "PASS b", "PASS c"])
+    surface.commit_command("$ npm test", ["PASS a", "PASS b", "PASS c"], gated=False)
     assert japp._outputs == [("$ npm test", ["PASS a", "PASS b", "PASS c"])]
     assert "3 lines" in japp._transcript and "^O to view" in japp._transcript  # compact card
     assert "PASS a" not in japp._transcript  # full output NOT in the card
@@ -141,11 +141,40 @@ def test_ctrl_o_expand_is_idempotent_for_the_same_command() -> None:
         return None
 
     japp = JackApp(cwd="/x", run_turn=noop, commands={}, input=DummyInput(), output=DummyOutput())
-    AppSurface(japp).commit_command("$ ls", ["a", "b"])
+    AppSurface(japp).commit_command("$ ls", ["a", "b"], gated=False)
     assert japp.expand_output() is True  # first ^O expands
     assert japp.expand_output() is False  # ^O again on the same command → no-op (no re-append)
-    AppSurface(japp).commit_command("$ pwd", ["/x"])  # a new command
+    AppSurface(japp).commit_command("$ pwd", ["/x"], gated=False)  # a new command
     assert japp.expand_output() is True  # ^O now expands the new one
+
+
+def test_growing_transcript_stays_scrollable_when_scrolled_up() -> None:
+    # The regression: while a turn streams output, the chat grows; if the user scrolled up to
+    # read, new output must NOT yank them back to the bottom. Following resumes only when they
+    # scroll back down (or submit a new turn).
+    from rich.text import Text
+
+    async def noop(_t: str, _n: int) -> None:
+        return None
+
+    japp = JackApp(cwd="/x", run_turn=noop, commands={}, input=DummyInput(), output=DummyOutput())
+    for i in range(20):
+        japp.append_transcript(Text(f"line {i}"))
+    assert japp._follow is True  # fresh output tails to the bottom
+    assert japp._cursor_y() == japp._total_lines()
+
+    japp._scroll_by(-5)  # user scrolls up to read
+    assert japp._follow is False
+    parked = japp._cursor_y()
+
+    for i in range(20, 40):  # lots more output arrives while parked
+        japp.append_transcript(Text(f"line {i}"))
+    assert japp._follow is False  # still detached — not yanked to the bottom
+    assert japp._cursor_y() == parked  # the view stayed exactly where the user left it
+
+    japp._scroll_by(10_000)  # scrolling back past the bottom resumes tailing
+    assert japp._follow is True
+    assert japp._cursor_y() == japp._total_lines()
 
 
 def test_expand_output_when_nothing_stored_is_false() -> None:
@@ -263,7 +292,7 @@ def test_escape_refills_the_input_with_the_interrupted_text() -> None:
     assert asyncio.run(_drive()) == "fix the parser bug"  # refilled for editing/resending
 
 
-def test_begin_modal_resolves_from_typed_line() -> None:
+def test_begin_modal_resolves_from_single_keypress() -> None:
     got: list[Answer] = []
 
     async def run_turn(text: str, turn_no: int) -> None:
@@ -279,10 +308,10 @@ def test_begin_modal_resolves_from_typed_line() -> None:
             )
 
             async def feed() -> None:
-                inp.send_text("do it\r")  # spawn a turn that opens a modal
-                await asyncio.sleep(0.1)
-                inp.send_text("y\r")  # answer the gate
-                await asyncio.sleep(0.1)
+                inp.send_text("do it\r")  # spawn a turn that opens a gate
+                await asyncio.sleep(0.15)
+                inp.send_text("y")  # single keypress resolves it — NO Enter needed
+                await asyncio.sleep(0.15)
                 inp.send_text("\x04")  # exit
 
             asyncio.get_running_loop().create_task(feed())

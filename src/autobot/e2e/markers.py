@@ -83,7 +83,10 @@ def idle_prompt(screen: str) -> bool:
     """
     if working(screen) or any_gate(screen):
         return False
-    return any(ln.strip() == theme.GLYPH_PROMPT for ln in screen.splitlines())
+    # The input is drawn inside a Frame, so the prompt line carries border cells around the
+    # glyph. Strip those (the box-drawing bar) before comparing, so an empty framed prompt
+    # still reads as idle while a prompt holding un-submitted text does not.
+    return any(ln.replace("│", "").strip() == theme.GLYPH_PROMPT for ln in screen.splitlines())
 
 
 BY_NAME: dict[str, Marker] = {

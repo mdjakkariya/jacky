@@ -22,12 +22,14 @@ class Surface(Protocol):
         """Commit a finished renderable to the terminal's scrollback (permanent)."""
         ...
 
-    def commit_command(self, label: str, output: list[str]) -> None:
+    def commit_command(self, label: str, output: list[str], *, gated: bool) -> None:
         """Commit a compact card for a finished command and stash its full output.
 
         ``label`` is the command line (e.g. ``$ npm test``); ``output`` is its captured lines.
         The card stays compact (line count + an expand hint) so long output never bloats the
-        transcript; the full output is available on demand (``Ctrl-O`` / ``/output``).
+        transcript; the full output is available on demand (``Ctrl-O`` / ``/output``). When
+        ``gated`` is True a permission gate already showed the command, so the card omits it
+        (no duplication); when False (auto mode) the card includes the command.
         """
         ...
 

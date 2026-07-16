@@ -161,13 +161,14 @@ class JackApp:
         self._follow = True  # auto-tail the transcript to the bottom (PgUp detaches)
         self._scroll_pos = 0  # manual scroll offset when not following
         # Live-region state (painted by _live_content on the app loop — single owner):
-        self._verb = live_region.verb_for(0)
+        # _activity is the current-action label shown by the spinner (None hides the region).
         self._activity: str | None = None
         self._modal_hint: list[tuple[str, str]] | None = None
         self._turn_started = 0.0
         self._frame_i = 0
         self._modal: asyncio.Future[Answer] | None = None
         self._modal_seg: Segment | None = None
+        self._modal_edit = False  # True while typing a plan refinement (after pressing 'e')
         self._pending_pickups: list[dict[str, Any]] = []
         self._pastes = PasteStore()  # large pastes stashed behind [Pasted #N] placeholders
         self._outputs: list[tuple[str, list[str]]] = []  # finished commands' (label, output)
@@ -195,7 +196,7 @@ class JackApp:
             key_bindings=merge_key_bindings([load_key_bindings(), self._bindings()]),
             style=_STYLE,
             full_screen=True,  # docks input + status bar at the bottom, transcript above
-            mouse_support=False,  # let the terminal own selection/copy (native Cmd/Ctrl-C)
+            mouse_support=False,  # mouse OFF → native select/copy works; scroll is PgUp/PgDn
             input=input,
             output=output,
         )
@@ -224,9 +225,23 @@ class JackApp:
         """The transcript cursor line: the last line (tail) while following, else the scroll pos.
 
         The Window scrolls to keep this line visible, so pointing it at the last line tails the
-        transcript to the bottom; PgUp parks it earlier to scroll back.
+        transcript to the bottom; PgUp/wheel park it earlier to scroll back.
         """
         return self._total_lines() if self._follow else min(self._scroll_pos, self._total_lines())
+
+    def _scroll_by(self, delta: int) -> None:
+        """Move the transcript view by ``delta`` lines (negative = up); driven by PgUp/PgDn.
+
+        Scrolling to/past the bottom resumes auto-tailing; scrolling up detaches from the tail
+        so a growing transcript stays put where the user parked it.
+        """
+        target = self._cursor_y() + delta
+        if target >= self._total_lines():
+            self._follow = True
+        else:
+            self._follow = False
+            self._scroll_pos = max(0, target)
+        self.app.invalidate()
 
     def _transcript_text(self) -> ANSI:
         """The transcript region's content (seed the intro lazily once width is known)."""
@@ -259,7 +274,7 @@ class JackApp:
             return []
         elapsed = time.monotonic() - self._turn_started
         frame = theme.SPINNER_FRAMES[self._frame_i % len(theme.SPINNER_FRAMES)]
-        return live_region.live_fragments(self._verb, frame, elapsed, self._activity, self._cols())
+        return live_region.live_fragments(self._activity, frame, elapsed, self._cols())
 
     def _build_layout(self) -> Layout:
         live = ConditionalContainer(
@@ -339,21 +354,45 @@ class JackApp:
         def _expand_output(event: Any) -> None:
             self.expand_output()  # Ctrl-O expands the most recent command's full output
 
+        # Single-keypress gate answers (no Enter). Active only while a gate awaits and we're
+        # not typing a refinement: 'y'/'n' resolve immediately; 'e' (plan only) starts editing;
+        # any other key is swallowed so the input can't collect stray text during the gate.
+        gate_key = Condition(lambda: self._modal is not None and not self._modal.done())
+        gate_choose = gate_key & Condition(lambda: not self._modal_edit)
+        plan_edit = gate_choose & Condition(
+            lambda: self._modal_seg is not None and self._modal_seg.kind == "plan"
+        )
+
+        @kb.add("y", filter=gate_choose)
+        @kb.add("Y", filter=gate_choose)
+        def _gate_yes(event: Any) -> None:
+            self._resolve_gate("y")
+
+        @kb.add("n", filter=gate_choose)
+        @kb.add("N", filter=gate_choose)
+        def _gate_no(event: Any) -> None:
+            self._resolve_gate("n")
+
+        @kb.add("e", filter=plan_edit)
+        @kb.add("E", filter=plan_edit)
+        def _gate_edit(event: Any) -> None:
+            self._modal_edit = True  # switch to typing the refinement (resolved on Enter)
+            self._modal_hint = [("class:amber", " type your change, then Enter · esc to cancel")]
+            self.app.invalidate()
+
+        @kb.add("<any>", filter=gate_choose)
+        def _gate_swallow(event: Any) -> None:
+            pass  # ignore stray keys while a y/n/e gate waits (specific y/n/e/exit keys win)
+
         @kb.add("pageup")
         def _pgup(event: Any) -> None:
             info = self._transcript_window.render_info
-            page = max(1, (info.window_height - 1) if info is not None else 10)
-            current = self._cursor_y()  # where the cursor (view anchor) currently is
-            self._follow = False
-            self._scroll_pos = max(0, current - page)
+            self._scroll_by(-max(1, (info.window_height - 1) if info is not None else 10))
 
         @kb.add("pagedown")
         def _pgdn(event: Any) -> None:
             info = self._transcript_window.render_info
-            page = max(1, (info.window_height - 1) if info is not None else 10)
-            self._scroll_pos = self._cursor_y() + page
-            if self._scroll_pos >= self._total_lines():  # reached the bottom → resume tailing
-                self._follow = True
+            self._scroll_by(max(1, (info.window_height - 1) if info is not None else 10))
 
         @kb.add(Keys.BracketedPaste)
         def _paste(event: Any) -> None:
@@ -379,26 +418,33 @@ class JackApp:
 
         return kb
 
+    def _resolve_gate(self, key: str) -> None:
+        """Resolve a pending gate from a single keypress (y/n)."""
+        if self._modal is not None and not self._modal.done():
+            seg = self._modal_seg
+            self._modal.set_result(parse_gate_answer(seg, key) if seg is not None else Answer("no"))
+
     def _on_accept(self, buff: Buffer) -> bool:
         # Return False so prompt_toolkit appends the (non-empty) text to history and then
         # resets the buffer — appending happens AFTER this handler, so we must NOT reset here
         # (resetting first would record empty history entries and break ↑/↓ recall).
-        # A pending gate consumes the next submitted line as its answer.
+        # A pending gate is answered by single keys (y/n/e); Enter only submits a refinement
+        # that was started with 'e' (edit mode). A stray Enter during a gate is ignored.
         if self._modal is not None and not self._modal.done():
-            seg = self._modal_seg
-            answer = parse_gate_answer(seg, buff.text) if seg is not None else Answer("no")
-            self._modal.set_result(answer)
+            if self._modal_edit:
+                text = buff.text.strip()
+                self._modal.set_result(Answer("refine", text) if text else Answer("reject"))
             return False
         text = buff.text.strip()
         if not text or self.busy:
             return False
         self._last_turn_text = text  # so esc can refill it for editing/resending
+        self._follow = True  # jump to the bottom for a freshly-submitted turn (see the reply)
         self._task = asyncio.create_task(self._drive(text, self._turn_no))
         self._turn_no += 1
         return False
 
     async def _drive(self, text: str, turn_no: int) -> None:
-        self._verb = live_region.verb_for(turn_no)
         self._turn_started = time.monotonic()
         self._frame_i = 0
         self._ticker = asyncio.create_task(self._tick())
@@ -436,7 +482,8 @@ class JackApp:
         fut: asyncio.Future[Answer] = loop.create_future()
         self._modal = fut
         self._modal_seg = seg
-        hint = "[y]es · [n]o · or type a change" if seg.kind == "plan" else "Approve? [y]es · [n]o"
+        self._modal_edit = False
+        hint = "[y]es · [n]o · [e]dit" if seg.kind == "plan" else "Approve? [y]es · [n]o"
         self._modal_hint = [("class:amber", f" {hint}")]
         self.app.invalidate()
         try:
@@ -445,16 +492,19 @@ class JackApp:
             self._modal_hint = None
             self._modal = None
             self._modal_seg = None
+            self._modal_edit = False
             self.app.invalidate()
 
     def append_transcript(self, renderable: Any) -> None:
-        """Render ``renderable`` (rich → ANSI) into the transcript and tail to the bottom."""
+        """Render ``renderable`` (rich → ANSI) into the transcript; tail only if following."""
         try:
             self._transcript += render_ansi(renderable, self._cols())
         except Exception:  # a bad renderable must never crash the turn
             _log.exception("rendering a transcript line failed; dropping it")
             return
-        self._follow = True  # new output re-tails to the bottom (see _transcript_scroll)
+        # Do NOT force-follow here: if the user scrolled up to read, new output must not yank
+        # them back to the bottom. Following is (re)enabled only when they submit a turn or
+        # scroll to the bottom — so a growing chat stays scrollable.
         self.app.invalidate()
 
     def clear_transcript(self) -> None:
@@ -536,6 +586,7 @@ class JackApp:
 
         events = self._pending_pickups[:]
         self._pending_pickups.clear()
+        self._follow = True  # jump to the bottom so the auto-resume notice + turn are visible
         self.append_transcript(render.render_task_pickup(events))
         self._task = asyncio.create_task(self._drive(_CONTINUATION_PROMPT, self._turn_no))
         self._turn_no += 1
@@ -556,18 +607,19 @@ class AppSurface:
         """Commit a finished renderable into the scrollable transcript."""
         self._japp.append_transcript(renderable)
 
-    def commit_command(self, label: str, output: list[str]) -> None:
+    def commit_command(self, label: str, output: list[str], *, gated: bool) -> None:
         """Stash a finished command's output and commit a compact result card (expand with ^O).
 
-        The command itself is shown once already (by the permission gate, or the ⎿ echo on
-        start in auto mode), so the card carries only the result summary — not the command.
+        In confirm mode (``gated``) the permission gate already showed the command, so the card
+        is result-only; in auto mode the card leads with the command so it's shown once.
         """
         from rich.text import Text
 
         self._japp.store_output(label, output)
         n = len(output)
-        text = f"{theme.GLYPH_TOOL} {n} lines · ^O to view" if n else f"{theme.GLYPH_TOOL} done"
-        self.commit(Text(text, style="tool"))
+        head = "" if gated else f"{label} · "  # auto mode: include the command in the card
+        summary = f"{n} lines · ^O to view" if n else "done"
+        self.commit(Text(f"{theme.GLYPH_TOOL} {head}{summary}", style="tool"))
 
     def set_activity(self, text: str) -> None:
         """Set the live region's current-activity line."""

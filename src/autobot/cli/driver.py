@@ -13,7 +13,7 @@ import asyncio
 from collections.abc import AsyncIterator, Callable, Iterable, Iterator
 from typing import Any
 
-from autobot.cli import render, theme
+from autobot.cli import live_region, render, theme
 from autobot.cli.classify import classify
 from autobot.cli.surface import Surface
 from autobot.logging_setup import get_logger
@@ -42,6 +42,7 @@ class TurnDriver:
         self._cmd_label: str | None = None  # the running command's label ($ …) while buffering
         self._cmd_lines: list[str] = []  # its captured output (shown as a live preview)
         self._gated = False  # a permission gate just showed the command → don't echo it again
+        self._activity_shown = False  # tool/plan lines committed since the last reply block
 
     async def run_turn(
         self,
@@ -54,6 +55,7 @@ class TurnDriver:
         snap = self._snapshot(self._cwd)
         self._cmd_label, self._cmd_lines = None, []  # no command buffering carried across turns
         self._gated = False
+        self._activity_shown = False
         _log.info("turn start turn_no=%d", turn_no)
         try:
             while True:
@@ -62,7 +64,7 @@ class TurnDriver:
                     return
                 seg = classify(phase)
                 if seg.kind == "plan":
-                    self._surface.commit(render.render_reply(seg.text))  # the plan is content
+                    self._commit_reply(render.render_reply(seg.text))  # the plan is content
                     ans = await self._surface.ask(seg)
                     events = answer_stream(ans.value, ans.text)
                     continue
@@ -71,7 +73,7 @@ class TurnDriver:
                     ans = await self._surface.ask(seg)
                     events = answer_stream(ans.value, ans.text)
                     continue
-                self._surface.commit(render.render_rich(seg))  # done / error
+                self._commit_reply(render.render_rich(seg))  # done / error
                 if phase.get("status") == "done":
                     diff = self._diff_since(self._cwd, snap)
                     if diff:
@@ -86,6 +88,20 @@ class TurnDriver:
         finally:
             self._surface.clear_activity()
 
+    def _commit_reply(self, renderable: Any) -> None:
+        """Commit an assistant reply (⏺ / plan / error), with a blank line above it.
+
+        The blank separates the reply from any tool-activity lines committed above it. It's only
+        added when activity was shown this reply-block — otherwise the turn's existing
+        user-message spacer already sits above the reply and a second blank would double up.
+        """
+        from rich.text import Text
+
+        if self._activity_shown:
+            self._surface.commit(Text(""))
+            self._activity_shown = False
+        self._surface.commit(renderable)
+
     async def _consume_until_phase(
         self, events: AsyncIterator[dict[str, Any]]
     ) -> dict[str, Any] | None:
@@ -97,12 +113,13 @@ class TurnDriver:
         one (e.g. a dropped connection).
         """
         prev: dict[str, str] = {}
-        self._surface.set_activity("")  # spinner only until a tool starts
+        self._surface.set_activity(live_region.DEFAULT_ACTION)  # "Working" until a tool starts
         async for evt in events:
             status = evt.get("status")
             if status in ("plan", "pending", "done", "error"):
                 return evt
             if evt.get("type") == "plan_update":
+                self._surface.set_activity("Planning")  # the model is managing its plan
                 self._commit_plan_updates(evt, prev)
                 continue
             try:
@@ -116,34 +133,35 @@ class TurnDriver:
         """Handle a tool start/end or command-output event.
 
         A ``run_command`` is special-cased so its (possibly huge) output never bloats the
-        transcript: while it runs, output is buffered and shown as a rolling live preview (last
-        few lines); when it ends, one compact card is committed and the full output is stashed
-        for on-demand expand. Other tools just commit their ⎿ label on start.
+        transcript: while it runs, output is buffered silently; when it ends, one compact card
+        is committed and the full output is stashed for on-demand expand. The live region shows
+        only the current action (e.g. ``Running command…``) — never a rolling output preview.
+        Other tools just commit their ⎿ label on start.
         """
         seg = classify(evt)
-        name = evt.get("name")
+        name = str(evt.get("name") or "")
         event = evt.get("event")
         if seg.kind == "tool" and event == "start":
             if name == "run_command":
+                # Never echo a ⎿ line for a command on start — it's shown once by the gate
+                # (confirm) or by the result card (auto). Just start buffering its output.
                 self._cmd_label = seg.text  # "$ <command>"
                 self._cmd_lines = []
-                if not self._gated:  # auto mode: no gate showed it, so echo the command once
-                    self._surface.commit(render.render_tool(seg))
-                self._gated = False
-                self._surface.set_activity(self._cmd_label)
             else:
-                self._surface.commit(render.render_tool(seg))
-                self._surface.set_activity(seg.text[:60])  # the tool now running
+                self._surface.commit(render.render_tool(seg))  # other tools keep their ⎿ label
+                self._activity_shown = True
+            self._surface.set_activity(live_region.action_label(name))  # "Reading file", etc.
         elif seg.kind == "tool" and event == "end":
             if name == "run_command" and self._cmd_label is not None:
-                self._surface.commit_command(self._cmd_label, self._cmd_lines)
+                # Show the command in the card only when NO gate already showed it (auto mode).
+                self._surface.commit_command(self._cmd_label, self._cmd_lines, gated=self._gated)
                 self._cmd_label = None
                 self._cmd_lines = []
+                self._gated = False  # consumed by this command
+                self._activity_shown = True
+            self._surface.set_activity(live_region.DEFAULT_ACTION)  # back to "Working"
         elif seg.kind == "output":
-            self._cmd_lines.append(seg.text)
-            preview = "\n".join(self._cmd_lines[-4:])  # last 4 lines, shown live
-            label = self._cmd_label or ""
-            self._surface.set_activity(f"{label}\n{preview}" if label else preview)
+            self._cmd_lines.append(seg.text)  # buffered for the card; not previewed live
 
     def _commit_plan_updates(self, evt: dict[str, Any], prev: dict[str, str]) -> None:
         """Commit ◐/☑/⊘ delta lines for changed todo steps (dedup via ``prev``)."""
@@ -152,6 +170,7 @@ class TurnDriver:
             status = str(todo.get("status", ""))
             if step and prev.get(step) != status and status in ("in_progress", "done", "blocked"):
                 self._surface.commit(render.render_todo(status, step))
+                self._activity_shown = True
             if step:
                 prev[step] = status
 
