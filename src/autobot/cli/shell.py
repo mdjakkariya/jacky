@@ -110,7 +110,9 @@ def print_session_footer(console: Any, cwd: str, turns: int) -> None:
 def run(base_url: str, cwd: str) -> None:  # pragma: no cover - launches the interactive app
     """Launch the pinned-input coding-agent app against ``base_url`` for ``cwd``."""
     import asyncio
+    from pathlib import Path
 
+    from prompt_toolkit.history import FileHistory
     from rich.console import Console
     from rich.text import Text
 
@@ -122,6 +124,9 @@ def run(base_url: str, cwd: str) -> None:  # pragma: no cover - launches the int
 
     console = Console(theme=jack_theme())  # only for the post-exit session footer
     context = gather_context(cwd)
+    hist_dir = Path(cwd) / ".jack"
+    hist_dir.mkdir(parents=True, exist_ok=True)  # persist ↑/↓ input history per workspace
+    history = FileHistory(str(hist_dir / "cli_history"))
     events = BackgroundEvents(base_url)
     holder: dict[str, JackApp] = {}
 
@@ -144,7 +149,7 @@ def run(base_url: str, cwd: str) -> None:  # pragma: no cover - launches the int
             if out is not None:
                 surface.commit(out)
             return
-        resolved, attached = expand_mentions(text, cwd)
+        resolved, attached = expand_mentions(japp.expand_pastes(text), cwd)
         if attached:
             surface.commit(
                 Text(f"{theme.GLYPH_TOOL}  attached: {', '.join(attached)}", style="tool")
@@ -169,6 +174,7 @@ def run(base_url: str, cwd: str) -> None:  # pragma: no cover - launches the int
         context=context,
         intro=render.render_welcome(context),
         on_interrupt=lambda: client.coder_interrupt(base_url),
+        history=history,
     )
     holder["app"] = japp
 

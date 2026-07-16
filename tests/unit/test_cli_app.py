@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from io import StringIO
+from typing import Any
 
 from prompt_toolkit.input import DummyInput, create_pipe_input
 from prompt_toolkit.output import DummyOutput
@@ -12,6 +13,100 @@ from rich.console import Console
 from autobot.cli.app import AppSurface, JackApp, parse_gate_answer
 from autobot.cli.classify import Segment
 from autobot.cli.prompt import Answer
+
+
+def _run_with_feed(feed_body: Any, *, cwd: str = "/x") -> JackApp:
+    """Drive a JackApp with a concurrent feeder coroutine ``feed_body(inp, japp)``; return app."""
+    holder: dict[str, JackApp] = {}
+
+    async def noop(_t: str, _n: int) -> None:
+        return None
+
+    async def _drive() -> None:
+        with create_pipe_input() as inp:
+            japp = JackApp(cwd=cwd, run_turn=noop, commands={}, input=inp, output=DummyOutput())
+            holder["app"] = japp
+
+            async def feed() -> None:
+                await feed_body(inp, japp)
+                inp.send_text("\x04")  # quit
+
+            asyncio.get_running_loop().create_task(feed())
+            await japp.run_async()
+
+    asyncio.run(_drive())
+    return holder["app"]
+
+
+def _bracketed(text: str) -> str:
+    """Wrap ``text`` in the terminal bracketed-paste escape sequence."""
+    return f"\x1b[200~{text}\x1b[201~"
+
+
+def test_bracketed_paste_large_text_collapses_and_expands() -> None:
+    big = "\n".join(f"line {i}" for i in range(10))
+
+    async def feed(inp: Any, japp: JackApp) -> None:
+        inp.send_text(_bracketed(big))
+        await asyncio.sleep(0.15)
+
+    japp = _run_with_feed(feed)
+    assert "[Pasted #1 · 10 lines]" in japp._input.text  # collapsed in the input
+    assert japp.expand_pastes(japp._input.text) == big  # expands back to the real content on send
+
+
+def test_backspace_removes_the_whole_pasted_block() -> None:
+    big = "\n".join(f"row {i}" for i in range(8))
+
+    async def feed(inp: Any, japp: JackApp) -> None:
+        inp.send_text(_bracketed(big))
+        await asyncio.sleep(0.1)
+        inp.send_text("\x7f")  # Backspace over the placeholder
+        await asyncio.sleep(0.1)
+
+    japp = _run_with_feed(feed)
+    assert "[Pasted" not in japp._input.text  # the whole placeholder was removed, not one char
+
+
+def test_up_arrow_recalls_previous_submissions() -> None:
+    captured: dict[str, str] = {}
+
+    async def noop(_t: str, _n: int) -> None:
+        return None
+
+    async def _drive() -> None:
+        with create_pipe_input() as inp:
+            japp = JackApp(cwd="/x", run_turn=noop, commands={}, input=inp, output=DummyOutput())
+
+            async def feed() -> None:
+                inp.send_text("first message\r")
+                await asyncio.sleep(0.1)
+                inp.send_text("second message\r")
+                await asyncio.sleep(0.1)
+                inp.send_text("\x1b[A")  # ↑ recalls the most recent submission
+                await asyncio.sleep(0.1)
+                captured["up"] = japp._input.text
+                inp.send_text("\x04")
+
+            asyncio.get_running_loop().create_task(feed())
+            await japp.run_async()
+
+    asyncio.run(_drive())
+    assert captured["up"] == "second message"
+
+
+def test_bracketed_paste_existing_path_becomes_a_mention(tmp_path: Any) -> None:
+    from pathlib import Path
+
+    f = Path(tmp_path) / "notes.md"
+    f.write_text("hi", encoding="utf-8")
+
+    async def feed(inp: Any, japp: JackApp) -> None:
+        inp.send_text(_bracketed(str(f)))
+        await asyncio.sleep(0.15)
+
+    japp = _run_with_feed(feed, cwd=str(tmp_path))
+    assert japp._input.text.strip() == f"@{f}"  # a pasted path becomes an @mention
 
 
 def test_parse_gate_answer_plan_and_permission() -> None:

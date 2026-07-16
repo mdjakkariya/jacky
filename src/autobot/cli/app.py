@@ -28,8 +28,10 @@ from prompt_toolkit.application import Application
 from prompt_toolkit.buffer import Buffer
 from prompt_toolkit.filters import Condition
 from prompt_toolkit.formatted_text import ANSI
+from prompt_toolkit.history import History, InMemoryHistory
 from prompt_toolkit.key_binding import KeyBindings, merge_key_bindings
 from prompt_toolkit.key_binding.defaults import load_key_bindings
+from prompt_toolkit.keys import Keys
 from prompt_toolkit.layout import (
     ConditionalContainer,
     Float,
@@ -44,7 +46,8 @@ from prompt_toolkit.layout.menus import CompletionsMenu
 from prompt_toolkit.styles import Style
 from prompt_toolkit.widgets import Frame
 
-from autobot.cli import live_region, theme
+from autobot.cli import live_region, paste, theme
+from autobot.cli.paste import PasteStore
 from autobot.cli.prompt import Answer, JackCompleter
 from autobot.cli.theme import jack_theme
 from autobot.logging_setup import get_logger
@@ -126,6 +129,7 @@ class JackApp:
         context: dict[str, str] | None = None,
         intro: Any | None = None,
         on_interrupt: Callable[[], Any] | None = None,
+        history: History | None = None,
         input: Any | None = None,
         output: Any | None = None,
     ) -> None:
@@ -157,10 +161,12 @@ class JackApp:
         self._modal: asyncio.Future[Answer] | None = None
         self._modal_seg: Segment | None = None
         self._pending_pickups: list[dict[str, Any]] = []
+        self._pastes = PasteStore()  # large pastes stashed behind [Pasted #N] placeholders
         self._input = Buffer(
             accept_handler=self._on_accept,
             completer=JackCompleter(commands, cwd),
             complete_while_typing=True,
+            history=history or InMemoryHistory(),  # ↑/↓ recall previous submissions
             multiline=False,
         )
         self._transcript_window = Window(
@@ -285,20 +291,41 @@ class JackApp:
         def _pgdn(event: Any) -> None:
             self._transcript_window.vertical_scroll += 10
 
+        @kb.add(Keys.BracketedPaste)
+        def _paste(event: Any) -> None:
+            data = event.data
+            mention = paste.is_existing_path(data, self._cwd)
+            if mention is not None:
+                self._input.insert_text(f"@{mention} ")  # reuse the @-file attachment path
+            elif paste.should_collapse(data):
+                self._input.insert_text(self._pastes.add(data))  # stash behind a placeholder
+            else:
+                self._input.insert_text(data)
+
+        @kb.add("backspace")
+        def _backspace(event: Any) -> None:
+            token = paste.trailing_placeholder(self._input.document.text_before_cursor)
+            if token is not None:
+                self._input.delete_before_cursor(count=len(token))  # remove the whole paste
+                self._pastes.forget(token)
+            else:
+                self._input.delete_before_cursor(count=1)
+
         return kb
 
     def _on_accept(self, buff: Buffer) -> bool:
+        # Return False so prompt_toolkit appends the (non-empty) text to history and then
+        # resets the buffer — appending happens AFTER this handler, so we must NOT reset here
+        # (resetting first would record empty history entries and break ↑/↓ recall).
         # A pending gate consumes the next submitted line as its answer.
         if self._modal is not None and not self._modal.done():
             seg = self._modal_seg
             answer = parse_gate_answer(seg, buff.text) if seg is not None else Answer("no")
-            buff.reset()
             self._modal.set_result(answer)
             return False
         text = buff.text.strip()
         if not text or self.busy:
             return False
-        buff.reset()
         self._last_turn_text = text  # so esc can refill it for editing/resending
         self._task = asyncio.create_task(self._drive(text, self._turn_no))
         self._turn_no += 1
@@ -368,6 +395,10 @@ class JackApp:
         """Empty the transcript region (the ``/clear`` command)."""
         self._transcript = ""
         self.app.invalidate()
+
+    def expand_pastes(self, text: str) -> str:
+        """Expand any ``[Pasted #N]`` placeholders in ``text`` back to their real content."""
+        return self._pastes.expand(text)
 
     def set_activity(self, text: str) -> None:
         """Set the live region's sub-activity line (the app owns the spinner + verb + timer)."""
