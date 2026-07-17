@@ -470,3 +470,15 @@ def test_run_command_prompt_shows_command_plainly() -> None:
     assert "/tmp/proj" in prompt
     assert "permanently change things" not in prompt
     assert "timeout" not in prompt
+
+
+def test_format_prompt_mcp_tool_names_server_and_discloses_egress() -> None:
+    from autobot.core.types import Risk
+    from autobot.tools.permission import PermissionGate
+
+    local = PermissionGate._format_prompt(
+        "github__create_issue", Risk.WRITE, {"title": "Bug"}, network=False
+    )
+    assert "github: create issue" in local and "off-device" not in local
+    remote = PermissionGate._format_prompt("slack__send_message", Risk.WRITE, {}, network=True)
+    assert "slack: send message" in remote and "sends data off-device" in remote

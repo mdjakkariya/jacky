@@ -315,3 +315,14 @@ def test_redactor_scrubs_secrets_from_tool_results_before_model_sees_them(
     recorded_content = model.recorded[0][0][1].content
     assert "«redacted»" in recorded_content
     assert "AKIAIOSFODNN7EXAMPLE" not in recorded_content  # gitleaks:allow — synthetic fixture
+
+
+def test_tool_label_renders_mcp_namespaced_names() -> None:
+    from autobot.agent.harness import tool_label
+    from autobot.core.types import ToolCall
+
+    assert tool_label(ToolCall(name="github__create_issue", arguments={})) == (
+        "github: create issue"
+    )
+    # Native names (no double-underscore namespace) keep the humanized fallback.
+    assert tool_label(ToolCall(name="repo_map", arguments={})) == "Repo map"
