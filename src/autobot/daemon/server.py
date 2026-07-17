@@ -694,11 +694,16 @@ def create_app(
         return {"ok": True}
 
     async def post_mcp_enable(server_id: str) -> dict[str, Any]:
-        """Enable an MCP server (persist + connect)."""
+        """Enable an MCP server (persist + connect); report pending stdio consent."""
         if (mcp := _mcp()) is None:
             return _mcp_disabled
         ok = await asyncio.to_thread(mcp.set_enabled, server_id, True)
-        return {"ok": ok} if ok else {"ok": False, "error": f"unknown server: {server_id!r}"}
+        if not ok:
+            return {"ok": False, "error": f"unknown server: {server_id!r}"}
+        pending = await asyncio.to_thread(mcp.consent_pending, server_id)
+        if pending is not None:
+            return {"ok": True, "pending_consent": True, **pending}
+        return {"ok": True}
 
     async def post_mcp_disable(server_id: str) -> dict[str, Any]:
         """Disable an MCP server (persist + disconnect)."""
@@ -756,6 +761,12 @@ def create_app(
         if (mcp := _mcp()) is None:
             return _mcp_disabled
         return await asyncio.to_thread(mcp.start_oauth, server_id)
+
+    async def post_mcp_consent(server_id: str) -> dict[str, Any]:
+        """Grant spawn/re-consent for a server and (re)connect it."""
+        if (mcp := _mcp()) is None:
+            return _mcp_disabled
+        return await asyncio.to_thread(mcp.grant_consent, server_id)
 
     # Register routes explicitly (rather than via decorators) so the handlers
     # stay statically typed under mypy strict — FastAPI ships no type info here.
@@ -829,6 +840,7 @@ def create_app(
         "/mcp/servers/{server_id}/tools/{tool}", post_mcp_tool_override, methods=["POST"]
     )
     app.add_api_route("/mcp/servers/{server_id}/auth/start", post_mcp_auth_start, methods=["POST"])
+    app.add_api_route("/mcp/servers/{server_id}/consent", post_mcp_consent, methods=["POST"])
     return app
 
 
