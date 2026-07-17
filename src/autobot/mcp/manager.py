@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from autobot.logging_setup import get_logger
+from autobot.mcp.approvals import DEFAULT_APPROVALS_PATH
 from autobot.mcp.config import DEFAULT_MCP_CONFIG_PATH
 from autobot.mcp.session import McpServerWorker
 
@@ -40,11 +41,15 @@ class McpManager:
         *,
         on_event: Callable[[dict[str, Any]], None] | None = None,
         config_path: str | Path = DEFAULT_MCP_CONFIG_PATH,
+        approvals_path: str | Path = DEFAULT_APPROVALS_PATH,
+        consent: str = "confirmer",
     ) -> None:
         self._config = config
         self._registry = registry
         self._on_event = on_event
         self._config_path = Path(config_path).expanduser()
+        self._approvals_path = Path(approvals_path).expanduser()
+        self._consent = consent
         self._loop: asyncio.AbstractEventLoop | None = None
         self._thread: threading.Thread | None = None
         self._workers: dict[str, McpServerWorker] = {}
@@ -99,6 +104,8 @@ class McpManager:
                 loop=self._loop,
                 on_event=self._on_event,
                 confirmer=self._confirmer,
+                approvals_path=self._approvals_path,
+                consent=self._consent,
             )
             self._workers[server_id] = worker
             self._futures[server_id] = asyncio.run_coroutine_threadsafe(worker.run(), self._loop)
@@ -393,3 +400,78 @@ class McpManager:
                 return False
             secret_ref = cfg.secret_ref
         return has_secret(secret_ref)
+
+    def consent_pending(self, server_id: str) -> dict[str, Any] | None:
+        """The spawn descriptor awaiting user approval for a stdio server, or ``None``.
+
+        ``None`` for unknown servers, http servers, and stdio servers whose exact
+        command+args already match a recorded spawn approval.
+
+        Args:
+            server_id: The server to check.
+
+        Returns:
+            ``{"command": str, "args": list[str]}`` when approval is needed, else ``None``.
+        """
+        from autobot.mcp.approvals import load_approvals
+
+        with self._lock:
+            cfg = self._config.get(server_id)
+        if cfg is None or cfg.transport != "stdio":
+            return None
+        command = cfg.command or ""
+        args = list(cfg.args)
+        existing = load_approvals(self._approvals_path).spawn_approvals.get(server_id)
+        if existing is not None and existing.command == command and existing.args == args:
+            return None
+        return {"command": command, "args": args}
+
+    def grant_consent(self, server_id: str) -> dict[str, Any]:
+        """Record user consent for ``server_id`` and (re)connect it.
+
+        Two consents share this one entry point:
+
+        - **Spawn consent** (stdio): records the exact command+args in approved.json.
+        - **Rug-pull re-consent**: any tools the live worker holds as
+          ``pending_reconsent`` get their approved fingerprints dropped, so the
+          reconnect's ``_sync_tools`` re-baselines them as new tools.
+
+        Args:
+            server_id: The server to approve.
+
+        Returns:
+            ``{"ok": True, "server": status_row}`` or ``{"ok": False, "error": str}``.
+        """
+        from autobot.mcp.adapter import namespaced
+        from autobot.mcp.approvals import load_approvals, record_spawn_approval, save_approvals
+
+        with self._lock:
+            cfg = self._config.get(server_id)
+            if cfg is None:
+                return {"ok": False, "error": f"unknown server: {server_id!r}"}
+            worker = self._workers.get(server_id)
+            blocked = [
+                str(t["name"])
+                for t in (worker.all_tools() if worker is not None else [])
+                if t.get("pending_reconsent")
+            ]
+            if cfg.transport == "stdio":
+                record_spawn_approval(
+                    server_id, cfg.command or "", list(cfg.args), self._approvals_path
+                )
+            if blocked:
+                af = load_approvals(self._approvals_path)
+                fps = af.fingerprints.get(server_id, {})
+                risks = af.risks.get(server_id, {})
+                for bare in blocked:
+                    reg = namespaced(server_id, bare)
+                    fps.pop(reg, None)
+                    risks.pop(reg, None)
+                save_approvals(af, self._approvals_path)
+            _log.info("mcp consent granted server=%s reconsent_tools=%d", server_id, len(blocked))
+            if server_id in self._workers:
+                self.disconnect(server_id)
+            if cfg.enabled:
+                self.connect(server_id)
+            rows = [r for r in self.status() if r["server"] == server_id]
+            return {"ok": True, "server": rows[0] if rows else {"server": server_id}}
