@@ -35,12 +35,13 @@ are both squatted on PyPI by abandoned 2014 packages; the import package and the
 `jack`/`autobot` commands keep their names).
 
 ```bash
-git checkout -b release/v0.8.1 main
-make release-cli VERSION=0.8.1
-make changelog-cli VERSION=0.8.1
-git commit -am "chore(release): v0.8.1" && gh pr create --fill   # merge when green
+git checkout -b release/v0.8.2 main
+make release-cli VERSION=0.8.2
+make changelog-cli VERSION=0.8.2
+git commit -am "chore(release): v0.8.2" && gh pr create --fill
+# merge when green on github
 git checkout main && git pull
-git tag v0.8.1 && git push origin v0.8.1     # CI builds wheel + 5 jack binaries
+git tag v0.8.2 && git push origin v0.8.2     # CI builds wheel + 5 jack binaries
 ```
 
 `make release-cli` rewrites `pyproject.toml` and `src/autobot/__init__.py` (the
@@ -73,11 +74,11 @@ Pushing the tag triggers `.github/workflows/release.yml`, which:
    be re-uploaded, so fixing a bad release means a new patch tag (re-running a
    *failed* publish job is fine).
 
-What ends up attached to the `v0.8.1` Release:
+What ends up attached to the `v0.8.2` Release:
 
 - `jacky-*.whl` / `jacky-*.tar.gz` — the Python engine (wheel + sdist; the same
   files that land on PyPI).
-- `jack-0.8.1-<os>-<arch>.(tar.gz|zip)` + a matching `.sha256` for each of:
+- `jack-0.8.2-<os>-<arch>.(tar.gz|zip)` + a matching `.sha256` for each of:
   macOS arm64, macOS x64, Linux x64, Linux arm64, Windows x64.
 
 `install.sh`/`install.ps1` and `jack update` both consume those assets directly —
