@@ -201,7 +201,12 @@ async def _add(surface: Surface, base_url: str, deps: Deps) -> None:
         if cmdline is None:
             surface.commit(_dim("Cancelled — nothing saved."))
             return
-        argv = shlex.split(cmdline)
+        try:
+            argv = shlex.split(cmdline)
+        except ValueError:
+            msg = "Cancelled — couldn't parse that command line (check your quotes)."
+            surface.commit(_dim(msg))
+            return
         descriptor["command"], descriptor["args"] = argv[0], argv[1:]
         risk = await _ask_text(surface, "4/5 Risk floor? (read_only | write | destructive)")
         descriptor["default_risk"] = (

@@ -231,3 +231,45 @@ def test_unknown_verb_shows_usage() -> None:
     surface = FakeSurface()
     _run(handle("frobnicate", surface, base_url="http://b", deps=_deps()))
     assert "usage" in " ".join(str(c) for c in surface.committed).lower()
+
+
+def test_add_wizard_cancels_on_final_confirm_no() -> None:
+    added: list[dict[str, Any]] = []
+
+    def _add_server(b: str, d: dict[str, Any]) -> dict[str, Any]:
+        added.append(d)
+        return {"ok": True}
+
+    deps = _deps(add_server=_add_server)
+    surface = FakeSurface(
+        answers=[
+            Answer("refine", "postgres"),  # id
+            Answer("refine", "stdio"),  # transport
+            Answer("refine", "npx -y server-postgres pg://x"),  # command line
+            Answer("refine", "write"),  # risk floor
+            Answer("no"),  # save?
+        ]
+    )
+    _run(handle("add", surface, base_url="http://b", deps=deps))
+    assert added == []
+    assert "Cancelled" in " ".join(str(c) for c in surface.committed)
+
+
+def test_add_wizard_bad_quotes_does_not_crash() -> None:
+    added: list[dict[str, Any]] = []
+
+    def _add_server(b: str, d: dict[str, Any]) -> dict[str, Any]:
+        added.append(d)
+        return {"ok": True}
+
+    deps = _deps(add_server=_add_server)
+    surface = FakeSurface(
+        answers=[
+            Answer("refine", "postgres"),  # id
+            Answer("refine", "stdio"),  # transport
+            Answer("refine", "npx -y 'server"),  # command line with unbalanced quote
+        ]
+    )
+    _run(handle("add", surface, base_url="http://b", deps=deps))
+    assert added == []
+    assert "couldn't parse" in " ".join(str(c) for c in surface.committed).lower()
