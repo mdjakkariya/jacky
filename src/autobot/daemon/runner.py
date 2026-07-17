@@ -101,6 +101,14 @@ def serve(settings: Settings | None = None, *, workspace: str | None = None) -> 
     # chat — but the orchestrator doesn't exist yet, so consult it lazily.
     holder: dict[str, object] = {}
 
+    from autobot.daemon.coder_events import CoderEventHub
+
+    mcp_hub = CoderEventHub()
+
+    def _on_mcp_event(evt: dict[str, Any]) -> None:
+        bus.publish_mcp(evt)  # orb Settings view (unchanged)
+        mcp_hub.publish(evt)  # coder SSE stream (CLI live feedback)
+
     def _is_chat() -> bool:
         orch = holder.get("orch")
         return bool(orch is not None and orch.in_chat_mode())  # type: ignore[attr-defined]
@@ -134,7 +142,7 @@ def serve(settings: Settings | None = None, *, workspace: str | None = None) -> 
         on_choices=publish_choices,
         on_step=publish_step,
         on_workspace=publish_workspace,
-        on_mcp_event=bus.publish_mcp,
+        on_mcp_event=_on_mcp_event,
         on_meeting_event=bus.publish_meeting,
     )
     holder["orch"] = orchestrator
@@ -198,6 +206,17 @@ def serve(settings: Settings | None = None, *, workspace: str | None = None) -> 
 
         coder_ws = str(resolve_workspace_root(True, workspace, settings.sandbox_dir))
         _registry.record(coder_ws, settings.daemon_port, os.getpid())
+
+    def _subscribe_coder(cb: Callable[[dict[str, Any]], None]) -> Callable[[], None]:
+        un_tasks = orchestrator.subscribe_coder_events(cb)
+        un_mcp = mcp_hub.subscribe(cb)
+
+        def _unsubscribe() -> None:
+            un_tasks()
+            un_mcp()
+
+        return _unsubscribe
+
     # Live-apply settings/key changes from the Settings view (next turn, no restart).
     try:
         run_daemon(
@@ -223,7 +242,7 @@ def serve(settings: Settings | None = None, *, workspace: str | None = None) -> 
             on_coder_undo=orchestrator.undo_coder,
             on_coder_checkpoints=orchestrator.list_coder_checkpoints,
             on_usage=orchestrator.coder_usage,
-            on_coder_events=orchestrator.subscribe_coder_events if coder else None,
+            on_coder_events=_subscribe_coder if coder else None,
             idle_timeout=float(settings.coder_idle_timeout_s) if coder else None,
         )
     finally:
