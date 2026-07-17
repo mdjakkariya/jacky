@@ -27,10 +27,8 @@ permissions:
 
 jobs:
   # Gate: the same quality checks as CI — so sync the SAME extras CI does
-  # (ci.yml's `check` job). Without `tui`, mypy strict has no `prompt_toolkit`, so
-  # `cli/prompt.py`'s `Completer` subclass reads as `Any` and fails the gate even
-  # though CI is green. The manifest-vs-tag check is non-blocking (a warning) — the
-  # release job builds with the tag's version regardless.
+  # (ci.yml's `check` job). The manifest-vs-tag check is non-blocking (a warning) —
+  # the release job builds with the tag's version regardless.
   gate:
     runs-on: ubuntu-latest
     steps:
@@ -39,7 +37,7 @@ jobs:
         with:
           enable-cache: true
       - run: uv python install 3.11
-      - run: uv sync --extra dev --extra daemon --extra tui --extra e2e
+      - run: uv sync --extra dev --extra e2e
       - run: uv run ruff check .
       - run: uv run ruff format --check .
       - run: uv run mypy
@@ -183,7 +181,7 @@ jobs:
       - name: Freeze the jack binary
         shell: bash
         run: |
-          uv sync --inexact --extra tui --extra daemon --extra cloud --extra freeze
+          uv sync --inexact --extra freeze
           uv run pyinstaller --noconfirm --clean packaging/jack.spec
 
       - name: Smoke — the frozen binary reports its version

@@ -119,118 +119,6 @@ wheels = [
 ]
 
 [[package]]
-name = "jacky"
-version = "0.8.2"
-source = { editable = "." }
-dependencies = [
-    { name = "faster-whisper" },
-    { name = "keyring" },
-    { name = "numpy" },
-    { name = "ollama" },
-    { name = "sounddevice" },
-]
-
-[package.optional-dependencies]
-aec = [
-    { name = "pyobjc-framework-applicationservices", marker = "sys_platform == 'darwin'" },
-    { name = "pyobjc-framework-avfoundation", marker = "sys_platform == 'darwin'" },
-    { name = "pyobjc-framework-coreservices", marker = "sys_platform == 'darwin'" },
-]
-all = [
-    { name = "onnxruntime" },
-    { name = "openwakeword" },
-    { name = "piper-tts" },
-]
-cloud = [
-    { name = "anthropic" },
-    { name = "openai" },
-]
-code = [
-    { name = "tree-sitter-language-pack" },
-]
-daemon = [
-    { name = "fastapi" },
-    { name = "uvicorn", extra = ["standard"] },
-]
-dev = [
-    { name = "mypy" },
-    { name = "pre-commit" },
-    { name = "pytest" },
-    { name = "pytest-asyncio" },
-    { name = "pytest-cov" },
-    { name = "ruff" },
-]
-docs = [
-    { name = "openpyxl" },
-    { name = "pypdf" },
-    { name = "python-docx" },
-]
-e2e = [
-    { name = "pyte" },
-]
-freeze = [
-    { name = "pyinstaller" },
-]
-mcp = [
-    { name = "mcp" },
-]
-tts = [
-    { name = "piper-tts" },
-]
-tui = [
-    { name = "prompt-toolkit" },
-    { name = "rich" },
-]
-wake = [
-    { name = "onnxruntime" },
-    { name = "openwakeword" },
-]
-web = [
-    { name = "ddgs" },
-]
-whispercpp = [
-    { name = "pywhispercpp" },
-]
-
-[package.metadata]
-requires-dist = [
-    { name = "anthropic", marker = "extra == 'cloud'", specifier = ">=0.40" },
-    { name = "jacky", extras = ["wake", "tts"], marker = "extra == 'all'" },
-    { name = "ddgs", marker = "extra == 'web'", specifier = ">=6.0" },
-    { name = "fastapi", marker = "extra == 'daemon'", specifier = ">=0.110" },
-    { name = "faster-whisper", specifier = ">=1.0.0" },
-    { name = "keyring", specifier = ">=25" },
-    { name = "mcp", marker = "extra == 'mcp'", specifier = ">=1.28,<2" },
-    { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.11" },
-    { name = "numpy", specifier = ">=1.24" },
-    { name = "ollama", specifier = ">=0.4.0" },
-    { name = "onnxruntime", marker = "extra == 'wake'", specifier = ">=1.17" },
-    { name = "openai", marker = "extra == 'cloud'", specifier = ">=1.40" },
-    { name = "openpyxl", marker = "extra == 'docs'", specifier = ">=3.1" },
-    { name = "openwakeword", marker = "extra == 'wake'", specifier = ">=0.6.0" },
-    { name = "piper-tts", marker = "extra == 'tts'", specifier = ">=1.2" },
-    { name = "pre-commit", marker = "extra == 'dev'", specifier = ">=3.7" },
-    { name = "prompt-toolkit", marker = "extra == 'tui'", specifier = ">=3.0" },
-    { name = "pyinstaller", marker = "extra == 'freeze'", specifier = ">=6.0" },
-    { name = "pyobjc-framework-applicationservices", marker = "sys_platform == 'darwin' and extra == 'aec'", specifier = ">=10.0" },
-    { name = "pyobjc-framework-avfoundation", marker = "sys_platform == 'darwin' and extra == 'aec'", specifier = ">=10.0" },
-    { name = "pyobjc-framework-coreservices", marker = "sys_platform == 'darwin' and extra == 'aec'", specifier = ">=10.0" },
-    { name = "pypdf", marker = "extra == 'docs'", specifier = ">=4" },
-    { name = "pyte", marker = "extra == 'e2e'", specifier = ">=0.8" },
-    { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.0" },
-    { name = "pytest-asyncio", marker = "extra == 'dev'", specifier = ">=0.24" },
-    { name = "pytest-cov", marker = "extra == 'dev'", specifier = ">=5.0" },
-    { name = "python-docx", marker = "extra == 'docs'", specifier = ">=1.1" },
-    { name = "pywhispercpp", marker = "extra == 'whispercpp'", specifier = ">=1.2" },
-    { name = "rich", marker = "extra == 'tui'", specifier = ">=13" },
-    { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.6" },
-    { name = "sounddevice", specifier = ">=0.4.6" },
-    { name = "tree-sitter-language-pack", marker = "extra == 'code'", specifier = ">=0.1" },
-    { name = "uvicorn", extras = ["standard"], marker = "extra == 'daemon'", specifier = ">=0.29" },
-]
-provides-extras = ["wake", "tts", "all", "web", "daemon", "cloud", "whispercpp", "mcp", "aec", "freeze", "code", "tui", "e2e", "docs", "dev"]
-
-[[package]]
 name = "av"
 version = "17.1.0"
 source = { registry = "https://pypi.org/simple" }
@@ -1077,6 +965,112 @@ sdist = { url = "https://files.pythonhosted.org/packages/72/34/14ca021ce8e5dfedc
 wheels = [
     { url = "https://files.pythonhosted.org/packages/cb/b1/3846dd7f199d53cb17f49cba7e651e9ce294d8497c8c150530ed11865bb8/iniconfig-2.3.0-py3-none-any.whl", hash = "sha256:f631c04d2c48c52b84d0d0549c99ff3859c98df65b3101406327ecc7d53fbf12", size = 7484, upload-time = "2025-10-18T21:55:41.639Z" },
 ]
+
+[[package]]
+name = "jacky"
+version = "0.8.2"
+source = { editable = "." }
+dependencies = [
+    { name = "anthropic" },
+    { name = "fastapi" },
+    { name = "faster-whisper" },
+    { name = "keyring" },
+    { name = "numpy" },
+    { name = "ollama" },
+    { name = "openai" },
+    { name = "prompt-toolkit" },
+    { name = "rich" },
+    { name = "sounddevice" },
+    { name = "uvicorn", extra = ["standard"] },
+]
+
+[package.optional-dependencies]
+aec = [
+    { name = "pyobjc-framework-applicationservices", marker = "sys_platform == 'darwin'" },
+    { name = "pyobjc-framework-avfoundation", marker = "sys_platform == 'darwin'" },
+    { name = "pyobjc-framework-coreservices", marker = "sys_platform == 'darwin'" },
+]
+all = [
+    { name = "onnxruntime" },
+    { name = "openwakeword" },
+    { name = "piper-tts" },
+]
+code = [
+    { name = "tree-sitter-language-pack" },
+]
+dev = [
+    { name = "mypy" },
+    { name = "pre-commit" },
+    { name = "pytest" },
+    { name = "pytest-asyncio" },
+    { name = "pytest-cov" },
+    { name = "ruff" },
+]
+docs = [
+    { name = "openpyxl" },
+    { name = "pypdf" },
+    { name = "python-docx" },
+]
+e2e = [
+    { name = "pyte" },
+]
+freeze = [
+    { name = "pyinstaller" },
+]
+mcp = [
+    { name = "mcp" },
+]
+tts = [
+    { name = "piper-tts" },
+]
+wake = [
+    { name = "onnxruntime" },
+    { name = "openwakeword" },
+]
+web = [
+    { name = "ddgs" },
+]
+whispercpp = [
+    { name = "pywhispercpp" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "anthropic", specifier = ">=0.40" },
+    { name = "ddgs", marker = "extra == 'web'", specifier = ">=6.0" },
+    { name = "fastapi", specifier = ">=0.110" },
+    { name = "faster-whisper", specifier = ">=1.0.0" },
+    { name = "jacky", extras = ["wake", "tts"], marker = "extra == 'all'" },
+    { name = "keyring", specifier = ">=25" },
+    { name = "mcp", marker = "extra == 'mcp'", specifier = ">=1.28,<2" },
+    { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.11" },
+    { name = "numpy", specifier = ">=1.24" },
+    { name = "ollama", specifier = ">=0.4.0" },
+    { name = "onnxruntime", marker = "extra == 'wake'", specifier = ">=1.17" },
+    { name = "openai", specifier = ">=1.40" },
+    { name = "openpyxl", marker = "extra == 'docs'", specifier = ">=3.1" },
+    { name = "openwakeword", marker = "extra == 'wake'", specifier = ">=0.6.0" },
+    { name = "piper-tts", marker = "extra == 'tts'", specifier = ">=1.2" },
+    { name = "pre-commit", marker = "extra == 'dev'", specifier = ">=3.7" },
+    { name = "prompt-toolkit", specifier = ">=3.0" },
+    { name = "pyinstaller", marker = "extra == 'freeze'", specifier = ">=6.0" },
+    { name = "pyobjc-framework-applicationservices", marker = "sys_platform == 'darwin' and extra == 'aec'", specifier = ">=10.0" },
+    { name = "pyobjc-framework-avfoundation", marker = "sys_platform == 'darwin' and extra == 'aec'", specifier = ">=10.0" },
+    { name = "pyobjc-framework-coreservices", marker = "sys_platform == 'darwin' and extra == 'aec'", specifier = ">=10.0" },
+    { name = "pypdf", marker = "extra == 'docs'", specifier = ">=4" },
+    { name = "pyte", marker = "extra == 'e2e'", specifier = ">=0.8" },
+    { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.0" },
+    { name = "pytest-asyncio", marker = "extra == 'dev'", specifier = ">=0.24" },
+    { name = "pytest-cov", marker = "extra == 'dev'", specifier = ">=5.0" },
+    { name = "python-docx", marker = "extra == 'docs'", specifier = ">=1.1" },
+    { name = "pywhispercpp", marker = "extra == 'whispercpp'", specifier = ">=1.2" },
+    { name = "rich", specifier = ">=13" },
+    { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.6" },
+    { name = "sounddevice", specifier = ">=0.4.6" },
+    { name = "tree-sitter-language-pack", marker = "extra == 'code'", specifier = ">=0.1" },
+    { name = "uvicorn", extras = ["standard"], specifier = ">=0.29" },
+]
+provides-extras = ["wake", "tts", "all", "web", "daemon", "cloud", "tui", "whispercpp", "mcp", "aec", "freeze", "code", "e2e", "docs", "dev"]
 
 [[package]]
 name = "jaraco-classes"

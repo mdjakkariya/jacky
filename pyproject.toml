@@ -36,6 +36,15 @@ dependencies = [
     "sounddevice>=0.4.6",    # mic capture; bundles PortAudio in its wheel
     "ollama>=0.4.0",         # local LLM client with tool calling
     "keyring>=25",           # cross-platform OS secret store (Keychain/Credential Locker/Secret Service)
+    # The coder-CLI stack (#96) — what the frozen `jack` binary bakes in (`make
+    # freeze-cli`): the TUI shell, the daemon it launches in-process, and the cloud
+    # LLM SDKs. In base so a plain `pip install jacky` yields a working `jack`.
+    "rich>=13",              # renders every TUI segment
+    "prompt_toolkit>=3.0",   # drives the TUI input (completion, key bindings, history)
+    "fastapi>=0.110",        # daemon: localhost WebSocket API the CLI drives
+    "uvicorn[standard]>=0.29",
+    "anthropic>=0.40",       # cloud LLM (opt-in at runtime; llm_provider="anthropic")
+    "openai>=1.40",          # any OpenAI-compatible endpoint (llm_provider="openai")
 ]
 
 [project.optional-dependencies]
@@ -60,19 +69,12 @@ all = [
 web = [
     "ddgs>=6.0",
 ]
-# Headless daemon (Phase 3c): a localhost WebSocket UI clients connect to.
-# Imported lazily, so only needed to run the daemon: `uv sync --extra daemon`.
-daemon = [
-    "fastapi>=0.110",
-    "uvicorn[standard]>=0.29",
-]
-# Optional cloud LLM (Claude, or any OpenAI-compatible endpoint). Opt-in, off by
-# default: `uv sync --extra cloud`. Lazy-imported; only needed when
-# llm_provider="anthropic" or "openai".
-cloud = [
-    "anthropic>=0.40",
-    "openai>=1.40",
-]
+# Folded into base dependencies (#96) — the coder CLI needs them to run, so a plain
+# `pip install jacky` must bring them. Kept as empty extras so existing
+# `uv sync --extra daemon|cloud|tui` invocations and `jacky[...]` spellings stay valid.
+daemon = []
+cloud = []
+tui = []
 # Optional GPU-accelerated STT (whisper.cpp, Metal on Apple Silicon). Lazy-imported;
 # only needed when stt_engine="whisper_cpp". `uv sync --extra whispercpp`.
 whispercpp = [
@@ -105,13 +107,6 @@ freeze = [
 # `uv sync --extra code`.
 code = [
     "tree-sitter-language-pack>=0.1",
-]
-# Terminal UI (coding agent CLI). rich renders every segment; prompt_toolkit drives the
-# inline input (completion, key bindings, history). Lazy-imported by the cli shell modules
-# so the daemon and other clients don't need them. `uv sync --extra tui`.
-tui = [
-    "rich>=13",
-    "prompt_toolkit>=3.0",
 ]
 # Dev-only E2E harness (real PTY + pyte terminal emulator). Never installed by CI;
 # invoked by hand via `make e2e` / `python -m autobot.e2e`. `uv sync --extra e2e`.

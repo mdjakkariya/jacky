@@ -7,8 +7,8 @@ real ``GET /coder/events`` SSE socket; and the real ``client.stream_events`` (ur
 it — the exact path an idle CLI uses to auto-resume. Also asserts the completion note landed
 in the inbox and the output was streamed to the managed log file.
 
-Skipped unless the optional ``daemon`` extra (uvicorn) is installed. Run with:
-    uv run --extra daemon pytest tests/integration/test_autoresume_e2e.py -v
+Skipped unless uvicorn (a base dep since #96) is installed. Run with:
+    uv run pytest tests/integration/test_autoresume_e2e.py -v
 """
 
 from __future__ import annotations

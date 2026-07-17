@@ -63,12 +63,13 @@ def main(argv: list[str] | None = None) -> None:
     """Console entry point: ``--demo`` cycles states without the engine."""
     args = _parse_args(argv)
     try:
-        # Imported here so a missing 'daemon' extra fails with a clear hint
+        # Imported here so a missing fastapi/uvicorn fails with a clear hint
         # rather than an opaque ImportError at startup.
         from autobot.daemon.runner import serve, serve_demo
     except ImportError as exc:
         raise SystemExit(
-            "The daemon needs the 'daemon' extra: run `uv sync --extra daemon`."
+            "The daemon needs fastapi + uvicorn (base deps) — run `uv sync` "
+            "(or reinstall jacky) to repair the environment."
         ) from exc
     # Set the workspace config overlay before loading, so this daemon's settings (and every
     # later reload) layer `<workspace>/.jack/settings.json` over the global file.

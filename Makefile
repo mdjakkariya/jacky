@@ -12,10 +12,11 @@ setup: install hooks ## Create the env and install git hooks
 	@echo "Setup complete. Run 'make run' to start (needs Ollama running)."
 
 # `uv sync` REPLACES the installed extra set, so always sync the whole set at once.
-EXTRAS := dev all daemon cloud whispercpp aec mcp tui
+# (tui/daemon/cloud are base deps since #96 — plain `uv sync` brings the coder stack.)
+EXTRAS := dev all whispercpp aec mcp
 EXTRA_FLAGS := $(addprefix --extra ,$(EXTRAS))
 
-install: ## Sync the virtualenv with all deps (dev + wake + tts + daemon + cloud + whispercpp + aec + mcp + tui)
+install: ## Sync the virtualenv with all deps (dev + wake + tts + whispercpp + aec + mcp)
 	uv sync $(EXTRA_FLAGS)
 
 install-cli: ## Install/update the system-wide `jack` from THIS source (uv tool; no venv needed)
@@ -103,7 +104,7 @@ freeze: ## Freeze the engine into dist/autobot-daemon (bundles the daemon/cloud/
 	@echo "Built: dist/autobot-daemon"
 
 freeze-cli: ## Freeze the coder CLI into dist/jack (lean: coder stack only, no voice)
-	uv sync --inexact --extra tui --extra daemon --extra cloud --extra freeze
+	uv sync --inexact --extra freeze
 	uv run pyinstaller --noconfirm --clean packaging/jack.spec
 	@echo "Built: dist/jack"
 

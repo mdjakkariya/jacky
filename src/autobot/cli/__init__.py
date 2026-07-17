@@ -266,7 +266,8 @@ def main(argv: list[str] | None = None) -> int:
         return 1
     except ImportError:
         print(
-            "The interactive TUI needs the 'tui' extra — run `uv sync --extra tui`.",
+            "The interactive TUI needs rich + prompt_toolkit (base deps) — "
+            "run `uv sync` (or reinstall jacky) to repair the environment.",
             file=sys.stderr,
         )
         return 1
