@@ -171,6 +171,46 @@ coordinator, and (being read-only) it can't spawn processes, so there are no orp
 to reap. Write-capable subagents (git-worktree isolation for parallel edits) are a future
 extension; today the coordinator does the edits itself using subagents' findings.
 
+## MCP
+
+The action layer's Model Context Protocol support (`src/autobot/mcp/`): a `McpManager`
+runs every configured server's `McpServerWorker` on one dedicated asyncio event-loop
+thread — one loop for all servers, driven synchronously from the daemon and composition
+root via `run_coroutine_threadsafe` — and registers each server's tools into the shared
+`ToolRegistry` under a `<server_id>__<tool_name>` namespace so they flow through the same
+permission gate as built-in tools. Stdio and remote (HTTP/SSE) transports are both
+supported; OAuth for remote servers and Keychain-backed secrets for stdio env vars are
+handled per server. A rug-pull guard fingerprints each tool's schema at approval time and
+re-blocks it for re-consent if a reconnect changes that fingerprint.
+
+### MCP in the CLI (coder profile)
+
+The coder daemon serves the same `/mcp/*` routes the orb uses; the CLI is a thin
+client of them from two surfaces backed by one client layer (`cli/mcp_client.py`)
+and one renderer (`cli/mcp_render.py`):
+
+- **REPL:** `/mcp` (list · add wizard · enable/disable · remove · tools · tool
+  risk/on/off · auth · consent · on/off) — interactive steps ride the pinned-input
+  modal (`Segment` kinds `input` and `secret`; secrets are masked and never enter
+  the input history).
+- **Shell:** `jack mcp …` — same verbs with flags, `--yes` for non-interactive
+  consent (CI), `--json` for raw payloads. Auto-starts the workspace daemon.
+
+**Consent-at-enable.** In the coder profile the MCP manager runs with
+`consent="explicit"`: an enabled-but-unapproved stdio server parks in
+`pending_consent` (nothing spawns at daemon startup, where no turn exists to
+ask through). `POST /mcp/servers/{id}/enable` reports the pending command+args;
+the CLI shows them and, on approval, `POST /mcp/servers/{id}/consent`
+(`McpManager.grant_consent`) records the spawn approval and connects. The same
+endpoint clears rug-pull re-consent blocks by dropping the blocked tools'
+approved fingerprints so the reconnect re-baselines them. The assistant profile
+is unchanged (`consent="confirmer"` asks through the gate's confirmer).
+
+**Live feedback.** The daemon fans every `mcp_status`/`mcp_oauth` event to the
+orb bus *and* a `CoderEventHub` (`daemon/coder_events.py`) tapped by each
+`/coder/events` SSE subscription, so the REPL shows connect/OAuth progress lines
+as they happen (`cli/autoresume.py` → `JackApp.on_mcp_event`).
+
 ## Reference projects to study
 
 - **Home Assistant voice pipeline + Wyoming protocol** — an existing open standard
