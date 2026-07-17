@@ -443,7 +443,7 @@ def test_input_kind_modal_resolves_free_text() -> None:
         ans = await task
         assert ans.value == "refine" and ans.text == "postgres"
 
-    asyncio.get_event_loop_policy().new_event_loop().run_until_complete(scenario())
+    asyncio.run(scenario())
 
 
 def test_secret_kind_masks_and_skips_history() -> None:
@@ -465,11 +465,17 @@ def test_secret_kind_masks_and_skips_history() -> None:
         await asyncio.sleep(0)
         assert japp._secret_mode is True
         japp._input.text = "sk-verysecret"
-        kept = japp._on_accept(japp._input)
-        assert kept is True  # True = prompt_toolkit will NOT append the secret to history
+        # Drive the real prompt_toolkit accept path (not _on_accept directly): this
+        # exercises validate_and_handle()'s unconditional append_to_history() call too,
+        # so the assertion below checks the real history object, not a comment's claim.
+        japp._input.validate_and_handle()
         ans = await task
         assert ans.text == "sk-verysecret"
         assert japp._input.text == ""  # buffer wiped by the handler itself
         assert japp._secret_mode is False
+        # The guarantee holds because the handler wipes the buffer (buff.reset())
+        # before append_to_history() runs — append_to_history() records only
+        # non-empty text, so it sees "" and skips the secret entirely.
+        assert "sk-verysecret" not in japp._input.history.get_strings()
 
-    asyncio.get_event_loop_policy().new_event_loop().run_until_complete(scenario())
+    asyncio.run(scenario())

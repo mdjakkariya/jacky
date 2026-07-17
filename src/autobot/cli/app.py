@@ -592,9 +592,13 @@ class JackApp:
             if self._modal_edit:
                 text = buff.text.strip()
                 if self._secret_mode:
-                    # Resolve, wipe, and return True: prompt_toolkit only appends to
-                    # history on a False return, so the secret never touches
-                    # .jack/cli_history (and reset() clears the visible buffer now).
+                    # Resolve, then wipe the buffer ourselves: prompt_toolkit's
+                    # validate_and_handle() calls append_to_history() UNCONDITIONALLY after
+                    # this handler returns, but append_to_history() only records non-empty
+                    # text — and buff.reset() (called here, before we return) already
+                    # cleared it, so the secret never touches .jack/cli_history. The
+                    # `return True` doesn't gate that append; it only tells
+                    # validate_and_handle() to skip its own redundant post-handler reset().
                     self._modal.set_result(Answer("refine", text) if text else Answer("reject"))
                     buff.reset()
                     return True
