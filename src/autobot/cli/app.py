@@ -46,6 +46,7 @@ from prompt_toolkit.layout import (
 from prompt_toolkit.layout.controls import BufferControl, FormattedTextControl
 from prompt_toolkit.layout.dimension import Dimension
 from prompt_toolkit.layout.menus import CompletionsMenu
+from prompt_toolkit.layout.processors import ConditionalProcessor, PasswordProcessor
 from prompt_toolkit.mouse_events import MouseEvent, MouseEventType
 from prompt_toolkit.styles import Style
 from prompt_toolkit.widgets import Frame
@@ -273,6 +274,7 @@ class JackApp:
         self._modal: asyncio.Future[Answer] | None = None
         self._modal_seg: Segment | None = None
         self._modal_edit = False  # True while typing a plan refinement (after pressing 'e')
+        self._secret_mode = False  # mask the input buffer while a "secret" ask is active
         self._pending_pickups: list[dict[str, Any]] = []
         self._pastes = PasteStore()  # large pastes stashed behind [Pasted #N] placeholders
         self._input = Buffer(
@@ -414,7 +416,13 @@ class JackApp:
         )
         # The input grows with content (1 → MAX_INPUT_LINES lines), then scrolls within.
         entry = Window(
-            BufferControl(buffer=self._input),
+            BufferControl(
+                buffer=self._input,
+                input_processors=[
+                    ConditionalProcessor(PasswordProcessor(), Condition(lambda: self._secret_mode))
+                ],
+                include_default_input_processors=True,
+            ),
             height=Dimension(min=1, max=MAX_INPUT_LINES),
             wrap_lines=True,
         )
@@ -583,6 +591,13 @@ class JackApp:
         if self._modal is not None and not self._modal.done():
             if self._modal_edit:
                 text = buff.text.strip()
+                if self._secret_mode:
+                    # Resolve, wipe, and return True: prompt_toolkit only appends to
+                    # history on a False return, so the secret never touches
+                    # .jack/cli_history (and reset() clears the visible buffer now).
+                    self._modal.set_result(Answer("refine", text) if text else Answer("reject"))
+                    buff.reset()
+                    return True
                 self._modal.set_result(Answer("refine", text) if text else Answer("reject"))
             return False
         text = buff.text.strip()
@@ -611,6 +626,7 @@ class JackApp:
             self._activity = None
             self._todos = []  # the live checklist vanishes with the live region at turn end
             self._modal_hint = None
+            self._secret_mode = False
             self._modal = None
             self._modal_seg = None
             self.app.invalidate()
@@ -633,8 +649,14 @@ class JackApp:
         fut: asyncio.Future[Answer] = loop.create_future()
         self._modal = fut
         self._modal_seg = seg
-        self._modal_edit = False
-        hint = "[y]es · [n]o · [e]dit" if seg.kind == "plan" else "Approve? [y]es · [n]o"
+        self._modal_edit = seg.kind in ("input", "secret")
+        self._secret_mode = seg.kind == "secret"
+        if seg.kind in ("input", "secret"):
+            hint = f"{seg.text}  (enter submits · empty cancels)"
+        elif seg.kind == "plan":
+            hint = "[y]es · [n]o · [e]dit"
+        else:
+            hint = "Approve? [y]es · [n]o"
         self._modal_hint = [("class:amber", f" {hint}")]
         self.app.invalidate()
         try:
@@ -644,6 +666,7 @@ class JackApp:
             self._modal = None
             self._modal_seg = None
             self._modal_edit = False
+            self._secret_mode = False
             self.app.invalidate()
 
     def append_transcript(self, renderable: Any) -> None:

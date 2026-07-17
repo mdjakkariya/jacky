@@ -417,3 +417,59 @@ def test_on_task_finished_when_idle_runs_a_continuation_turn() -> None:
 
     asyncio.run(_drive())
     assert seen and "background task" in seen[0].lower()
+
+
+def test_input_kind_modal_resolves_free_text() -> None:
+    import asyncio
+
+    from prompt_toolkit.input import DummyInput
+    from prompt_toolkit.output import DummyOutput
+
+    from autobot.cli.app import JackApp
+    from autobot.cli.classify import Segment
+
+    async def noop(text: str, turn_no: int) -> None:
+        return None
+
+    japp = JackApp(cwd="/x", run_turn=noop, commands={}, input=DummyInput(), output=DummyOutput())
+
+    async def scenario() -> None:
+        task = asyncio.ensure_future(japp.begin_modal(Segment("input", "Server id?")))
+        await asyncio.sleep(0)
+        assert japp._modal_edit is True  # typing goes to the buffer, not y/n keys
+        assert japp._secret_mode is False
+        japp._input.text = "postgres"
+        japp._on_accept(japp._input)
+        ans = await task
+        assert ans.value == "refine" and ans.text == "postgres"
+
+    asyncio.get_event_loop_policy().new_event_loop().run_until_complete(scenario())
+
+
+def test_secret_kind_masks_and_skips_history() -> None:
+    import asyncio
+
+    from prompt_toolkit.input import DummyInput
+    from prompt_toolkit.output import DummyOutput
+
+    from autobot.cli.app import JackApp
+    from autobot.cli.classify import Segment
+
+    async def noop(text: str, turn_no: int) -> None:
+        return None
+
+    japp = JackApp(cwd="/x", run_turn=noop, commands={}, input=DummyInput(), output=DummyOutput())
+
+    async def scenario() -> None:
+        task = asyncio.ensure_future(japp.begin_modal(Segment("secret", "Token?")))
+        await asyncio.sleep(0)
+        assert japp._secret_mode is True
+        japp._input.text = "sk-verysecret"
+        kept = japp._on_accept(japp._input)
+        assert kept is True  # True = prompt_toolkit will NOT append the secret to history
+        ans = await task
+        assert ans.text == "sk-verysecret"
+        assert japp._input.text == ""  # buffer wiped by the handler itself
+        assert japp._secret_mode is False
+
+    asyncio.get_event_loop_policy().new_event_loop().run_until_complete(scenario())
