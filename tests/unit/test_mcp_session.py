@@ -912,3 +912,67 @@ def test_mcp_manager_set_confirmer_stores_confirmer() -> None:
     confirmer = _AlwaysAllowConfirmer()
     manager.set_confirmer(confirmer)
     assert manager._confirmer is confirmer
+
+
+# ---------------------------------------------------------------------------
+# Explicit-consent mode tests
+# ---------------------------------------------------------------------------
+
+
+def test_explicit_consent_parks_unapproved_stdio(tmp_path: Path) -> None:
+    """In explicit mode an unapproved stdio server parks pending_consent — nothing spawns."""
+    import asyncio
+
+    from autobot.mcp.config import McpServerConfig
+    from autobot.mcp.session import McpServerWorker
+    from autobot.tools.registry import ToolRegistry
+
+    cfg = McpServerConfig(id="s1", label="s1", transport="stdio", command="echo", enabled=True)
+    events: list[dict[str, Any]] = []
+    loop = asyncio.new_event_loop()
+    try:
+        worker = McpServerWorker(
+            cfg,
+            ToolRegistry(),
+            loop=loop,
+            on_event=events.append,
+            approvals_path=tmp_path / "approved.json",
+            consent="explicit",
+        )
+        loop.run_until_complete(worker.run())
+    finally:
+        loop.close()
+    assert worker.state == "pending_consent"
+    # No auto-approval was recorded (explicit mode never writes approvals itself).
+    from autobot.mcp.approvals import load_approvals
+
+    assert load_approvals(tmp_path / "approved.json").spawn_approvals == {}
+    # A status event carried the parked state to the UI/CLI.
+    assert any(
+        e.get("type") == "mcp_status" and e.get("state") == "pending_consent" for e in events
+    )
+
+
+def test_explicit_consent_passes_when_already_approved(tmp_path: Path) -> None:
+    """A prior recorded approval short-circuits the check (True), same as today."""
+    import asyncio
+
+    from autobot.mcp.approvals import record_spawn_approval
+    from autobot.mcp.config import McpServerConfig
+    from autobot.mcp.session import McpServerWorker
+    from autobot.tools.registry import ToolRegistry
+
+    record_spawn_approval("s1", "echo", ["hi"], tmp_path / "approved.json")
+    cfg = McpServerConfig(id="s1", label="s1", transport="stdio", command="echo", args=("hi",))
+    loop = asyncio.new_event_loop()
+    try:
+        worker = McpServerWorker(
+            cfg,
+            ToolRegistry(),
+            loop=loop,
+            approvals_path=tmp_path / "approved.json",
+            consent="explicit",
+        )
+        assert loop.run_until_complete(worker._check_spawn_consent()) is True
+    finally:
+        loop.close()
