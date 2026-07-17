@@ -45,6 +45,7 @@ def state_label(row: dict[str, Any]) -> tuple[str, str]:
         state != "connected"
         and str(row.get("auth_type", "none")) != "none"
         and not row.get("secret_present")
+        and str(row.get("transport")) == "http"
     )
     if needs_auth and state in ("disconnected", "error"):
         return ("○ auth needed", "amber")

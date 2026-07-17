@@ -35,7 +35,9 @@ def _row(**over: Any) -> dict[str, Any]:
 def test_state_label_derivations() -> None:
     assert mcp_render.state_label(_row())[0] == "● connected"
     assert mcp_render.state_label(_row(state="pending_consent"))[0] == "◌ pending consent"
-    needs_auth = _row(state="disconnected", auth_type="oauth", secret_present=False)
+    needs_auth = _row(
+        state="disconnected", auth_type="oauth", secret_present=False, transport="http"
+    )
     assert mcp_render.state_label(needs_auth)[0] == "○ auth needed"
     assert mcp_render.state_label(_row(state="error"))[0] == "✕ error"
 
