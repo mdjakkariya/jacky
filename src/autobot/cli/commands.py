@@ -18,6 +18,7 @@ COMMANDS: dict[str, str] = {
     "/undo": "revert the last change (or /undo list)",
     "/model": "show or switch the model (/model <name>)",
     "/autonomy": "show or set autonomy (plan|confirm|auto)",
+    "/mcp": "manage MCP servers (list · add · enable · auth · tools; /mcp for the list)",
     "/sessions": "list sessions (or /sessions resume <id>)",
     "/new": "start a fresh session",
     "/output": "show a command's full output (/output [N]; or press ^O)",

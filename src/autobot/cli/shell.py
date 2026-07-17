@@ -138,6 +138,11 @@ def run(base_url: str, cwd: str) -> None:  # pragma: no cover - launches the int
         surface.commit(Text(f"{theme.GLYPH_PROMPT} {text}", style="prompt"))
         parsed = commands.parse(text)
         if parsed is not None:
+            if parsed[0] == "/mcp":
+                from autobot.cli import mcp_repl
+
+                await mcp_repl.handle(parsed[1], surface, base_url=base_url)
+                return
             if parsed[0] == "/output":  # client-side: expand a stashed command's output
                 arg = parsed[1].strip()
                 if not japp.expand_output(int(arg) if arg.isdigit() else None):
