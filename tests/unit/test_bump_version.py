@@ -25,14 +25,14 @@ def test_set_version_in_tauri_json() -> None:
     assert '"version": "1.2.3"' in out
 
 
-def test_set_version_in_uv_lock_targets_the_autobot_package() -> None:
+def test_set_version_in_uv_lock_targets_the_jacky_package() -> None:
     pat, tpl = bump._CLI_FILES["uv.lock"]
-    src = '[[package]]\nname = "autobot"\nversion = "0.1.0"\nsource = { editable = "." }\n'
+    src = '[[package]]\nname = "jacky"\nversion = "0.1.0"\nsource = { editable = "." }\n'
     out = bump.set_version(src, pat, tpl, "0.2.0")
-    assert 'name = "autobot"\nversion = "0.2.0"' in out
-    ref = '{ name = "autobot", extras = ["wake"] }\nname = "autobot"\nversion = "0.1.0"\n'
+    assert 'name = "jacky"\nversion = "0.2.0"' in out
+    ref = '{ name = "jacky", extras = ["wake"] }\nname = "jacky"\nversion = "0.1.0"\n'
     out2 = bump.set_version(ref, pat, tpl, "9.9.9")
-    assert '{ name = "autobot", extras = ["wake"] }' in out2
+    assert '{ name = "jacky", extras = ["wake"] }' in out2
     assert 'version = "9.9.9"' in out2
 
 
@@ -68,7 +68,7 @@ def _seed(root: Path) -> None:
     (root / "ui" / "orb-shell" / "src-tauri").mkdir(parents=True)
     (root / "pyproject.toml").write_text('[project]\nversion = "0.1.0"\n')
     (root / "src" / "autobot" / "__init__.py").write_text('__version__ = "0.1.0"\n')
-    (root / "uv.lock").write_text('[[package]]\nname = "autobot"\nversion = "0.1.0"\n')
+    (root / "uv.lock").write_text('[[package]]\nname = "jacky"\nversion = "0.1.0"\n')
     st = root / "ui" / "orb-shell" / "src-tauri"
     (st / "Cargo.toml").write_text('[package]\nversion = "0.1.0"\n')
     (st / "tauri.conf.json").write_text('{\n  "version": "0.1.0"\n}\n')

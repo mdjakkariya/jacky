@@ -119,7 +119,7 @@ wheels = [
 ]
 
 [[package]]
-name = "autobot"
+name = "jacky"
 version = "0.8.1"
 source = { editable = "." }
 dependencies = [
@@ -195,7 +195,7 @@ whispercpp = [
 [package.metadata]
 requires-dist = [
     { name = "anthropic", marker = "extra == 'cloud'", specifier = ">=0.40" },
-    { name = "autobot", extras = ["wake", "tts"], marker = "extra == 'all'" },
+    { name = "jacky", extras = ["wake", "tts"], marker = "extra == 'all'" },
     { name = "ddgs", marker = "extra == 'web'", specifier = ">=6.0" },
     { name = "fastapi", marker = "extra == 'daemon'", specifier = ">=0.110" },
     { name = "faster-whisper", specifier = ">=1.0.0" },
