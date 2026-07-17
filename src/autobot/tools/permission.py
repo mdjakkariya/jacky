@@ -21,6 +21,7 @@ from typing import Protocol, runtime_checkable
 
 from autobot.core.types import Decision, Risk, ToolCall, ToolResult
 from autobot.logging_setup import get_logger
+from autobot.mcp.adapter import split_namespaced
 from autobot.tools.audit import AuditLog
 from autobot.tools.registry import ToolRegistry, ToolSpec
 
@@ -335,8 +336,6 @@ class PermissionGate:
             return f"Run this command?\n\n  $ {command}{where}"
         # MCP tool: name the server and the action plainly, and make the off-device moment
         # explicit for network-egress servers.
-        from autobot.mcp.adapter import split_namespaced
-
         ns = split_namespaced(name)
         if ns is not None:
             server, bare = ns
