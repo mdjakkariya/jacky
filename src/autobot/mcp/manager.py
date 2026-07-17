@@ -191,6 +191,7 @@ class McpManager:
                     {
                         "server": server_id,
                         "label": cfg.label,
+                        "transport": cfg.transport,
                         "enabled": cfg.enabled,
                         "egress": cfg.egress,
                         "auth_type": cfg.auth_type,
