@@ -44,3 +44,25 @@ def test_listener_survives_a_stream_error() -> None:
     be.start()
     be.close()  # no exception, thread winds down
     assert be.poll_completed() == []
+
+
+def test_mcp_events_reach_the_on_mcp_callback() -> None:
+    from autobot.cli.autoresume import BackgroundEvents
+
+    events: list[dict[str, Any]] = [
+        {"type": "mcp_oauth", "server": "s1", "stage": "browser_open"},
+        {"type": "mcp_status", "server": "s1", "state": "connected", "tool_count": 2},
+        {"type": "task", "status": "done", "id": "t1"},
+    ]
+    seen: list[dict[str, Any]] = []
+    holder: dict[str, BackgroundEvents] = {}
+
+    def fake_stream(base_url: str) -> Iterator[dict[str, Any]]:
+        yield from events
+        holder["bg"].close()  # end the listener after one pass through the fake stream
+
+    bg = BackgroundEvents("http://b", stream_events=fake_stream)
+    holder["bg"] = bg
+    bg.set_on_mcp(seen.append)
+    bg._run()  # synchronous: no thread needed — the stream closes the listener itself
+    assert [e["type"] for e in seen] == ["mcp_oauth", "mcp_status"]

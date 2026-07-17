@@ -976,3 +976,23 @@ def test_explicit_consent_passes_when_already_approved(tmp_path: Path) -> None:
         assert loop.run_until_complete(worker._check_spawn_consent()) is True
     finally:
         loop.close()
+
+
+def test_oauth_stage_event_carries_url_when_given() -> None:
+    import asyncio
+
+    from autobot.mcp.config import McpServerConfig
+    from autobot.mcp.session import McpServerWorker
+    from autobot.tools.registry import ToolRegistry
+
+    cfg = McpServerConfig(id="s1", label="s1", transport="http", url="https://x/mcp")
+    events: list[dict[str, Any]] = []
+    loop = asyncio.new_event_loop()
+    try:
+        worker = McpServerWorker(cfg, ToolRegistry(), loop=loop, on_event=events.append)
+        worker._emit_oauth_stage("browser_open", url="https://auth.example/authorize?x=1")
+        worker._emit_oauth_stage("waiting_callback")
+    finally:
+        loop.close()
+    assert events[0]["url"] == "https://auth.example/authorize?x=1"
+    assert "url" not in events[1]

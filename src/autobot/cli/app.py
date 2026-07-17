@@ -800,6 +800,26 @@ class JackApp:
         except RuntimeError:  # loop closing at shutdown — nothing to resume onto
             _log.debug("could not schedule task pickup (loop closing)")
 
+    def on_mcp_event(self, evt: dict[str, Any]) -> None:
+        """Commit a one-line MCP status/OAuth update to the transcript (thread-safe).
+
+        Fired on the events-listener thread; hops to the app loop. Quiet by design:
+        ``render_mcp_event`` returns ``None`` for chatter (e.g. disconnects), and a
+        closed loop at shutdown is ignored.
+        """
+        loop = self.app.loop
+        if loop is None:
+            return
+        from autobot.cli import mcp_render
+
+        line = mcp_render.render_mcp_event(evt)
+        if line is None:
+            return
+        try:
+            loop.call_soon_threadsafe(self.append_transcript, line)
+        except RuntimeError:  # loop closing at shutdown
+            _log.debug("dropped mcp event line (loop closing)")
+
     def _maybe_pickup(self) -> None:
         """If idle and pickups are queued, notice them and run a continuation turn."""
         if self._exiting or self.busy or not self._pending_pickups:

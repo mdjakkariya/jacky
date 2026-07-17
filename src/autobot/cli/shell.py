@@ -195,6 +195,7 @@ def run(base_url: str, cwd: str) -> None:  # pragma: no cover - launches the int
             japp.on_task_finished(events.poll_completed())
 
     events.set_waker(_waker)
+    events.set_on_mcp(japp.on_mcp_event)
     events.start()
     try:
         asyncio.run(japp.run_async())

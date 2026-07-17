@@ -519,7 +519,7 @@ class McpServerWorker:
 
         async def redirect_handler(url: str) -> None:
             _log.info("mcp oauth redirect server=%s", self._cfg.id)
-            self._emit_oauth_stage("browser_open")
+            self._emit_oauth_stage("browser_open", url=url)
             open_browser(url)
 
         async def callback_handler() -> tuple[str, str | None]:
@@ -554,19 +554,22 @@ class McpServerWorker:
         provider._initialize = _initialize_then_expire
         return provider
 
-    def _emit_oauth_stage(self, stage: str) -> None:
+    def _emit_oauth_stage(self, stage: str, url: str | None = None) -> None:
         """Publish an mcp_oauth event for the UI (never raises).
 
         Args:
             stage: A string identifying the OAuth flow stage (e.g. ``"browser_open"``).
+            url: The authorize URL, included only for ``browser_open`` so a UI can
+                offer it as a fallback when the browser didn't open.
         """
-        self._emit_event(
-            {
-                "type": "mcp_oauth",
-                "server": self._cfg.id,
-                "stage": stage,
-            }
-        )
+        payload: dict[str, Any] = {
+            "type": "mcp_oauth",
+            "server": self._cfg.id,
+            "stage": stage,
+        }
+        if url:
+            payload["url"] = url
+        self._emit_event(payload)
 
     def _emit_event(self, payload: dict[str, Any]) -> None:
         """Publish any structured event to the sink (never raises).
