@@ -154,12 +154,8 @@ async def _enable(server_id: str, surface: Surface, base_url: str, deps: Deps) -
     if not granted.get("ok"):
         surface.commit(_result_line(granted, ""))
         return
-    row = granted.get("server") or {}
     surface.commit(
-        _line(
-            f"● {server_id} {row.get('state', 'connecting')} — {row.get('tool_count', 0)} tools",
-            "green",
-        )
+        _line(f"{server_id}: consent granted — connecting… (watch for the connected line)")
     )
 
 
@@ -250,7 +246,13 @@ async def _auth(rest: list[str], surface: Surface, base_url: str, deps: Deps) ->
         surface.commit(
             _line(f"✓ stored in Keychain as mcp.{server_id}.token — never written to disk", "green")
         )
-        deps.enable_server(base_url, server_id)  # reconnect with the new credential
+        reconnect = deps.enable_server(base_url, server_id)  # reconnect with the new credential
+        if not reconnect.get("ok"):
+            surface.commit(
+                _dim(
+                    f"token stored, but reconnect failed: {reconnect.get('error', 'unknown error')}"
+                )
+            )
         return
     res = deps.auth_start(base_url, server_id)
     if not res.get("ok"):

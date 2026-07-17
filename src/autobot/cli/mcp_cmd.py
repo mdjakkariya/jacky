@@ -127,8 +127,10 @@ def run(
         return 0 if res.get("ok") else _fail(res, out)
     if verb in ("on", "off") and not rest:
         res = deps.post_settings(base_url, {"allow_mcp": verb == "on"})
+        if not res.get("ok"):
+            return _fail(res, out)
         out(f"MCP {'enabled' if verb == 'on' else 'disabled'}.")
-        return 0 if res.get("ok") else 1
+        return 0
     out(_USAGE)
     return 2
 
@@ -215,8 +217,7 @@ def _enable(
     granted = deps.grant_consent(base_url, server_id)
     if not granted.get("ok"):
         return _fail(granted, out)
-    row = granted.get("server") or {}
-    out(f"{server_id} {row.get('state', 'connecting')} — {row.get('tool_count', 0)} tools")
+    out(f"{server_id}: consent granted, connecting…")
     return 0
 
 
@@ -252,7 +253,10 @@ def _auth(
         if not res.get("ok"):
             return _fail(res, out)
         out(f"stored in Keychain as mcp.{server_id}.token")
-        deps.enable_server(base_url, server_id)
+        res = deps.enable_server(base_url, server_id)
+        if not res.get("ok"):
+            out(f"token stored, but reconnect failed: {res.get('error', 'unknown error')}")
+            return 1
         return 0
     res = deps.auth_start(base_url, server_id)
     if not res.get("ok"):

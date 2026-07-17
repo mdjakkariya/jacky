@@ -196,3 +196,37 @@ def test_on_off_and_tool() -> None:
 
 def test_unknown_verb_is_usage_error() -> None:
     assert run(["wat"], base_url="http://b", deps=_deps(), out=lambda s: None) == 2
+
+
+def test_off_does_not_claim_success_on_failed_settings_write() -> None:
+    lines: list[str] = []
+
+    def _post_settings(b: str, u: dict[str, Any]) -> dict[str, Any]:
+        return {"ok": False, "error": "disk full"}
+
+    rc = run(
+        ["off"],
+        base_url="http://b",
+        deps=_deps(post_settings=_post_settings),
+        out=lines.append,
+    )
+    assert rc == 1
+    assert not any("MCP disabled." in line for line in lines)
+    assert any("disk full" in line for line in lines)
+
+
+def test_auth_token_reports_failed_reconnect() -> None:
+    lines: list[str] = []
+
+    def _enable_server(b: str, s: str) -> dict[str, Any]:
+        return {"ok": False, "error": "daemon unreachable"}
+
+    rc = run(
+        ["auth", "notion", "--token"],
+        base_url="http://b",
+        deps=_deps(enable_server=_enable_server),
+        ask_secret=lambda p: "tok-9",
+        out=lines.append,
+    )
+    assert rc == 1
+    assert any("reconnect failed" in line for line in lines)
