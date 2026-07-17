@@ -13,8 +13,8 @@ identical across surfaces.
 ## Quick start (cloud, Anthropic)
 
 ```bash
-# 1. Install deps (cloud extra brings the Anthropic SDK)
-uv sync --extra cloud
+# 1. Install deps (the Anthropic SDK is a base dep)
+uv sync
 
 # 2. Configure the coder from the CLI (see "Managing config" below)
 jack config set-key anthropic          # paste the key at the hidden prompt → OS keyring

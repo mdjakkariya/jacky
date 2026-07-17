@@ -376,8 +376,8 @@ def _build_llm(
         except ImportError:
             log.warning("cloud LLM extra missing, falling back to local")
             print(
-                "[llm] cloud needs the 'anthropic' package — run `uv sync --extra cloud`. "
-                "Using local Ollama for now."
+                "[llm] cloud needs the 'anthropic' package — run `uv sync` (it's a base "
+                "dep; a missing install means the env is stale). Using local Ollama for now."
             )
         except ValueError as exc:
             log.warning("cloud LLM unavailable, falling back to local: %s", exc)

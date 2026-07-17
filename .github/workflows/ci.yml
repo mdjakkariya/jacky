@@ -22,12 +22,11 @@ jobs:
         run: uv python install 3.11
 
       - name: Sync dependencies
-        # `daemon` (fastapi) is needed so the daemon-server tests run in CI and their
-        # coverage counts; without it those tests skip and server.py shows 0% covered.
-        # `tui` (rich + prompt_toolkit) is needed so the cli shell type-checks and its
-        # tests don't skip. `e2e` (pyte, pure-Python) lets the E2E harness's own unit
-        # tests run with fakes (no real PTY) so markers/runner/observe coverage counts.
-        run: uv sync --extra dev --extra daemon --extra tui --extra e2e
+        # The coder stack (tui/daemon/cloud) is in base deps (#96), so plain sync
+        # covers the daemon-server and cli-shell tests. `e2e` (pyte, pure-Python)
+        # lets the E2E harness's own unit tests run with fakes (no real PTY) so
+        # markers/runner/observe coverage counts.
+        run: uv sync --extra dev --extra e2e
 
       - name: Lint (ruff)
         run: uv run ruff check .
