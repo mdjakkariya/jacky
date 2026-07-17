@@ -71,3 +71,34 @@ def test_remove_server_uses_delete() -> None:
 
     assert mcp_client.remove_server("http://b", "s1", delete=delete) == {"ok": True}
     assert urls == ["http://b/mcp/servers/s1"]
+
+
+def test_list_tools_hits_endpoint() -> None:
+    def get(url: str, timeout: float) -> dict[str, Any]:
+        assert url == "http://b/mcp/servers/s1/tools"
+        return {"ok": True, "tools": [{"name": "t1"}]}
+
+    result = mcp_client.list_tools("http://b", "s1", get=get)
+    assert result == {"ok": True, "tools": [{"name": "t1"}]}
+
+
+def test_list_tools_transport_error_is_soft() -> None:
+    def get(url: str, timeout: float) -> dict[str, Any]:
+        raise urllib.error.URLError("down")
+
+    out = mcp_client.list_tools("http://b", "s1", get=get)
+    assert out["ok"] is False and "down" in out["error"]
+
+
+def test_remove_server_transport_error_is_soft() -> None:
+    def delete(url: str, timeout: float) -> dict[str, Any]:
+        raise urllib.error.URLError("gone")
+
+    out = mcp_client.remove_server("http://b", "s1", delete=delete)
+    assert out["ok"] is False and "gone" in out["error"]
+
+
+def test_set_tool_sends_both_fields_when_given() -> None:
+    calls, post = _recorder({"ok": True})
+    mcp_client.set_tool("http://b", "s1", "t1", risk="write", enabled=True, post=post)
+    assert calls == [("http://b/mcp/servers/s1/tools/t1", {"risk": "write", "enabled": True})]
