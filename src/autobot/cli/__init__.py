@@ -192,6 +192,20 @@ def main(argv: list[str] | None = None) -> int:
     if argv and argv[0] == "config":
         action = argv[1] if len(argv) > 1 else "show"
         return _run_config(action, argv[2:], f"http://127.0.0.1:{_CODER_PORT}")
+    if argv and argv[0] == "mcp":
+        from autobot.cli.mcp_cmd import run as mcp_run
+
+        ws = resolve_workspace(Path.cwd(), None)
+        if not _ensure_trusted(ws):
+            return 1
+        port = workspace_port(str(ws))
+        base_url = f"http://127.0.0.1:{port}"
+        try:
+            ensure_daemon(base_url, port, workspace=str(ws))
+        except (RuntimeError, TimeoutError) as exc:
+            print(str(exc), file=sys.stderr)
+            return 1
+        return mcp_run(argv[1:], base_url=base_url)
     if argv and argv[0] == "cost":
         return _run_cost(argv[1:])
     if argv and argv[0] == "debug":
