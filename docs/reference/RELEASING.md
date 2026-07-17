@@ -14,7 +14,7 @@ resulting tag is what triggers the build.
 | Version files    | `pyproject.toml`, `src/autobot/__init__.py`                 | `ui/orb-shell/src-tauri/{Cargo.toml,Cargo.lock,tauri.conf.json}` |
 | Bump command      | `make release-cli VERSION=x`                                 | `make release-orb VERSION=x`                              |
 | Tag              | `vX.Y.Z`                                                     | `orb-vX.Y.Z`                                              |
-| Build             | **CI** (`.github/workflows/release.yml`) — engine wheel/sdist + 5 `jack` binaries | **Manual, on a Mac** (`make bundle` + `make publish-orb`) |
+| Build             | **CI** (`.github/workflows/release.yml`) — engine wheel/sdist + 5 `jack` binaries + PyPI publish (`jacky`) | **Manual, on a Mac** (`make bundle` + `make publish-orb`) |
 | Changelog config | [`cliff.cli.toml`](../../cliff.cli.toml)                     | [`cliff.orb.toml`](../../cliff.orb.toml)                  |
 | Changelog file   | [`CHANGELOG-cli.md`](../../CHANGELOG-cli.md)                 | [`CHANGELOG-orb.md`](../../CHANGELOG-orb.md)               |
 | Changelog command | `make changelog-cli VERSION=x`                              | `make changelog-orb VERSION=x`                             |
@@ -28,8 +28,11 @@ pushed on the already-merged commit — is what triggers the build.
 ## CLI/engine release
 
 This is the **automated** path: pushing a `vX.Y.Z` tag builds the Python engine
-(wheel + sdist) *and* the `jack` CLI binaries for every platform we publish, then
-attaches them all to one GitHub Release.
+(wheel + sdist) *and* the `jack` CLI binaries for every platform we publish,
+attaches them all to one GitHub Release, and publishes the engine to **PyPI** as
+[`jacky`](https://pypi.org/project/jacky/) (the repo's name — `autobot` and `jack`
+are both squatted on PyPI by abandoned 2014 packages; the import package and the
+`jack`/`autobot` commands keep their names).
 
 ```bash
 git checkout -b release/v0.8.1 main
@@ -56,14 +59,24 @@ Pushing the tag triggers `.github/workflows/release.yml`, which:
    regardless — but a warning here means the release PR's bump was wrong or
    skipped, so treat it as a signal to double-check.
 2. **release** — sets the build version from the tag (`scripts/bump_version.py cli`),
-   runs `uv build`, and creates the GitHub Release for the tag.
+   runs `uv build`, creates the GitHub Release for the tag, and uploads the dist as
+   a workflow artifact for the publish job.
 3. **binaries** — after `release`, builds and attaches the frozen `jack` CLI
    binary for every published platform, in parallel (`fail-fast: false`, so one
    platform breaking doesn't cancel the rest).
+4. **publish-pypi** — after `release`, publishes the wheel + sdist to PyPI as
+   `jacky` via **Trusted Publishing** (OIDC): no API-token secret exists — PyPI
+   verifies a short-lived token minted for this repo + `release.yml` + the `pypi`
+   GitHub environment. That environment has a **required-reviewer rule, so the job
+   waits until you approve it in the run's page** (Actions → the release run →
+   *Review deployments*). PyPI files are immutable — a published version can never
+   be re-uploaded, so fixing a bad release means a new patch tag (re-running a
+   *failed* publish job is fine).
 
 What ends up attached to the `v0.8.1` Release:
 
-- `autobot-*.whl` / `autobot-*.tar.gz` — the Python engine (wheel + sdist).
+- `jacky-*.whl` / `jacky-*.tar.gz` — the Python engine (wheel + sdist; the same
+  files that land on PyPI).
 - `jack-0.8.1-<os>-<arch>.(tar.gz|zip)` + a matching `.sha256` for each of:
   macOS arm64, macOS x64, Linux x64, Linux arm64, Windows x64.
 

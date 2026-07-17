@@ -1,7 +1,8 @@
 # Publish a release when a version tag (vX.Y.Z) is pushed. This is the CLI/engine
-# track: it builds the `jack` CLI binaries + the Python engine wheel/sdist and
-# creates the GitHub Release for them. The macOS **orb** app releases on its own,
-# independent track — tag `orb-vX.Y.Z`, built locally (see `docs/reference/RELEASING.md`).
+# track: it builds the `jack` CLI binaries + the Python engine wheel/sdist, creates
+# the GitHub Release for them, and publishes the engine to PyPI as `jacky` via
+# Trusted Publishing (OIDC). The macOS **orb** app releases on its own, independent
+# track — tag `orb-vX.Y.Z`, built locally (see `docs/reference/RELEASING.md`).
 #
 # The manifest bump lands on the default branch via a **release PR** (branch
 # protection blocks direct pushes — including this workflow's bot — so CI does NOT
@@ -18,8 +19,11 @@ on:
   push:
     tags: ["v*.*.*"]
 
+# Least privilege: read-only by default. The jobs that create the GitHub Release
+# elevate to `contents: write`; publish-pypi instead gets only `id-token: write`
+# (the OIDC handshake PyPI's Trusted Publishing verifies).
 permissions:
-  contents: write # create the GitHub Release and upload assets
+  contents: read
 
 jobs:
   # Gate: the same quality checks as CI — so sync the SAME extras CI does
@@ -48,6 +52,8 @@ jobs:
   release:
     needs: gate
     runs-on: ubuntu-latest
+    permissions:
+      contents: write # create the GitHub Release and upload assets
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v3
@@ -61,6 +67,16 @@ jobs:
         run: uv run python scripts/bump_version.py cli "${GITHUB_REF_NAME#v}"
       - name: Build engine (wheel + sdist)
         run: uv build # -> dist/*.whl, dist/*.tar.gz
+
+      # Hand the wheel/sdist to the publish-pypi job. PyPI's security guidance wants
+      # the publishing job minimal (no checkout, no build tools), so it consumes this
+      # artifact instead of rebuilding.
+      - name: Upload the dist for the PyPI publish job
+        uses: actions/upload-artifact@v4
+        with:
+          name: engine-dist
+          path: dist/
+          if-no-files-found: error
 
       - name: Create the GitHub Release (CLI wheel + engine sdist)
         uses: softprops/action-gh-release@v2
@@ -79,16 +95,43 @@ jobs:
             are attached below; `jack update` self-updates.
 
             > **Intel Mac (macOS x64) is not published yet** — pending a dependency change.
-            > On an Intel Mac, install via the wheel: `uv tool install ./autobot-*.whl`.
+            > On an Intel Mac, install from PyPI instead: `uv tool install jacky`.
 
-            **Engine (library):** install the attached wheel —
-            `uv tool install ./autobot-*.whl` (or `pipx install ./autobot-*.whl`).
+            **Engine (from PyPI):** `uv tool install jacky` (or `pipx install jacky`) —
+            https://pypi.org/project/jacky/. The wheel + sdist are also attached below.
 
             The macOS **orb app** releases on its own track (`orb-vX.Y.Z`).
 
       # No bump-back: branch protection blocks direct pushes to the default branch
       # (the bot included), so the manifest bump lands via the release PR instead.
       # See docs/reference/RELEASING.md.
+
+  # Publish the engine (wheel + sdist) to PyPI as `jacky` via Trusted Publishing:
+  # PyPI verifies a short-lived OIDC token minted for THIS repo + workflow +
+  # environment — no API-token secret anywhere. The trusted publisher on PyPI is
+  # registered against `release.yml` + environment `pypi`, whose protection rules
+  # (required reviewer) hold this job until it's approved in the Actions UI. The
+  # job is deliberately minimal per PyPI's security guidance — no checkout, no
+  # build tools, only the downloaded dist. pypa/gh-action-pypi-publish also
+  # generates PEP 740 attestations by default. PyPI files are immutable: a failed
+  # half-publish can be re-run, but a *published* version can never be re-uploaded
+  # — fixing a bad release means a new patch tag.
+  publish-pypi:
+    needs: [gate, release]
+    runs-on: ubuntu-latest
+    environment:
+      name: pypi
+      url: https://pypi.org/project/jacky/
+    permissions:
+      id-token: write # the OIDC handshake with PyPI; nothing else
+    steps:
+      - name: Download the built dist
+        uses: actions/download-artifact@v4
+        with:
+          name: engine-dist
+          path: dist/
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
 
   # Build, smoke-test, and attach the frozen `jack` CLI binary for each platform we
   # publish (see `autobot.update.asset_name` for the os/arch strings this must match).
@@ -99,6 +142,8 @@ jobs:
     # After `release` (not just `gate`): both attach to the same tag's Release, so
     # serialize to avoid a first-tag race where both try to create it.
     needs: [gate, release]
+    permissions:
+      contents: write # attach the per-OS binaries to the GitHub Release
     strategy:
       # One OS breaking (e.g. a PyInstaller hook missing a platform-specific dylib)
       # must not cancel the other four builds.

@@ -1,12 +1,32 @@
+# The PyPI distribution is `jacky` (the repo's name — `autobot` and `jack` are both
+# squatted on PyPI); the import package stays `autobot` and the commands stay
+# `jack`/`autobot`/`autobot-daemon`. Distribution, import, and script names are
+# independent, so only this field (and the self-referential `all` extra) carries it.
 [project]
-name = "autobot"
+name = "jacky"
 version = "0.8.1"
 description = "A local, privacy-first, English-only voice assistant."
 readme = "README.md"
 requires-python = ">=3.11"
-license = { text = "Apache-2.0" }
+license = "Apache-2.0"
+license-files = ["LICENSE"]
 authors = [{ name = "Mohamed Jakkariya" }]
 keywords = ["voice-assistant", "local", "privacy", "stt", "llm", "ollama"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "Intended Audience :: End Users/Desktop",
+    "Operating System :: MacOS",
+    "Operating System :: POSIX :: Linux",
+    "Operating System :: Microsoft :: Windows",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Software Development",
+    "Topic :: Utilities",
+]
 
 # Runtime dependencies. Heavy model runtimes are imported lazily in their
 # modules so that tooling and unit tests do not need them installed.
@@ -34,7 +54,7 @@ tts = [
 # Everything needed to actually run hands-free with voice: `uv sync --extra all`.
 # Deliberately excludes 'web' — that one leaves the device and stays opt-in.
 all = [
-    "autobot[wake,tts]",
+    "jacky[wake,tts]",
 ]
 # Web search (opt-in; the only off-device feature). `uv sync --extra web`.
 web = [
@@ -114,6 +134,12 @@ dev = [
     "pre-commit>=3.7",
 ]
 
+[project.urls]
+Homepage = "https://github.com/mdjakkariya/jacky"
+Repository = "https://github.com/mdjakkariya/jacky"
+Changelog = "https://github.com/mdjakkariya/jacky/blob/main/CHANGELOG-cli.md"
+Issues = "https://github.com/mdjakkariya/jacky/issues"
+
 [project.scripts]
 autobot = "autobot.app:main"
 autobot-daemon = "autobot.daemon.__main__:main"
@@ -122,6 +148,13 @@ jack = "autobot.cli:main"
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
+
+# The sdist is what PyPI ships to anyone building from source — allow-list it to the
+# Python package (+ tests, for distro packagers). Without this, hatchling packs the
+# whole repo (Tauri UI, Swift sidecar, CI config …) and only honors the ROOT
+# .gitignore, so nested ignores like autobot-syscap/.build/ leak in too.
+[tool.hatch.build.targets.sdist]
+only-include = ["src", "tests"]
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/autobot"]

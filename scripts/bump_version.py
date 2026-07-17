@@ -3,7 +3,7 @@
 Jack releases on two independent tracks, each with its own version and tag:
 
 - ``cli`` (the engine/CLI) — ``pyproject.toml``, ``src/autobot/__init__.py``, and the
-  ``autobot`` entry in ``uv.lock``; tagged ``vX.Y.Z``.
+  ``jacky`` entry in ``uv.lock`` (the PyPI distribution name); tagged ``vX.Y.Z``.
 - ``orb`` (the macOS app) — ``src-tauri/Cargo.toml``, ``src-tauri/tauri.conf.json``, and
   the ``jack-orb`` entry in ``src-tauri/Cargo.lock``; tagged ``orb-vX.Y.Z``.
 
@@ -43,11 +43,11 @@ _CLI_FILES: dict[str, tuple[re.Pattern[str], str]] = {
         re.compile(r'(?m)^__version__ = "[^"]+"'),
         '__version__ = "{v}"',
     ),
-    # The engine's own entry in uv's lockfile (the editable ``autobot`` package),
+    # The engine's own entry in uv's lockfile (the editable ``jacky`` distribution),
     # pinned by name so we never touch a dependency.
     "uv.lock": (
-        re.compile(r'name = "autobot"\nversion = "[^"]+"'),
-        'name = "autobot"\nversion = "{v}"',
+        re.compile(r'name = "jacky"\nversion = "[^"]+"'),
+        'name = "jacky"\nversion = "{v}"',
     ),
 }
 _ORB_FILES: dict[str, tuple[re.Pattern[str], str]] = {
