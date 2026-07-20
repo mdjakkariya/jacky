@@ -173,6 +173,46 @@ def test_request_times_out_when_no_response() -> None:
         client.request("textDocument/definition", {})
 
 
+class _QueueTransport:
+    """A transport that yields pre-scripted messages from ``receive`` (``send`` is a sink)."""
+
+    def __init__(self, messages: list[dict[str, Any]]) -> None:
+        self._msgs = deque(messages)
+        self.sent: list[dict[str, Any]] = []
+
+    def send(self, message: dict[str, Any]) -> None:
+        self.sent.append(message)
+
+    def receive(self, timeout: float | None = None) -> dict[str, Any] | None:
+        return self._msgs.popleft() if self._msgs else None
+
+
+def _diag(uri: str, diags: list[dict[str, Any]]) -> dict[str, Any]:
+    return {
+        "method": "textDocument/publishDiagnostics",
+        "params": {"uri": uri, "diagnostics": diags},
+    }
+
+
+def test_await_diagnostics_returns_matching_uri() -> None:
+    t = _QueueTransport(
+        [
+            {"method": "window/logMessage", "params": {}},  # unrelated — skipped
+            _diag("file:///a.py", [{"message": "boom", "severity": 1}]),
+        ]
+    )
+    assert LspClient(t).await_diagnostics("file:///a.py") == [{"message": "boom", "severity": 1}]
+
+
+def test_await_diagnostics_ignores_other_uris_then_times_out_empty() -> None:
+    t = _QueueTransport([_diag("file:///other.py", [{"message": "x"}])])  # never a.py, then None
+    assert LspClient(t, timeout=0.05).await_diagnostics("file:///a.py") == []
+
+
+def test_await_diagnostics_empty_on_timeout() -> None:
+    assert LspClient(_QueueTransport([]), timeout=0.05).await_diagnostics("file:///a.py") == []
+
+
 def test_sync_dedups_open_and_change() -> None:
     transport = _FakeTransport(lambda m: [])  # sync only sends notifications, no responses
     client = LspClient(transport)
