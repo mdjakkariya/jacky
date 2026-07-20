@@ -11,6 +11,7 @@ from autobot.tools.code.tools import (
     edit_file,
     multi_edit,
     read_file,
+    read_files,
     register_code_tools,
     write_file,
 )
@@ -88,6 +89,32 @@ def test_read_file_char_cap_gives_accurate_resume_offset(tmp_path: Path) -> None
     assert 1 < resume < 2000
     out2 = read_file(str(f), _broker(tmp_path), offset=resume)
     assert f"\n{resume}\t" in out2  # the resume read starts exactly at the promised line
+
+
+def test_read_files_reads_several(tmp_path: Path) -> None:
+    (tmp_path / "a.py").write_text("aaa\n")
+    (tmp_path / "b.py").write_text("bbb\n")
+    out = read_files([str(tmp_path / "a.py"), str(tmp_path / "b.py")], _broker(tmp_path))
+    assert "a.py" in out and "aaa" in out
+    assert "b.py" in out and "bbb" in out
+
+
+def test_read_files_shows_per_file_error_inline(tmp_path: Path) -> None:
+    (tmp_path / "a.py").write_text("aaa\n")
+    out = read_files([str(tmp_path / "a.py"), str(tmp_path / "missing.py")], _broker(tmp_path))
+    assert "aaa" in out  # the readable file still shown
+    assert "no file" in out.lower()  # the missing one's error is inline, not a hard failure
+
+
+def test_read_files_rejects_non_list(tmp_path: Path) -> None:
+    out = read_files("a.py", _broker(tmp_path))  # type: ignore[arg-type]
+    assert isinstance(out, str)
+    assert "list" in out.lower()
+
+
+def test_read_files_registered(tmp_path: Path) -> None:
+    reg = _registry(tmp_path)
+    assert reg.get("read_files") is not None
 
 
 def test_write_file_creates_new(tmp_path: Path) -> None:

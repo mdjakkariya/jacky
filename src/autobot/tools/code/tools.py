@@ -34,6 +34,9 @@ _log = get_logger("coder")
 _READ_CHAR_CAP = 100_000  # max chars returned into the conversation
 _READ_LINE_CAP = 2000  # max lines returned in one read_file call
 _MAX_DIFF_LINES = 160  # cap the diff streamed to the UI so a big rewrite can't flood the view
+_MULTI_READ_MAX_FILES = 20  # max files per read_files call
+_MULTI_READ_PER_FILE_LINES = 400  # lines returned per file in a multi-file read
+_MULTI_READ_CHAR_CAP = 100_000  # total chars across a read_files call
 
 
 def _emit_diff(old: str, new: str, name: str) -> None:
@@ -125,6 +128,38 @@ def read_file(path: str, broker: AccessBroker, offset: int = 1, limit: int = 0) 
     )
     _log.info("read_file name=%r lines=%d offset=%d", resolved.name, kept, start)
     return f"{resolved.name} (lines {start}-{shown} of {total}):\n{numbered}{tail}"
+
+
+def read_files(paths: list[str] | None, broker: AccessBroker) -> str:
+    """Read several files in one call (gated), each line-numbered and bounded.
+
+    A convenience over many ``read_file`` calls: each path is read (up to
+    ``_MULTI_READ_PER_FILE_LINES`` lines) and the blocks are concatenated within a total
+    character budget. A file that can't be read shows its error inline rather than failing the
+    whole call; per-file reads still count toward the read-before-edit set.
+    """
+    if not paths:
+        return ToolFailure(
+            "Which files should I read? Pass a list of paths.", ErrorCategory.INVALID
+        )
+    if not isinstance(paths, list):  # untrusted JSON: a scalar would iterate by character
+        return ToolFailure("`paths` must be a list of file paths.", ErrorCategory.INVALID)
+    blocks: list[str] = []
+    used = 0
+    for raw in paths[:_MULTI_READ_MAX_FILES]:
+        block = read_file(str(raw), broker, offset=1, limit=_MULTI_READ_PER_FILE_LINES)
+        blocks.append(block)
+        used += len(block)
+        if used > _MULTI_READ_CHAR_CAP:
+            blocks.append("…(remaining files not shown — read them individually)")
+            break
+    if len(paths) > _MULTI_READ_MAX_FILES:
+        blocks.append(
+            f"…({len(paths) - _MULTI_READ_MAX_FILES} more path(s) not read; cap is "
+            f"{_MULTI_READ_MAX_FILES} per call)"
+        )
+    _log.info("read_files count=%d", min(len(paths), _MULTI_READ_MAX_FILES))
+    return "\n\n".join(blocks)
 
 
 def write_file(path: str, content: str, broker: AccessBroker) -> str:
@@ -301,6 +336,30 @@ def register_code_tools(
             handler=lambda path="", offset=1, limit=0: read_file(path, broker, offset, limit),
             risk=Risk.READ_ONLY,
             ack="Reading that file.",
+        )
+    )
+    registry.register(
+        ToolSpec(
+            name="read_files",
+            description=(
+                "Read several files at once — pass `paths` (a list). Use this instead of many "
+                "read_file calls when you want to see a handful of files together (each is "
+                "line-numbered and bounded). For paging through one large file, use read_file."
+            ),
+            parameters={
+                "type": "object",
+                "properties": {
+                    "paths": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "File paths to read.",
+                    },
+                },
+                "required": ["paths"],
+            },
+            handler=lambda paths=None: read_files(paths, broker),
+            risk=Risk.READ_ONLY,
+            ack="Reading those files.",
         )
     )
     registry.register(
