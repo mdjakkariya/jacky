@@ -323,7 +323,10 @@ def _print_update_notice() -> None:
 
     from autobot import __version__, update
 
-    with contextlib.suppress(Exception):
+    # Runs last, after main()'s KeyboardInterrupt handler, and does a blocking network
+    # fetch. A Ctrl+C here should exit cleanly, not dump a traceback — and since
+    # KeyboardInterrupt is a BaseException, plain suppress(Exception) would miss it.
+    with contextlib.suppress(Exception, KeyboardInterrupt):
         latest = update.check_for_update(
             __version__, time.time(), update.cache_path(), update.fetch_latest_version
         )

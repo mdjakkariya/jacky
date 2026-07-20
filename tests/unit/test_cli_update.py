@@ -75,3 +75,16 @@ def test_print_update_notice_silent_when_up_to_date(
     captured = capsys.readouterr()
     assert captured.out == ""
     assert captured.err == ""
+
+
+def test_print_update_notice_swallows_keyboard_interrupt(monkeypatch: pytest.MonkeyPatch) -> None:
+    # The notice runs last, after the main run's KeyboardInterrupt handler, and does a
+    # blocking network fetch. A Ctrl+C during it must exit cleanly, not dump a traceback —
+    # KeyboardInterrupt is a BaseException, so suppress(Exception) alone would miss it.
+    import autobot.update as up
+
+    def _interrupt(*a: object, **k: object) -> str:
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(up, "check_for_update", _interrupt)
+    _print_update_notice()  # must not raise
