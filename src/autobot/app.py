@@ -873,12 +873,17 @@ def build(
         # at the pre-connect cwd while checkpoints land in the live one — the ref would not
         # resolve. Reading live keeps create and restore on the same repo.
         def _undo_latest() -> tuple[bool, str]:
-            """Restore the newest checkpoint for the coder's cwd (used by /undo)."""
+            """Restore the newest checkpoint for the coder's cwd (used by /undo and the tool)."""
             cwd = str(access_policy.cwd)
             cps = list_checkpoints(cwd)
             if not cps:
                 return False, "Nothing to undo."
             return restore_checkpoint(cwd, cps[0].ref)
+
+        if settings.checkpoints:  # give the model the same rollback the CLI /undo has
+            from autobot.tools.code.checkpoint_tool import register_undo_tool
+
+            register_undo_tool(registry, _undo_latest)
 
         def _checkpoint_dicts() -> list[dict[str, str]]:
             """Checkpoints as plain dicts for the daemon/CLI (used by /undo list)."""
