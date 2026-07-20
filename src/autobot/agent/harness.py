@@ -197,7 +197,34 @@ class AgentHarness:
             progressed = False  # did any tool this round actually succeed (real forward progress)?
             last_fail = ""
             doomed = False
+            # Fail-fast within a batch: the model can't have seen an earlier call's failure yet
+            # (results feed back only after the whole batch, at record_results below), so a later
+            # call that depends on it would run against bad/half-done state. Once one call fails,
+            # stop executing the rest of THIS batch and defer them to the next round with an
+            # explicit result — the model reads the real error, then re-plans.
+            batch_failed = False
+            blocker_label = ""
+            deferred = 0
             for call in resp.tool_calls:
+                if batch_failed:
+                    # Deferred, not failed: intentionally NOT recorded in `seen`/`failed`, so the
+                    # model may re-issue this call freely once the blocker is resolved.
+                    deferred += 1
+                    results.append(
+                        (
+                            call,
+                            ToolResult(
+                                name=call.name,
+                                content=(
+                                    f"skipped — not run because an earlier step in this batch "
+                                    f"({blocker_label}) failed. Read that error, then re-issue "
+                                    "this call if it's still needed."
+                                ),
+                                ok=False,
+                            ),
+                        )
+                    )
+                    continue
                 discovery = self._model.handle_discovery(self._session, call)
                 if discovery is not None:
                     all_repeat = False  # discovery is real progress, not a failing repeat
@@ -211,6 +238,9 @@ class AgentHarness:
                 if key in failed:
                     out, ok = failed[key], False  # already failed — reuse, don't re-run
                     last_fail = out
+                    # NOT a fail-fast trigger: a reused failure was already surfaced to the
+                    # model in an earlier round, so this batch was planned with it known — let
+                    # any independent sibling calls run (the all_repeat guard handles thrash).
                 else:
                     all_repeat = False
                     emit(
@@ -248,7 +278,15 @@ class AgentHarness:
                     else:
                         failed[key] = out
                         last_fail = out
+                        batch_failed = True  # short-circuit any dependent follow-ups in this batch
+                        blocker_label = tool_label(call)
                 results.append((call, ToolResult(name=call.name, content=out, ok=ok)))
+            if deferred:
+                _log.info(
+                    "batch fail-fast: %s failed; deferred %d follow-up call(s) to next round",
+                    blocker_label,
+                    deferred,
+                )
             if self._redact is not None:
                 # Egress chokepoint: scrub secret-shaped tool output before it enters the
                 # conversation the model sees, regardless of provider.
