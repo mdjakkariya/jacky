@@ -25,6 +25,7 @@ from autobot.tools.code.plan import register_plan_tool
 from autobot.tools.code.repomap import register_repomap_tool
 from autobot.tools.code.search import register_nav_tools
 from autobot.tools.code.shell import register_exec_tools
+from autobot.tools.code.symbol_nav import register_symbol_tool
 from autobot.tools.registry import ToolFailure, ToolRegistry, ToolSpec
 
 if TYPE_CHECKING:
@@ -674,4 +675,5 @@ def register_code_tools(
         task_inbox=task_inbox,
     )
     register_repomap_tool(registry, broker)
+    register_symbol_tool(registry, broker)
     register_plan_tool(registry)
