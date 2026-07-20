@@ -14,7 +14,7 @@ from __future__ import annotations
 import difflib
 import shutil
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from autobot.core.streaming import output_sink
 from autobot.core.types import ErrorCategory, Risk
@@ -268,6 +268,61 @@ def edit_file(
     return f"Edited {resolved.name} ({result.detail})."
 
 
+def _apply_edit_list(
+    working: str,
+    edits: list[dict[str, str]],
+    broker: AccessBroker,
+    resolved: Path,
+    *,
+    label: str,
+) -> tuple[str | None, str, str]:
+    """Apply an ordered list of ``{find, replace}`` edits to ``working`` (in memory, no I/O).
+
+    Returns ``(new_text, "", "")`` on success or ``(None, message, category)`` on the first
+    failure — a bad shape, no/ambiguous match, or a ``find`` that a previous edit's ``replace``
+    produced. ``label`` prefixes failure messages (e.g. ``"Edit"`` → ``"Edit 2 didn't apply …"``).
+    Shared by :func:`multi_edit` (one file) and :func:`multi_patch` (many files).
+    """
+    applied: list[str] = []
+    for idx, edit in enumerate(edits, start=1):
+        if not isinstance(edit, dict) or "find" not in edit or "replace" not in edit:
+            return (
+                None,
+                f"{label} {idx} is malformed — needs a `find` and a `replace`.",
+                ErrorCategory.INVALID,
+            )
+        find, replace = edit["find"], edit["replace"]
+        if not isinstance(find, str) or not isinstance(replace, str) or not find:
+            return (
+                None,
+                f"{label} {idx} is malformed — `find`/`replace` must be text, `find` non-empty.",
+                ErrorCategory.INVALID,
+            )
+        probe = find.rstrip("\n")
+        if probe and any(probe in prev for prev in applied):
+            return (
+                None,
+                (
+                    f"{label} {idx}'s search text was produced by an earlier edit; "
+                    "combine them into one edit or reorder them."
+                ),
+                ErrorCategory.INVALID,
+            )
+        result = apply_replace(working, find, replace)
+        if not result.ok:
+            detail = result.detail
+            if result.category == ErrorCategory.NOT_FOUND and not broker.was_read(resolved):
+                detail += "; read the file first so your search text matches its current contents"
+            return (
+                None,
+                f"{label} {idx} didn't apply ({detail}); nothing was changed.",
+                result.category,
+            )
+        working = result.content
+        applied.append(replace)
+    return working, "", ""
+
+
 def multi_edit(path: str, edits: list[dict[str, str]] | None, broker: AccessBroker) -> str:
     """Apply a list of ``{find, replace}`` edits to one file, atomically (all-or-nothing).
 
@@ -293,38 +348,9 @@ def multi_edit(path: str, edits: list[dict[str, str]] | None, broker: AccessBrok
     text, err, cat = _read_text(resolved)
     if text is None:
         return ToolFailure(err, cat)
-    working = text
-    applied_replacements: list[str] = []
-    for idx, edit in enumerate(edits, start=1):
-        if not isinstance(edit, dict) or "find" not in edit or "replace" not in edit:
-            return ToolFailure(
-                f"Edit {idx} is malformed — each edit needs a `find` and a `replace`.",
-                ErrorCategory.INVALID,
-            )
-        find, replace = edit["find"], edit["replace"]
-        if not isinstance(find, str) or not isinstance(replace, str) or not find:
-            return ToolFailure(
-                f"Edit {idx} is malformed — `find` and `replace` must be text, `find` non-empty.",
-                ErrorCategory.INVALID,
-            )
-        probe = find.rstrip("\n")
-        if probe and any(probe in prev for prev in applied_replacements):
-            return ToolFailure(
-                f"Edit {idx}'s search text was produced by an earlier edit; "
-                "combine them into one edit or reorder them.",
-                ErrorCategory.INVALID,
-            )
-        result = apply_replace(working, find, replace)
-        if not result.ok:
-            detail = result.detail
-            if result.category == ErrorCategory.NOT_FOUND and not broker.was_read(resolved):
-                detail += "; read the file first so your search text matches its current contents"
-            return ToolFailure(
-                f"Edit {idx} didn't apply ({detail}); nothing was changed.",
-                result.category,
-            )
-        working = result.content
-        applied_replacements.append(replace)
+    working, err, cat = _apply_edit_list(text, edits, broker, resolved, label="Edit")
+    if working is None:
+        return ToolFailure(err, cat)
     try:
         resolved.write_text(working, encoding="utf-8")
     except OSError as exc:
@@ -333,6 +359,65 @@ def multi_edit(path: str, edits: list[dict[str, str]] | None, broker: AccessBrok
     n = len(edits)
     _log.info("multi_edit name=%r edits=%d", resolved.name, n)
     return f"Applied {n} edit{'s' if n != 1 else ''} to {resolved.name}."
+
+
+def multi_patch(files: list[dict[str, Any]] | None, broker: AccessBroker) -> str:
+    """Apply edits across SEVERAL files atomically — validate every file, then write, or none.
+
+    ``files`` is a list of ``{path, edits}`` where ``edits`` is a list of ``{find, replace}``.
+    Every file's edits are applied to an in-memory copy first; only if *all* succeed are the
+    files written — so a bad match in one file leaves the whole set untouched. Use it for a
+    coordinated change spanning multiple files (a rename across call sites, say). (A rare OS
+    error mid-write is covered by the turn's checkpoint.)
+    """
+    if not files:
+        return ToolFailure(
+            "No files to patch — pass a list of {path, edits}.", ErrorCategory.INVALID
+        )
+    if not isinstance(files, list):
+        return ToolFailure(
+            "`files` must be a list of {path, edits} objects.", ErrorCategory.INVALID
+        )
+    planned: list[tuple[Path, str, str]] = []  # (resolved, new_text, original)
+    for fi, spec in enumerate(files, start=1):
+        if not isinstance(spec, dict) or "path" not in spec or "edits" not in spec:
+            return ToolFailure(
+                f"File {fi} is malformed — needs `path` and `edits`.", ErrorCategory.INVALID
+            )
+        path, edits = spec["path"], spec["edits"]
+        if not isinstance(path, str) or not path:
+            return ToolFailure(f"File {fi} needs a non-empty `path`.", ErrorCategory.INVALID)
+        if not isinstance(edits, list) or not edits:
+            return ToolFailure(
+                f"File {fi} ({path}) needs a non-empty `edits` list.", ErrorCategory.INVALID
+            )
+        try:
+            resolved = broker.ensure(path, write=True)
+        except (AccessDeniedError, PermissionError) as exc:
+            return ToolFailure(str(exc), ErrorCategory.DENIED)
+        text, err, cat = _read_text(resolved)
+        if text is None:
+            return ToolFailure(err, cat)
+        new_text, err, cat = _apply_edit_list(
+            text, edits, broker, resolved, label=f"{resolved.name} edit"
+        )
+        if new_text is None:
+            return ToolFailure(f"{err} No files were changed.", cat)
+        planned.append((resolved, new_text, text))
+    written: list[str] = []
+    for resolved, new_text, original in planned:  # every file validated → write them all
+        try:
+            resolved.write_text(new_text, encoding="utf-8")
+        except OSError as exc:
+            return ToolFailure(
+                f"I couldn't save {resolved.name}: {exc} (earlier files may already be written — "
+                "use the checkpoint to roll back).",
+                ErrorCategory.UNREADABLE,
+            )
+        _emit_diff(original, new_text, resolved.name)
+        written.append(resolved.name)
+    _log.info("multi_patch files=%d", len(written))
+    return f"Patched {len(written)} file(s): {', '.join(written)}."
 
 
 def register_code_tools(
@@ -494,6 +579,48 @@ def register_code_tools(
             handler=lambda path="", edits=None: multi_edit(path, edits, broker),
             risk=Risk.WRITE,
             ack="Editing that file.",
+        )
+    )
+    registry.register(
+        ToolSpec(
+            name="multi_patch",
+            description=(
+                "Apply edits across SEVERAL files in one atomic step — if any edit in any file "
+                "doesn't match, nothing is written. Pass `files`: a list of {path, edits} where "
+                "edits is a list of {find, replace}. Use for a coordinated change spanning files "
+                "(e.g. a rename across call sites); for one file use multi_edit."
+            ),
+            parameters={
+                "type": "object",
+                "properties": {
+                    "files": {
+                        "type": "array",
+                        "description": "Per-file patches, applied all-or-nothing.",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "path": {"type": "string"},
+                                "edits": {
+                                    "type": "array",
+                                    "items": {
+                                        "type": "object",
+                                        "properties": {
+                                            "find": {"type": "string"},
+                                            "replace": {"type": "string"},
+                                        },
+                                        "required": ["find", "replace"],
+                                    },
+                                },
+                            },
+                            "required": ["path", "edits"],
+                        },
+                    },
+                },
+                "required": ["files"],
+            },
+            handler=lambda files=None: multi_patch(files, broker),
+            risk=Risk.WRITE,
+            ack="Editing several files.",
         )
     )
     registry.register(

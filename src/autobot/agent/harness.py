@@ -82,6 +82,9 @@ def tool_label(call: ToolCall) -> str:
         return f"Read {len(paths)} file(s)" if isinstance(paths, list) else "Read files"
     if call.name in ("write_file", "edit_file", "multi_edit"):
         return f"Edited {_file_name(str(args.get('path', '')))}".strip()
+    if call.name == "multi_patch":
+        files = args.get("files") or []
+        return f"Edited {len(files)} file(s)" if isinstance(files, list) else "Edited files"
     if call.name == "delete_file":
         return f"Deleted {_file_name(str(args.get('path', '')))}".strip()
     if call.name == "move_file":

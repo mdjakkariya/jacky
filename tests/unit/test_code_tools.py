@@ -12,6 +12,7 @@ from autobot.tools.code.tools import (
     edit_file,
     move_file,
     multi_edit,
+    multi_patch,
     read_file,
     read_files,
     register_code_tools,
@@ -299,6 +300,47 @@ def test_multi_edit_rejects_cascade_substring(tmp_path: Path) -> None:
     out = multi_edit(str(f), edits, _broker(tmp_path))
     assert f.read_text() == "foo\n"
     assert "earlier edit" in out.lower()
+
+
+def test_multi_patch_applies_across_files(tmp_path: Path) -> None:
+    a = tmp_path / "a.py"
+    a.write_text("x = 1\n")
+    b = tmp_path / "b.py"
+    b.write_text("y = 2\n")
+    files = [
+        {"path": str(a), "edits": [{"find": "x = 1", "replace": "x = 9"}]},
+        {"path": str(b), "edits": [{"find": "y = 2", "replace": "y = 8"}]},
+    ]
+    out = multi_patch(files, _broker(tmp_path))
+    assert a.read_text() == "x = 9\n" and b.read_text() == "y = 8\n"
+    assert "2 file" in out
+
+
+def test_multi_patch_is_atomic_across_files(tmp_path: Path) -> None:
+    # File 2's edit can't match; NEITHER file may change (validated before any write).
+    a = tmp_path / "a.py"
+    a.write_text("x = 1\n")
+    b = tmp_path / "b.py"
+    b.write_text("y = 2\n")
+    files = [
+        {"path": str(a), "edits": [{"find": "x = 1", "replace": "x = 9"}]},
+        {"path": str(b), "edits": [{"find": "zzz", "replace": "q"}]},
+    ]
+    reg = _registry(tmp_path)
+    res = reg.dispatch("multi_patch", {"files": files})
+    assert res.ok is False
+    assert a.read_text() == "x = 1\n" and b.read_text() == "y = 2\n"  # both untouched — atomic
+
+
+def test_multi_patch_rejects_malformed(tmp_path: Path) -> None:
+    out = multi_patch([{"path": str(tmp_path / "a.py")}], _broker(tmp_path))  # no "edits"
+    assert isinstance(out, str) and "malformed" in out.lower()
+
+
+def test_multi_patch_registered_as_write(tmp_path: Path) -> None:
+    reg = _registry(tmp_path)
+    assert reg.get("multi_patch") is not None
+    assert reg.get("multi_patch").risk == Risk.WRITE  # type: ignore[union-attr]
 
 
 def test_multi_edit_rejects_empty_list(tmp_path: Path) -> None:
