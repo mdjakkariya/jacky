@@ -18,7 +18,9 @@ it can be unit-tested without network access.
 
 from __future__ import annotations
 
+import ipaddress
 import json
+import socket
 import urllib.error
 import urllib.request
 from collections.abc import Callable
@@ -243,10 +245,64 @@ def html_to_text(html: str) -> str:
     return parser.text()
 
 
+Resolver = Callable[..., "list[Any]"]  # getaddrinfo-shaped; called as resolver(host, None)
+
+
+def addresses_safe(host: str, *, resolver: Resolver = socket.getaddrinfo) -> tuple[bool, str]:
+    """Whether every IP ``host`` resolves to is a public address (SSRF guard).
+
+    Rejects loopback / private / link-local / multicast / reserved / unspecified addresses so a
+    fetch can't reach the machine itself, the LAN, or the cloud metadata endpoint
+    (169.254.169.254). ``resolver`` is injected so the classification is unit-tested offline.
+    Never raises.
+    """
+    host = host.rstrip(".").lower()
+    if not host:
+        return False, "no host in URL"
+    try:
+        infos = resolver(host, None)
+    except OSError as exc:
+        return False, f"couldn't resolve host: {exc}"
+    for info in infos:
+        try:
+            ip = ipaddress.ip_address(info[4][0])
+        except (ValueError, IndexError, TypeError):
+            continue
+        if (
+            ip.is_private
+            or ip.is_loopback
+            or ip.is_link_local
+            or ip.is_multicast
+            or ip.is_reserved
+            or ip.is_unspecified
+        ):
+            return False, f"refuses non-public address {ip}"
+    return True, ""
+
+
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    """Refuse redirects so a public URL can't bounce to an internal address (SSRF)."""
+
+    def redirect_request(
+        self, req: Any, fp: Any, code: int, msg: str, headers: Any, newurl: str
+    ) -> None:
+        """Raise instead of following the redirect, so no internal hop is ever fetched."""
+        raise urllib.error.HTTPError(newurl, code, f"redirect blocked to {newurl}", headers, fp)
+
+
 def _http_get(url: str, timeout_s: float) -> tuple[str, bytes]:  # pragma: no cover - real network
-    """Fetch ``url`` and return its content type and (bounded) body bytes."""
+    """Fetch ``url`` and return its content type and (bounded) body bytes.
+
+    Refuses a host that resolves to a non-public address, and refuses redirects (a redirect
+    could bounce a public URL to an internal one). DNS-rebinding (TOCTOU between the check and
+    the connect) is not fully closed — acceptable for this opt-in, gated tool.
+    """
+    safe, reason = addresses_safe(urlparse(url).hostname or "")
+    if not safe:
+        raise ValueError(reason)
+    opener = urllib.request.build_opener(_NoRedirect)
     req = urllib.request.Request(url, headers={"User-Agent": "jack-web-fetch/1"})
-    with urllib.request.urlopen(req, timeout=timeout_s) as resp:
+    with opener.open(req, timeout=timeout_s) as resp:  # scheme + host validated above
         return resp.headers.get_content_type(), resp.read(_MAX_FETCH_BYTES + 1)
 
 

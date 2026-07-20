@@ -143,3 +143,45 @@ def test_register_web_fetch_is_network_read_only() -> None:
     assert spec is not None
     assert spec.risk == Risk.READ_ONLY
     assert spec.network is True  # off-device egress disclosed + audited
+
+
+def _resolver(*ips: str):  # type: ignore[no-untyped-def]
+    """A fake getaddrinfo returning the given IPs (getaddrinfo tuple shape)."""
+
+    def r(host: str, _port: object) -> list[object]:
+        return [(None, None, None, None, (ip, 0)) for ip in ips]
+
+    return r
+
+
+def test_addresses_safe_allows_public() -> None:
+    from autobot.tools.web import addresses_safe
+
+    ok, _ = addresses_safe("example.com", resolver=_resolver("93.184.216.34"))
+    assert ok
+
+
+def test_addresses_safe_blocks_internal_and_metadata() -> None:
+    from autobot.tools.web import addresses_safe
+
+    for ip in ("127.0.0.1", "10.0.0.5", "192.168.1.1", "169.254.169.254", "::1"):
+        ok, reason = addresses_safe("evil.test", resolver=_resolver(ip))
+        assert not ok, ip
+        assert "non-public" in reason
+
+
+def test_addresses_safe_blocks_when_any_ip_is_private() -> None:
+    from autobot.tools.web import addresses_safe
+
+    ok, _ = addresses_safe("mixed.test", resolver=_resolver("93.184.216.34", "127.0.0.1"))
+    assert not ok  # a single private address in the set blocks the whole fetch
+
+
+def test_addresses_safe_resolution_failure_blocks() -> None:
+    from autobot.tools.web import addresses_safe
+
+    def boom(host: str, _port: object) -> list[object]:
+        raise OSError("nxdomain")
+
+    ok, reason = addresses_safe("nope.test", resolver=boom)
+    assert not ok and "resolve" in reason
