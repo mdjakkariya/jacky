@@ -227,6 +227,21 @@ def test_restore_checkpoint_success_sequence() -> None:
     assert ("read-tree", "abc123") in commands
     assert ("checkout-index", "-a", "-f") in commands
     assert ("restore", "--source=abc123", "--worktree", "--staged", "--", ".") in commands
+    assert ("clean", "-fd") in commands  # remove files created after the snapshot
+
+
+def test_restore_checkpoint_reports_clean_failure() -> None:
+    fake = FakeGit(
+        {
+            ("rev-parse", "--verify", "abc123"): (0, "abc123\n"),
+            ("clean", "-fd"): (1, "fatal: clean blocked"),
+        }
+    )
+
+    ok, msg = restore_checkpoint("/repo", "abc123", fake)
+
+    assert ok is False
+    assert msg
 
 
 def test_restore_checkpoint_unknown_ref_fails_fast() -> None:
@@ -322,3 +337,36 @@ def test_checkpoint_round_trip_with_real_git(tmp_path: Path) -> None:
 
     assert ok is True, msg
     assert a_path.read_text() == "version 2 (checkpointed)\n"
+
+
+def test_restore_removes_post_snapshot_files_with_real_git(tmp_path: Path) -> None:
+    """Restore removes files created after the snapshot, keeping snapshot + ignored files."""
+    root = tmp_path / "repo"
+    root.mkdir()
+    _git(root, "init")
+    _git(root, "config", "user.email", "test@example.com")
+    _git(root, "config", "user.name", "Test User")
+
+    (root / "a.txt").write_text("v1\n")
+    (root / ".gitignore").write_text("*.log\n")
+    _git(root, "add", "a.txt", ".gitignore")
+    _git(root, "commit", "-m", "initial")
+
+    # Untracked file present at snapshot time — must survive the restore.
+    (root / "keep.txt").write_text("in the snapshot\n")
+
+    checkpoint = create_checkpoint(str(root), "snap")
+    assert checkpoint is not None
+
+    # After the snapshot: a new (non-ignored) file, an ignored file, and a tracked edit.
+    (root / "extra.txt").write_text("created after the snapshot\n")
+    (root / "debug.log").write_text("ignored build artifact\n")
+    (root / "a.txt").write_text("v2\n")
+
+    ok, msg = restore_checkpoint(str(root), checkpoint.sha)
+    assert ok is True, msg
+
+    assert (root / "a.txt").read_text() == "v1\n"  # tracked change reverted
+    assert (root / "keep.txt").exists()  # snapshot's untracked file preserved
+    assert not (root / "extra.txt").exists()  # post-snapshot file removed (the G6 fix)
+    assert (root / "debug.log").exists()  # ignored file left untouched (no -x)
