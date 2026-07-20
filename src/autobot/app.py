@@ -797,6 +797,12 @@ def build(
             task_registry=task_registry,
             task_inbox=task_inbox,
         )
+        if settings.allow_web:
+            # The coder's one off-device read, opt-in like web_search: fetch a URL's content.
+            from autobot.tools.web import register_web_fetch
+
+            register_web_fetch(registry, settings)
+            log.info("coder web_fetch ENABLED (URLs leave the device)")
         log.info("coder profile ENABLED (code tools only)")
     else:
         register_filesystem_tools(registry, broker)  # now active-folder aware

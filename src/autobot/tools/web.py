@@ -22,7 +22,9 @@ import json
 import urllib.error
 import urllib.request
 from collections.abc import Callable
+from html.parser import HTMLParser
 from typing import Any
+from urllib.parse import urlparse
 
 from autobot.config import Settings
 from autobot.core.types import Risk
@@ -188,3 +190,119 @@ def register_web_tools(registry: ToolRegistry, settings: Settings) -> WebSearchT
     for spec in tool.specs():
         registry.register(spec)
     return tool
+
+
+# --- web_fetch: read a URL's content (the coder's off-device read, opt-in) -----------------
+
+_FETCH_TIMEOUT_S = 10.0
+_MAX_FETCH_BYTES = 2_000_000  # cap the download so a huge page can't blow memory/context
+_FETCH_MAX_CHARS = 50_000  # cap the text handed to the model
+
+# (url, timeout_s) -> (content_type, body_bytes). Injectable so tests never hit the network.
+Fetcher = Callable[[str, float], "tuple[str, bytes]"]
+
+
+class _HtmlTextExtractor(HTMLParser):
+    """Collect visible text from HTML, dropping script/style/head content."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self._skip = 0
+        self._parts: list[str] = []
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        """Enter a skipped region (script/style/…) or emit a break for block tags."""
+        if tag in ("script", "style", "noscript", "head", "template"):
+            self._skip += 1
+        elif tag in ("p", "br", "div", "li", "tr", "h1", "h2", "h3", "h4", "h5", "h6", "section"):
+            self._parts.append("\n")
+
+    def handle_endtag(self, tag: str) -> None:
+        """Leave a skipped region."""
+        if tag in ("script", "style", "noscript", "head", "template") and self._skip:
+            self._skip -= 1
+
+    def handle_data(self, data: str) -> None:
+        """Collect text outside skipped regions."""
+        if self._skip == 0 and data.strip():
+            self._parts.append(data.strip() + " ")
+
+    def text(self) -> str:
+        """The collapsed plain text extracted so far."""
+        lines = [ln.strip() for ln in "".join(self._parts).splitlines()]
+        return "\n".join(ln for ln in lines if ln).strip()
+
+
+def html_to_text(html: str) -> str:
+    """Extract readable plain text from an HTML document (pure; never raises)."""
+    parser = _HtmlTextExtractor()
+    try:
+        parser.feed(html)
+    except Exception:  # a malformed document must not raise out of a tool
+        _log.debug("html parse fell back to raw", exc_info=True)
+    return parser.text()
+
+
+def _http_get(url: str, timeout_s: float) -> tuple[str, bytes]:  # pragma: no cover - real network
+    """Fetch ``url`` and return its content type and (bounded) body bytes."""
+    req = urllib.request.Request(url, headers={"User-Agent": "jack-web-fetch/1"})
+    with urllib.request.urlopen(req, timeout=timeout_s) as resp:
+        return resp.headers.get_content_type(), resp.read(_MAX_FETCH_BYTES + 1)
+
+
+def web_fetch(
+    url: str,
+    *,
+    getter: Fetcher = _http_get,
+    timeout_s: float = _FETCH_TIMEOUT_S,
+    max_chars: int = _FETCH_MAX_CHARS,
+) -> str:
+    """Fetch a URL and return its text (HTML converted to readable text), bounded.
+
+    Off-device: sends the URL to the network. Only http/https are allowed. ``getter`` is
+    injectable so the network boundary is unit-tested without a real request.
+    """
+    if not url or not url.strip():
+        return "What URL should I fetch?"
+    if urlparse(url).scheme not in ("http", "https"):
+        return "I can only fetch http/https URLs."
+    try:
+        content_type, body = getter(url, timeout_s)
+    except (urllib.error.URLError, OSError, ValueError) as exc:
+        return f"I couldn't fetch that URL: {exc}"
+    text = body[:_MAX_FETCH_BYTES].decode("utf-8", errors="replace")
+    if "html" in (content_type or ""):
+        text = html_to_text(text)
+    text = text.strip()
+    if len(text) > max_chars:
+        text = text[:max_chars] + "\n…(truncated)"
+    _log.info("web_fetch url=%s bytes=%d type=%s", url[:120], len(body), content_type)
+    if not text:
+        return f"Fetched {url} ({content_type}) — no readable text."
+    return f"Fetched {url} ({content_type}):\n\n{text}"
+
+
+def register_web_fetch(registry: ToolRegistry, settings: Settings) -> None:
+    """Register the ``web_fetch`` tool. Call only when ``settings.allow_web`` is true.
+
+    Marked ``network=True`` so the UI shows the off-device egress badge and the audit log
+    records it — the disclosed, opt-in exception to on-device-only, like ``web_search``.
+    """
+    registry.register(
+        ToolSpec(
+            name="web_fetch",
+            description=(
+                "Fetch a web page or file by its URL and return the text (HTML is converted to "
+                "readable text). Use to read documentation or a page you have a link to. Sends "
+                "the URL off the device."
+            ),
+            parameters={
+                "type": "object",
+                "properties": {"url": {"type": "string", "description": "http(s) URL to fetch."}},
+                "required": ["url"],
+            },
+            handler=lambda url="": web_fetch(url),
+            risk=Risk.READ_ONLY,
+            network=True,
+        )
+    )
