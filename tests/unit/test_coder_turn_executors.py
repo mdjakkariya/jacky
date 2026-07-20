@@ -116,6 +116,16 @@ def test_act_destructive_file_op_asks_in_confirm_mode() -> None:
     assert gate.calls == [("move_file", False)]  # confirm mode → gate asks
 
 
+def test_act_non_file_destructive_tool_is_not_pre_authorized() -> None:
+    # A destructive tool that is NOT a file op (e.g. `undo`, or a network-egress MCP tool) must
+    # NOT be silently pre-authorized by an approved plan — it stays gated (undo = data loss;
+    # network sends must always confirm). Pre-auth is keyed on the tool NAME, not the risk class.
+    gate = _FakeGate({"undo": Risk.DESTRUCTIVE})
+    ex = act_executor(gate, allowlist=[], blocklist=[], ask_on_confirm=False)  # type: ignore[arg-type]
+    ex(ToolCall(name="undo"))
+    assert gate.calls == [("undo", False)]  # gate.execute WITHOUT pre_authorized → confirms
+
+
 def test_act_caps_logged_command_length(caplog: pytest.LogCaptureFixture) -> None:
     # A long/newline-laden command must not bloat the debug log (logs are "signal, not
     # noise") — the logged cmd= value is capped even though classify_command still sees

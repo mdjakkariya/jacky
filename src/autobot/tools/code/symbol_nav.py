@@ -21,12 +21,11 @@ import re
 import shutil
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
-from urllib.parse import unquote, urlparse
 
 from autobot.core.types import Risk
 from autobot.logging_setup import get_logger
 from autobot.tools.access import AccessBroker, AccessDeniedError
-from autobot.tools.code.lsp import LspClient, LspError, StdioTransport
+from autobot.tools.code.lsp import LspClient, LspError, StdioTransport, uri_to_path
 from autobot.tools.registry import ToolRegistry, ToolSpec
 
 if TYPE_CHECKING:
@@ -93,19 +92,28 @@ class LspManager:
     """Spawns and reuses one language server per (workspace root, language)."""
 
     def __init__(self) -> None:
-        self._clients: dict[tuple[str, str], LspClient] = {}
-        self._procs: list[Any] = []
+        # (root, language) -> (client, process). Keeping the proc lets us check liveness and
+        # kill it on failure/shutdown (no leaked process or reader thread).
+        self._clients: dict[tuple[str, str], tuple[LspClient, Any]] = {}
 
     def client_for(self, root: str, language: str) -> LspClient | None:  # pragma: no cover - spawns
-        """A ready client for ``language`` under ``root``, or ``None`` if no server / on failure."""
+        """A ready client for ``language`` under ``root``, or ``None`` if no server / on failure.
+
+        Reuses a live server; a server that has died is dropped and respawned. On any failure the
+        just-spawned process is killed so neither it nor its reader thread leaks.
+        """
+        import subprocess
+
         key = (root, language)
-        if key in self._clients:
-            return self._clients[key]
+        existing = self._clients.get(key)
+        if existing is not None:
+            client, proc = existing
+            if proc.poll() is None:  # still running — reuse it
+                return client
+            del self._clients[key]  # the server died; fall through and respawn a fresh one
         argv = _server_argv(language)
         if argv is None:
             return None
-        import subprocess
-
         try:
             proc = subprocess.Popen(
                 argv,
@@ -114,25 +122,30 @@ class LspManager:
                 stdout=subprocess.PIPE,
                 stderr=subprocess.DEVNULL,
             )
+        except OSError:
+            _log.warning("lsp server for %s failed to spawn; falling back", language, exc_info=True)
+            return None
+        try:
             client = LspClient(StdioTransport(proc))
             client.initialize(Path(root).resolve().as_uri())
-        except (OSError, LspError, ValueError):
-            _log.warning("lsp server for %s failed to start; falling back", language, exc_info=True)
+        except (LspError, OSError, ValueError):
+            _log.warning(
+                "lsp server for %s failed to init; killing + falling back", language, exc_info=True
+            )
+            with contextlib.suppress(Exception):
+                proc.kill()  # don't leak the process or its blocked reader thread
             return None
-        self._procs.append(proc)
-        self._clients[key] = client
+        self._clients[key] = (client, proc)
         _log.info("lsp server started language=%s argv=%s", language, argv[0])
         return client
 
     def shutdown_all(self) -> None:  # pragma: no cover - real subprocess boundary
         """Shut down every server (best-effort)."""
-        for client in self._clients.values():
+        for client, proc in self._clients.values():
             client.shutdown()
-        for proc in self._procs:
             with contextlib.suppress(Exception):
                 proc.terminate()
         self._clients.clear()
-        self._procs.clear()
 
 
 def _hover_text(result: Any) -> str:
@@ -154,8 +167,7 @@ def _hover_text(result: Any) -> str:
 
 def _loc_to_line(loc: dict[str, Any], root: Path) -> str:
     """Render an LSP Location as ``relpath:line`` (1-based), best-effort."""
-    uri = str(loc.get("uri", ""))
-    path = unquote(urlparse(uri).path) if uri.startswith("file:") else uri
+    path = uri_to_path(str(loc.get("uri", "")))
     try:
         shown = str(Path(path).resolve().relative_to(root))
     except ValueError:
@@ -201,7 +213,9 @@ def _lsp_lookup(  # pragma: no cover - requires a real server on PATH
     except (LspError, OSError):
         return None
     if not locs:
-        return f"No {action} found for {name!r} (via language server)."
+        # Empty could mean "genuinely none" OR "server still indexing" — fall back to the textual
+        # search rather than assert a definitive negative (honors the always-fall-back contract).
+        return None
     shown = [_loc_to_line(loc, root) for loc in locs[:_MAX_LOCS]]
     more = f"\n…({len(locs) - len(shown)} more)" if len(locs) > len(shown) else ""
     return f"{action} of {name!r} (language server):\n" + "\n".join(shown) + more

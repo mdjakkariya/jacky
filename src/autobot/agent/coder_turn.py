@@ -148,6 +148,12 @@ def read_only_executor(gate: PermissionGate) -> ToolExecutor:
     return execute
 
 
+# The only destructive tools an approved plan pre-authorizes (run without a second confirm).
+# Deliberately NOT the whole Risk.DESTRUCTIVE class: undo (data-loss) and network-egress MCP
+# tools (off-device sends must always confirm — CLAUDE.md constraint #1) stay confirmed.
+_PREAUTH_DESTRUCTIVE = frozenset({"delete_file", "move_file"})
+
+
 def act_executor(
     gate: PermissionGate,
     allowlist: list[str],
@@ -205,9 +211,12 @@ def act_executor(
         risk = gate.risk_of(call.name)
         if risk is not None and risk >= Risk.WRITE:
             snapshot_once()  # a file-mutating edit — snapshot the pre-change state first
-        # A destructive file op (delete_file/move_file) is authorized by an approved plan, so
+        # A destructive *file op* (delete_file/move_file) is authorized by an approved plan, so
         # it runs pre-authorized; in confirm mode it still asks — mirroring run_command above.
-        if risk is not None and risk >= Risk.DESTRUCTIVE and not ask_on_confirm:
+        # Gate on the exact tool NAMES, not the risk class: other destructive tools (undo, and
+        # network-egress MCP tools whose off-device sends must always confirm) must NOT be
+        # silently pre-authorized here.
+        if call.name in _PREAUTH_DESTRUCTIVE and not ask_on_confirm:
             return gate.execute(call, pre_authorized=True)
         return gate.execute(call)
 
@@ -221,7 +230,8 @@ _PLAN_PROMPT_PREFIX = (
     "too vague to act on): just reply normally — answer it, or ask for the detail you "
     "need. Do NOT write a numbered plan.\n"
     "- If it DOES: use ONLY read-only tools (read_file, grep, glob, repo_map) to explore, "
-    "then reply with a concise NUMBERED todo list of the edits and commands you will make. "
+    "then reply with a concise NUMBERED todo list of the edits and commands you will make — "
+    "one step per line (e.g. `1. …` then a newline, `2. …`). "
     "Do not edit files or run commands yet.\n\nRequest: "
 )
 _ACT_PROMPT = (
@@ -264,6 +274,10 @@ _CONTINUATION_CUES = re.compile(
 )
 
 _TODO_LINE = re.compile(r"^\s*(?:\d+[.)]|[-*])\s+(.*\S)\s*$")
+# Inline fallback: a numbered plan squeezed onto a single line — "1) do X; 2) do Y" — which
+# some models emit instead of one step per line. A marker is a number + ``.``/``)`` preceded by
+# start-of-string or a separator; we require ≥2 so a lone "1." in prose isn't read as a plan.
+_INLINE_STEP = re.compile(r"(?:^|[\s;:])(\d+)[.)]\s+")
 
 
 def _is_continuation_intent(reply: str) -> bool:
@@ -280,9 +294,34 @@ def _is_continuation_intent(reply: str) -> bool:
     return bool(_CONTINUATION_CUES.search(text))
 
 
+def _extract_inline_todo(reply: str) -> list[str]:
+    """Split a single-line numbered plan (``1) a; 2) b``) into steps; ``[]`` if not one.
+
+    Requires ≥2 numbered markers so a lone enumerator in ordinary prose isn't mistaken for a
+    plan. Each step is the text between its marker and the next (or end), stripped of a
+    trailing separator.
+    """
+    markers = list(_INLINE_STEP.finditer(reply))
+    if len(markers) < 2:
+        return []
+    steps: list[str] = []
+    for i, m in enumerate(markers):
+        end = markers[i + 1].start() if i + 1 < len(markers) else len(reply)
+        step = reply[m.end() : end].strip().rstrip(";,").strip()
+        if step:
+            steps.append(step)
+    return steps
+
+
 def _extract_todo(reply: str) -> list[str]:
-    """Best-effort: pull numbered/bulleted step text from a plan reply (for future UIs)."""
-    return [m.group(1) for line in reply.splitlines() if (m := _TODO_LINE.match(line))]
+    """Pull numbered/bulleted step text from a plan reply — seeds the act checklist.
+
+    Handles both the well-formatted case (one step per line) and the inline case some models
+    emit (``1) … 2) …`` on a single line), so a genuine, actionable plan is never misread as a
+    conversational reply and silently skipped (the turn would end without doing the work).
+    """
+    lines = [m.group(1) for line in reply.splitlines() if (m := _TODO_LINE.match(line))]
+    return lines or _extract_inline_todo(reply)
 
 
 class CoderTurnDriver:

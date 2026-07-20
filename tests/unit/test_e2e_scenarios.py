@@ -18,6 +18,8 @@ def test_seed_scenarios_valid() -> None:
         "edit-file",
         "build-small-thing",
         "undo-edit",
+        "rename-symbol",
+        "rename-across-files",
         "slash-and-chat",
     } <= names
     for s in scenarios.all_scenarios():

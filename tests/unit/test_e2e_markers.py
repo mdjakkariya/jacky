@@ -42,14 +42,17 @@ def test_awaiting_reply_is_the_live_gate_prompt() -> None:
     # The gate affordance is transient (shown only while awaiting), so its presence is the
     # live-gate signal — no stale-card case to disambiguate.
     assert markers.awaiting_reply("Run this command?\n\n  $ mkdir x\nApprove? [y]es · [n]o")
-    assert markers.awaiting_reply("Approve this plan?\n[y]es · [n]o · or type a change")
+    # The real live plan hint (copied from an actual frame): [y]es · [n]o · [e]dit.
+    assert markers.awaiting_reply("Here's my plan:\n 1 Rename\n[y]es · [n]o · [e]dit")
     assert not markers.awaiting_reply("⏺ Done.\n❯ ")
     assert not markers.awaiting_reply("⠹ Working…  ·  esc to interrupt · 2s")
     assert "awaiting_reply" in markers.BY_NAME
 
 
 def test_plan_vs_permission_gate() -> None:
-    plan = "Approve this plan?\n[y]es · [n]o · or type a change"
+    # Real rendered affordances (copied from actual frames), not paraphrases: a plan gate shows
+    # the [e]dit choice; a permission gate shows Approve? with no edit.
+    plan = "Here's my plan:\n 1 Rename scale to double\n[y]es · [n]o · [e]dit"
     perm = "Run this command?\n\n  $ mkdir x\nApprove? [y]es · [n]o"
     assert markers.plan_card(plan) and not markers.permission_card(plan)
     assert markers.permission_card(perm) and not markers.plan_card(perm)

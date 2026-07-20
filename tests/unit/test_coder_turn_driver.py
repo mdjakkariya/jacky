@@ -15,6 +15,7 @@ from autobot.agent.coder_turn import (
     CoderTurnDriver,
     SuspendingConfirmer,
     TurnChannel,
+    _extract_todo,
 )
 from autobot.config import Settings
 from autobot.core.streaming import plan_sink
@@ -173,6 +174,47 @@ def test_conversational_reply_skips_approval_gate() -> None:
     d = _driver(_ScriptedLLM("Hi! What would you like me to work on?", "should not act"))
     result = list(d.start_stream("hey"))
     assert result[-1] == {"status": "done", "reply": "Hi! What would you like me to work on?"}
+
+
+def test_extract_todo_multiline() -> None:
+    assert _extract_todo("1. edit foo\n2) add test\n- and this") == [
+        "edit foo",
+        "add test",
+        "and this",
+    ]
+
+
+def test_extract_todo_inline_numbered_plan() -> None:
+    # The real-LLM failure that a live e2e surfaced: the model put its whole numbered plan on
+    # ONE line ("Here's my plan: 1) … 2) …"). The line-anchored parser saw no steps, so the
+    # driver misread an actionable plan as conversational and ended the turn without acting.
+    reply = (
+        "Here's my plan: 1) in greeter.py rename the def greet(name): function to welcome; "
+        '2) in main.py update the import and change the call to welcome("world").'
+    )
+    steps = _extract_todo(reply)
+    assert len(steps) == 2
+    assert steps[0].startswith("in greeter.py rename")
+    assert steps[1].startswith("in main.py update")
+    assert not steps[0].endswith(";")  # trailing separator trimmed
+
+
+def test_extract_todo_ignores_lone_enumerator_in_prose() -> None:
+    # A single "1." in ordinary prose is not a plan — needs ≥2 markers to avoid false positives
+    # that would force a spurious approve/act gate on a conversational reply.
+    assert _extract_todo("Sure, I can do that in 1 step once you confirm the path.") == []
+    assert _extract_todo("There is only 1. one thing to note here, nothing to do.") == []
+
+
+def test_inline_plan_reaches_act_phase() -> None:
+    # End-to-end at the driver level: an inline-numbered plan must now flow plan → approve → act
+    # (previously it silently ended at the plan reply, doing nothing).
+    d = _driver(_ScriptedLLM("Plan: 1) edit foo 2) add a test", "Edited foo and added a test."))
+    first = list(d.start_stream("do a two-step change"))
+    assert first[-1]["status"] == "plan"
+    assert first[-1]["todo"] == ["edit foo", "add a test"]
+    final = list(d.reply_stream("approve"))
+    assert final[-1] == {"status": "done", "reply": "Edited foo and added a test."}
 
 
 def test_plan_reject_makes_no_changes() -> None:

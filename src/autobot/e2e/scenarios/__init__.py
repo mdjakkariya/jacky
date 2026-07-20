@@ -118,6 +118,62 @@ ALL: tuple[Scenario, ...] = (
         checks=(ScreenContains("All time"),),
     ),
     Scenario(
+        # Exercises the LSP-backed `rename_symbol` tool end-to-end (epic #105): a real language
+        # server (pylsp, if installed) computes a cross-file WorkspaceEdit and the tool applies it
+        # atomically. The seed puts the definition in one file and the call + import in another, so
+        # a pass proves a *semantic* rename (all three sites) — not a textual s/greet/welcome/ that
+        # would also mangle the "greeter" module name. If no Python server is on PATH the tool
+        # declines (no unsafe textual rename); this scenario then legitimately won't pass, which is
+        # the intended signal to install one, so it's driven only when a server is available.
+        name="rename-symbol",
+        autonomy="auto",
+        strategy="unattended",
+        task="rename the function greet to welcome everywhere it is used",
+        success_criteria="Renamed the function greet to welcome across both files — the "
+        "definition in greeter.py and the import + call site in main.py — with no leftover "
+        "'greet' references.",
+        seed_files={
+            "greeter.py": 'def greet(name):\n    return f"Hello, {name}!"\n',
+            "main.py": 'from greeter import greet\n\nprint(greet("world"))\n',
+        },
+        checks=(
+            FileContains("greeter.py", "def welcome"),  # the definition was renamed
+            FileLacks("greeter.py", "greet"),  # …and nothing greet-shaped is left behind
+            FileContains("main.py", "welcome("),  # the call site was renamed (not just the import)
+            FileLacks("main.py", "greet("),  # …and the old call is gone (greeter module name stays)
+        ),
+    ),
+    Scenario(
+        # A richer LSP exercise (epic #105): a cross-file rename that a *textual* rename would get
+        # wrong. `scale` is a function in mathx.py used from a.py and b.py (three files, three call
+        # sites incl. two in b.py) — AND there's a decoy module-level `scale` string in notes.py
+        # that is a different symbol. A semantic (LSP) rename touches only the function's real
+        # references and leaves the decoy alone; a naive s/scale/double/ would corrupt notes.py.
+        # The "then check for problems" tail nudges the `diagnostics` tool in the same turn. This
+        # is the effectiveness proof: semantic precision + multi-tool orchestration on a tiny seed.
+        name="rename-across-files",
+        autonomy="auto",
+        strategy="unattended",
+        task="rename the scale function from mathx.py to double everywhere it is used, then "
+        "check the files have no problems",
+        success_criteria="Renamed the mathx.scale function to double across mathx.py and both "
+        "call sites (a.py, b.py) with a semantic rename — leaving the unrelated 'scale' string "
+        "variable in notes.py untouched — and confirmed no problems remain.",
+        seed_files={
+            "mathx.py": "def scale(x):\n    return x * 2\n",
+            "a.py": "from mathx import scale\n\n\ndef run_a():\n    return scale(10)\n",
+            "b.py": "from mathx import scale\n\n\ndef run_b():\n    return scale(20) + scale(30)\n",
+            "notes.py": 'scale = "map scale is 1:1000"\n\n\ndef describe():\n    return scale\n',
+        },
+        checks=(
+            FileContains("mathx.py", "def double"),  # the definition was renamed
+            FileContains("a.py", "double(10)"),  # call site in a.py renamed
+            FileContains("b.py", "double(20)"),  # call sites in b.py renamed
+            FileLacks("a.py", "scale"),  # import + call both gone ('mathx' has no 'scale')
+            FileContains("notes.py", 'scale = "map scale is 1:1000"'),  # decoy untouched (semantic)
+        ),
+    ),
+    Scenario(
         name="slash-and-chat",
         autonomy="auto",
         strategy="scripted",

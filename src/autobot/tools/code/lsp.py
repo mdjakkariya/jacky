@@ -25,6 +25,7 @@ import queue
 import threading
 import time
 from typing import TYPE_CHECKING, Any, Protocol
+from urllib.parse import unquote, urlparse
 
 from autobot.logging_setup import get_logger
 
@@ -35,6 +36,11 @@ _log = get_logger("coder")
 
 _HEADER_SEP = b"\r\n\r\n"
 _DEFAULT_REQUEST_TIMEOUT = 8.0  # seconds to wait for a response before falling back
+_INIT_TIMEOUT = (
+    30.0  # initialize is slow the first time (server cold-start + indexing) — be generous
+)
+_CACHE_MAX = 512  # bound the per-client position-request cache (evicted oldest-first)
+_DIAG_KEEP = 256  # bound the collected-diagnostics history (a long session mustn't grow unbounded)
 
 
 def frame_message(message: dict[str, Any]) -> bytes:
@@ -137,35 +143,68 @@ class LspClient:
         self.diagnostics: list[dict[str, Any]] = []
         # uri -> (version, content-hash): lets ``sync`` skip re-sending an unchanged file.
         self._opened: dict[str, tuple[int, str]] = {}
+        # (method, uri, version, line, char, …) -> result: caches read-only position requests
+        # so repeat navigation on an unchanged file is free. The version in the key means an
+        # edit (a ``sync`` didChange) naturally misses stale entries — no explicit invalidation.
+        self._cache: dict[tuple[Any, ...], Any] = {}
+
+    def _cached_request(self, method: str, params: dict[str, Any], key: tuple[Any, ...]) -> Any:
+        """Return a cached position-request result, or request it once and cache it (bounded).
+
+        Empty/``None`` results are NOT cached: an empty answer often just means the server is
+        still indexing, and caching it would make the "nothing" sticky until the file changes.
+        """
+        if key in self._cache:
+            return self._cache[key]
+        result = self.request(method, params)
+        if result:  # don't cache empty/None — the server may still be indexing
+            self._cache[key] = result
+            if len(self._cache) > _CACHE_MAX:  # evict oldest (dict preserves insertion order)
+                for stale in list(self._cache)[: len(self._cache) - _CACHE_MAX]:
+                    self._cache.pop(stale, None)
+        return result
+
+    def _version_of(self, uri: str) -> int:
+        """Current document version for ``uri`` (0 if never synced) — part of the cache key."""
+        return self._opened.get(uri, (0, ""))[0]
 
     def notify(self, method: str, params: dict[str, Any] | None = None) -> None:
         """Send a notification (no response expected)."""
         self._t.send({"jsonrpc": "2.0", "method": method, "params": params or {}})
 
-    def request(self, method: str, params: dict[str, Any] | None = None) -> Any:
+    def request(
+        self, method: str, params: dict[str, Any] | None = None, *, timeout: float | None = None
+    ) -> Any:
         """Send a request and return its ``result``; raise :class:`LspError` on error/timeout.
 
         Reads past interleaved notifications (collecting ``publishDiagnostics``) to find the
-        response by id, bounded by the client timeout so a hung server falls back rather than
-        wedging the turn.
+        response by id, bounded by ``timeout`` (default the client timeout) so a hung server
+        falls back rather than wedging the turn.
         """
+        wait = self._timeout if timeout is None else timeout
         self._id += 1
         req_id = self._id
         self._t.send({"jsonrpc": "2.0", "id": req_id, "method": method, "params": params or {}})
-        deadline = time.monotonic() + self._timeout
+        deadline = time.monotonic() + wait
         while True:
             remaining = max(0.0, deadline - time.monotonic())
             msg = self._t.receive(timeout=remaining)
             if msg is None:
-                raise LspError(f"no response to {method!r} in {self._timeout}s (timeout or closed)")
+                raise LspError(f"no response to {method!r} in {wait}s (timeout or closed)")
             if msg.get("id") == req_id:
                 if "error" in msg:
                     raise LspError(str(msg["error"]))
                 return msg.get("result")
             if msg.get("method") == "textDocument/publishDiagnostics":
-                self.diagnostics.append(msg.get("params", {}))
+                self._collect_diag(msg.get("params", {}))
             # Any other notification / a late response to an abandoned request: ignore and
             # keep reading (bounded by ``remaining``) for our response.
+
+    def _collect_diag(self, params: dict[str, Any]) -> None:
+        """Record a publishDiagnostics payload, keeping the history bounded."""
+        self.diagnostics.append(params)
+        if len(self.diagnostics) > _DIAG_KEEP:
+            del self.diagnostics[: len(self.diagnostics) - _DIAG_KEEP]
 
     def initialize(self, root_uri: str) -> None:
         """Run the ``initialize`` handshake (declaring the features we use), then notify."""
@@ -185,14 +224,16 @@ class LspClient:
                 },
                 "clientInfo": {"name": "jack", "version": "1"},
             },
+            timeout=_INIT_TIMEOUT,  # first spawn cold-starts + indexes; don't time out early
         )
         self.notify("initialized", {})
 
-    def sync(self, uri: str, language_id: str, text: str) -> None:
+    def sync(self, uri: str, language_id: str, text: str) -> bool:
         """Open ``uri`` (first time) or send a change (content differs); no-op if unchanged.
 
-        Deduplicates document sync so we don't re-upload a file's full text on every query —
-        the server keeps its parsed copy between requests (a real cost/latency saver).
+        Deduplicates document sync so we don't re-upload a file's full text on every query — the
+        server keeps its parsed copy between requests (a real cost/latency saver). Returns whether
+        a message was actually sent (so callers know if the server will re-publish diagnostics).
         """
         digest = hashlib.sha1(
             text.encode("utf-8", "replace")
@@ -202,7 +243,8 @@ class LspClient:
             self._opened[uri] = (1, digest)
             doc = {"uri": uri, "languageId": language_id, "version": 1, "text": text}
             self.notify("textDocument/didOpen", {"textDocument": doc})
-        elif opened[1] != digest:
+            return True
+        if opened[1] != digest:
             version = opened[0] + 1
             self._opened[uri] = (version, digest)
             self.notify(
@@ -212,12 +254,15 @@ class LspClient:
                     "contentChanges": [{"text": text}],
                 },
             )
+            return True
+        return False
 
     def definition(self, uri: str, line: int, character: int) -> list[dict[str, Any]]:
         """Return the definition location(s) for the symbol at 0-based (``line``, ``character``)."""
-        result = self.request(
+        result = self._cached_request(
             "textDocument/definition",
             {"textDocument": {"uri": uri}, "position": {"line": line, "character": character}},
+            ("definition", uri, self._version_of(uri), line, character),
         )
         return _as_locations(result)
 
@@ -225,21 +270,23 @@ class LspClient:
         self, uri: str, line: int, character: int, *, include_declaration: bool = True
     ) -> list[dict[str, Any]]:
         """Return the reference location(s) for the symbol at 0-based (``line``, ``character``)."""
-        result = self.request(
+        result = self._cached_request(
             "textDocument/references",
             {
                 "textDocument": {"uri": uri},
                 "position": {"line": line, "character": character},
                 "context": {"includeDeclaration": include_declaration},
             },
+            ("references", uri, self._version_of(uri), line, character, include_declaration),
         )
         return _as_locations(result)
 
     def hover(self, uri: str, line: int, character: int) -> Any:
         """Return the raw hover result (type/signature/doc) at 0-based (``line``, ``character``)."""
-        return self.request(
+        return self._cached_request(
             "textDocument/hover",
             {"textDocument": {"uri": uri}, "position": {"line": line, "character": character}},
+            ("hover", uri, self._version_of(uri), line, character),
         )
 
     def rename(self, uri: str, line: int, character: int, new_name: str) -> dict[str, Any]:
@@ -254,12 +301,16 @@ class LspClient:
         )
         return result if isinstance(result, dict) else {}
 
-    def await_diagnostics(self, uri: str, timeout: float | None = None) -> list[dict[str, Any]]:
+    def await_diagnostics(
+        self, uri: str, timeout: float | None = None
+    ) -> list[dict[str, Any]] | None:
         """Wait up to ``timeout`` for the server to publish diagnostics for ``uri`` (push model).
 
         Call right after :meth:`sync` so the server re-analyzes and publishes. Returns the
-        diagnostics list (empty = clean). Reads past unrelated messages; on timeout it returns
-        the most recent diagnostics already collected for ``uri`` (or ``[]``) rather than hang.
+        diagnostics list (``[]`` = server reported clean), or ``None`` if we timed out without
+        ever hearing about ``uri`` — so a slow server is NOT mistaken for a clean file. On a
+        timeout where we DID collect diagnostics for ``uri`` earlier, that last-known list is
+        returned rather than hanging.
         """
         timeout = self._timeout if timeout is None else timeout
         deadline = time.monotonic() + timeout
@@ -270,10 +321,10 @@ class LspClient:
                 for params in reversed(self.diagnostics):
                     if params.get("uri") == uri:
                         return list(params.get("diagnostics") or [])
-                return []
+                return None  # never heard anything for this uri — unknown, NOT "clean"
             if msg.get("method") == "textDocument/publishDiagnostics":
                 params = msg.get("params", {})
-                self.diagnostics.append(params)
+                self._collect_diag(params)
                 if params.get("uri") == uri:
                     return list(params.get("diagnostics") or [])
             # Any other message (a response to an abandoned request, another uri's diagnostics,
@@ -286,6 +337,20 @@ class LspClient:
             self.notify("exit", None)
         except (LspError, OSError):
             _log.debug("lsp shutdown failed", exc_info=True)
+
+
+def uri_to_path(uri: str) -> str:
+    """Convert a ``file://`` URI to a filesystem path (POSIX + Windows-drive aware).
+
+    ``urlparse`` yields ``/C:/x`` for ``file:///C:/x`` on Windows; strip the spurious leading
+    slash before a drive letter. Non-``file:`` URIs are returned unchanged.
+    """
+    if not uri.startswith("file:"):
+        return uri
+    path = unquote(urlparse(uri).path)
+    if len(path) >= 3 and path[0] == "/" and path[2] == ":":  # /C:/... -> C:/...
+        path = path[1:]
+    return path
 
 
 def workspace_edit_files(edit: dict[str, Any]) -> dict[str, list[dict[str, Any]]]:
@@ -313,6 +378,11 @@ def apply_text_edits(text: str, edits: list[dict[str, Any]]) -> str:
 
     Edits are applied from the end so earlier ones keep their offsets. Pure. Overlapping edits
     are undefined per spec and not guarded against.
+
+    Known limitation: LSP ``character`` offsets are UTF-16 code units by default; this indexes a
+    Python ``str`` (code points). They agree for all BMP text (ASCII, accented Latin, most CJK)
+    and diverge only for astral characters (emoji, some rare glyphs) earlier on the same line —
+    essentially never in identifiers/code, so it's left unhandled for simplicity.
     """
     line_starts = [0]
     for line in text.split("\n"):

@@ -36,6 +36,11 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p.add_argument("--judge", choices=["auto", "manual"], default=None)
     p.add_argument("--judge-model", default=None)
+    p.add_argument(
+        "--model",
+        default=None,
+        help="override the LLM for this run only (e.g. claude-sonnet-4-5); restored afterward",
+    )
     p.add_argument("--port", type=int, default=_DEFAULT_PORT)
     p.add_argument("--keep", action="store_true", help="preserve the throwaway workspace")
     p.set_defaults(command="run")
@@ -89,7 +94,12 @@ def main(argv: list[str] | None = None) -> int:
     mode = resolve_judge_mode(ns.judge, isatty=sys.stdin.isatty(), ask=_ask)
     chosen = [scenarios.by_name(n) for n in names] if names else list(scenarios.all_scenarios())
     results = runner.run_suite(
-        chosen, port=ns.port, judge_mode=mode, judge_model=ns.judge_model, keep=ns.keep
+        chosen,
+        port=ns.port,
+        judge_mode=mode,
+        judge_model=ns.judge_model,
+        keep=ns.keep,
+        model=ns.model,
     )
     print("\n=== E2E scoreboard ===")
     for r in results:

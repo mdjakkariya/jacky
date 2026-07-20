@@ -1,9 +1,11 @@
 """Predicates over the `pyte`-rendered screen text — the harness's sync vocabulary.
 
-Derived from the CLI's glyphs/prompts (`autobot.cli.theme` / `cli.prompt`), so they track
-the real TUI: ``⏺`` reply, ``⎿`` tool line, the single-key confirm/plan prompts
-(``(y) yes  (n) no`` / ``… (e) edit …``), and the ``❯`` idle prompt. All are pure
-``str -> bool`` so they unit-test against canned screens.
+Derived from the CLI's glyphs/prompts (`autobot.cli.theme` / `cli.app`), so they track the
+real TUI: ``⏺`` reply, ``⎿`` tool line, the live gate hints (permission ``Approve? [y]es ·
+[n]o``; plan ``[y]es · [n]o · [e]dit``), and the ``❯`` idle prompt. All are pure ``str ->
+bool`` so they unit-test against canned screens — but a canned screen is only as good as its
+fidelity to the real render, so keep them copied from actual frames (see ``begin_modal`` in
+``cli/app.py``).
 """
 
 from __future__ import annotations
@@ -30,13 +32,18 @@ def tool_line(screen: str) -> bool:
 
 
 def plan_card(screen: str) -> bool:
-    """The plan-approval gate affordance (its ``or type a change`` option distinguishes it)."""
-    return "or type a change" in screen
+    """The plan-approval gate is live — its ``[e]dit`` affordance is unique to a plan gate.
+
+    The live plan hint is ``[y]es · [n]o · [e]dit``; a permission gate is ``Approve? [y]es ·
+    [n]o`` (no edit). So ``[e]dit`` distinguishes the two and is present only while the plan
+    modal is up — the committed plan reply is a plain ``⏺`` block with no choices line.
+    """
+    return "[e]dit" in screen
 
 
 def permission_card(screen: str) -> bool:
-    """The command-permission gate affordance (``Approve? [y]es · [n]o``, no plan edit)."""
-    return "approve?" in screen.lower() and "or type a change" not in screen
+    """The command-permission gate is live (``Approve?`` with no plan ``[e]dit`` affordance)."""
+    return "approve?" in screen.lower() and "[e]dit" not in screen
 
 
 def any_gate(screen: str) -> bool:
