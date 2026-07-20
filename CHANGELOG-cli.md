@@ -12,11 +12,8 @@ All notable changes to **Jack** are recorded here. The format follows
 - MCP in the CLI — /mcp REPL + jack mcp subcommands, consent-at-enable, live auth events (#99)
 - Structured error taxonomy on ToolResult (ErrorCategory) (#103)
 - Coder tool + harness hardening — P1/P2 gap register (G4–G20) (#106)
-- LSP Phase 1 — symbol navigation (go-to-def / references) with fallback (#107)
-- Model-facing undo + kill background task (#100 G-undo, G-kill) (#108)
-- LSP production-grade — robust client, more languages, hover + semantic rename (#109)
-- LSP diagnostics tool — inline type errors without a build (#105) (#110)
-- LSP Phase 4 + real-server e2e + review hardening (#105) (#111)
+- LSP — symbol navigation (go-to-def / references) with fallback (#107) (#109) (#105) (#110) (#105) (#111)
+- Model-facing undo + kill background task (#100 G-undo, G-kill) (#108) 
 
 ### 🐛 Bug Fixes
 - Fold the coder-CLI extras (tui, daemon, cloud) into base deps (#97)
