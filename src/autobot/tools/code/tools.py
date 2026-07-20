@@ -12,6 +12,7 @@ audit log apply exactly as they do for the assistant's file tools.
 from __future__ import annotations
 
 import difflib
+import shutil
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -160,6 +161,54 @@ def read_files(paths: list[str] | None, broker: AccessBroker) -> str:
         )
     _log.info("read_files count=%d", min(len(paths), _MULTI_READ_MAX_FILES))
     return "\n\n".join(blocks)
+
+
+def delete_file(path: str, broker: AccessBroker) -> str:
+    """Delete a single file (gated, DESTRUCTIVE). Refuses folders — no recursive removal."""
+    if not path:
+        return ToolFailure("Which file should I delete? Tell me its path.", ErrorCategory.INVALID)
+    try:
+        resolved = broker.ensure(path, write=True)
+    except (AccessDeniedError, PermissionError) as exc:
+        return ToolFailure(str(exc), ErrorCategory.DENIED)
+    if not resolved.exists():
+        return ToolFailure(f"There's no file at {resolved}.", ErrorCategory.NOT_FOUND)
+    if resolved.is_dir():
+        return ToolFailure(
+            f"'{resolved.name}' is a folder — I only delete single files, not directories.",
+            ErrorCategory.INVALID,
+        )
+    try:
+        resolved.unlink()
+    except OSError as exc:
+        return ToolFailure(f"I couldn't delete {resolved.name}: {exc}", ErrorCategory.UNREADABLE)
+    _log.info("delete_file name=%r", resolved.name)
+    return f"Deleted {resolved.name}."
+
+
+def move_file(source: str, dest: str, broker: AccessBroker) -> str:
+    """Move or rename a file within the workspace (gated, DESTRUCTIVE). Won't overwrite ``dest``."""
+    if not source or not dest:
+        return ToolFailure("Tell me both a source and a destination path.", ErrorCategory.INVALID)
+    try:
+        src = broker.ensure(source, write=True)
+        dst = broker.ensure(dest, write=True)
+    except (AccessDeniedError, PermissionError) as exc:
+        return ToolFailure(str(exc), ErrorCategory.DENIED)
+    if not src.exists():
+        return ToolFailure(f"There's no file at {src}.", ErrorCategory.NOT_FOUND)
+    if dst.exists():
+        return ToolFailure(
+            f"'{dst.name}' already exists — move refused so nothing is overwritten.",
+            ErrorCategory.EXISTS,
+        )
+    try:
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        shutil.move(str(src), str(dst))
+    except OSError as exc:
+        return ToolFailure(f"I couldn't move {src.name}: {exc}", ErrorCategory.UNREADABLE)
+    _log.info("move_file src=%r dst=%r", src.name, dst.name)
+    return f"Moved {src.name} → {dst.name}."
 
 
 def write_file(path: str, content: str, broker: AccessBroker) -> str:
@@ -447,7 +496,46 @@ def register_code_tools(
             ack="Editing that file.",
         )
     )
-    _log.info("code tools registered (read_file/write_file/edit_file/multi_edit/update_plan)")
+    registry.register(
+        ToolSpec(
+            name="delete_file",
+            description=(
+                "Delete a single file (not a folder). Use when a file should be removed as part "
+                "of the task. Prefer this over `run_command rm` — it's path-jailed and confirmed."
+            ),
+            parameters={
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string", "description": "Path of the file to delete."},
+                },
+                "required": ["path"],
+            },
+            handler=lambda path="": delete_file(path, broker),
+            risk=Risk.DESTRUCTIVE,
+            ack="Deleting that file.",
+        )
+    )
+    registry.register(
+        ToolSpec(
+            name="move_file",
+            description=(
+                "Move or rename a file within the workspace. Won't overwrite an existing "
+                "destination. Prefer this over `run_command mv` — it's path-jailed and confirmed."
+            ),
+            parameters={
+                "type": "object",
+                "properties": {
+                    "source": {"type": "string", "description": "Current path of the file."},
+                    "dest": {"type": "string", "description": "New path (move or rename)."},
+                },
+                "required": ["source", "dest"],
+            },
+            handler=lambda source="", dest="": move_file(source, dest, broker),
+            risk=Risk.DESTRUCTIVE,
+            ack="Moving that file.",
+        )
+    )
+    _log.info("code tools registered (read/write/edit/multi_edit/delete/move/update_plan)")
     register_nav_tools(registry, broker)
     register_exec_tools(
         registry,

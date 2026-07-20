@@ -8,7 +8,9 @@ from typing import Any
 from autobot.core.types import ErrorCategory, Risk
 from autobot.tools.access import AccessBroker, AccessPolicy
 from autobot.tools.code.tools import (
+    delete_file,
     edit_file,
+    move_file,
     multi_edit,
     read_file,
     read_files,
@@ -115,6 +117,54 @@ def test_read_files_rejects_non_list(tmp_path: Path) -> None:
 def test_read_files_registered(tmp_path: Path) -> None:
     reg = _registry(tmp_path)
     assert reg.get("read_files") is not None
+
+
+def test_delete_file_removes_a_file(tmp_path: Path) -> None:
+    f = tmp_path / "gone.py"
+    f.write_text("bye\n")
+    out = delete_file(str(f), _broker(tmp_path))
+    assert not f.exists()
+    assert "deleted" in out.lower()
+
+
+def test_delete_file_refuses_a_folder(tmp_path: Path) -> None:
+    d = tmp_path / "dir"
+    d.mkdir()
+    out = delete_file(str(d), _broker(tmp_path))
+    assert d.exists()  # untouched — no recursive removal
+    assert "folder" in out.lower()
+
+
+def test_delete_file_missing_is_not_ok(tmp_path: Path) -> None:
+    reg = _registry(tmp_path)
+    res = reg.dispatch("delete_file", {"path": str(tmp_path / "nope.py")})
+    assert res.ok is False and res.category == ErrorCategory.NOT_FOUND
+
+
+def test_move_file_renames(tmp_path: Path) -> None:
+    src = tmp_path / "a.py"
+    src.write_text("data\n")
+    dst = tmp_path / "b.py"
+    out = move_file(str(src), str(dst), _broker(tmp_path))
+    assert not src.exists() and dst.read_text() == "data\n"
+    assert "moved" in out.lower()
+
+
+def test_move_file_refuses_to_overwrite(tmp_path: Path) -> None:
+    src = tmp_path / "a.py"
+    src.write_text("new\n")
+    dst = tmp_path / "b.py"
+    dst.write_text("keep\n")
+    reg = _registry(tmp_path)
+    res = reg.dispatch("move_file", {"source": str(src), "dest": str(dst)})
+    assert res.ok is False and res.category == ErrorCategory.EXISTS
+    assert src.exists() and dst.read_text() == "keep\n"  # both untouched
+
+
+def test_delete_and_move_are_destructive(tmp_path: Path) -> None:
+    reg = _registry(tmp_path)
+    assert reg.get("delete_file").risk == Risk.DESTRUCTIVE  # type: ignore[union-attr]
+    assert reg.get("move_file").risk == Risk.DESTRUCTIVE  # type: ignore[union-attr]
 
 
 def test_write_file_creates_new(tmp_path: Path) -> None:
