@@ -136,6 +136,27 @@ def test_friendly_error_translates_oauth_registration_failure() -> None:
     assert "registration failed" not in msg  # raw text replaced with guidance
 
 
+def test_friendly_error_translates_missing_mcp_extra() -> None:
+    # A build without the opt-in `mcp` extra: `from mcp import ...` raises this. The raw
+    # "No module named 'mcp'" is useless in the UI — replace it with install guidance.
+    msg = friendly_error(ModuleNotFoundError("No module named 'mcp'", name="mcp"))
+    assert "mcp" in msg.lower()
+    assert "no module named" not in msg.lower()  # raw text replaced with guidance
+    assert "extra" in msg.lower()  # points at the fix
+
+
+def test_friendly_error_missing_mcp_submodule() -> None:
+    # `from mcp.client.stdio import ...` fails at the absent top-level `mcp` package.
+    exc = ModuleNotFoundError("No module named 'mcp'", name="mcp.client.stdio")
+    assert "no module named" not in friendly_error(exc).lower()
+
+
+def test_friendly_error_other_missing_module_passthrough() -> None:
+    # A different missing module isn't the mcp-extra case — keep its raw message.
+    exc = ModuleNotFoundError("No module named 'widget'", name="widget")
+    assert friendly_error(exc) == "No module named 'widget'"
+
+
 @dataclass
 class _FakeReq:
     """Minimal stand-in for httpx.Request (the hook only reads method/content/headers)."""

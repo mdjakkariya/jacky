@@ -68,6 +68,14 @@ def friendly_error(exc: BaseException) -> str:
         A concise, user-facing error string.
     """
     inner = _root_cause(exc)
+    if isinstance(inner, ModuleNotFoundError) and (inner.name or "").split(".")[0] == "mcp":
+        # The `mcp` client SDK is an opt-in extra; a plain install can configure servers
+        # it can't connect to. Point at the fix instead of the useless raw import error.
+        return (
+            "MCP support isn't installed in this build. Add it with "
+            "`uv tool install --reinstall 'jacky[mcp]'` (or `uv sync --extra mcp` "
+            "from a source checkout), then reconnect."
+        )
     msg = str(inner).strip() or inner.__class__.__name__
     low = msg.lower()
     _dcr_markers = ("registration failed", "registrationerror", "dynamic client registration")
