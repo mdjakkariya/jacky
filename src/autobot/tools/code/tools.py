@@ -22,6 +22,7 @@ from autobot.logging_setup import get_logger
 from autobot.tools.access import AccessBroker, AccessDeniedError
 from autobot.tools.code.edits import apply_replace
 from autobot.tools.code.plan import register_plan_tool
+from autobot.tools.code.rename import register_rename_tool
 from autobot.tools.code.repomap import register_repomap_tool
 from autobot.tools.code.search import register_nav_tools
 from autobot.tools.code.shell import register_exec_tools
@@ -675,5 +676,6 @@ def register_code_tools(
         task_inbox=task_inbox,
     )
     register_repomap_tool(registry, broker)
-    register_symbol_tool(registry, broker)
+    lsp_manager = register_symbol_tool(registry, broker)
+    register_rename_tool(registry, broker, lsp_manager)  # shares the language servers
     register_plan_tool(registry)

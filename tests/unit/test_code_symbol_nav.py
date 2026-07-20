@@ -97,6 +97,26 @@ def test_symbol_definition_falls_back_to_definition_pattern(tmp_path: Path) -> N
     assert "def" in store["pattern"] and "foo" in store["pattern"]  # definition-shaped
 
 
+def test_symbol_hover_is_a_valid_action_and_falls_back(tmp_path: Path) -> None:
+    # hover is semantic (needs a server); without one it falls back to the definition search.
+    f = tmp_path / "a.py"
+    f.write_text("def foo():\n    pass\n")
+    store: dict[str, Any] = {}
+    out = symbol("hover", "foo", str(f), _broker(tmp_path), grep=_capture_grep(store))
+    assert "fallback" in out.lower()
+    assert "def" in store["pattern"]  # hover falls back to the definition-shaped search
+
+
+def test_hover_text_flattens_markup() -> None:
+    from autobot.tools.code.symbol_nav import _hover_text
+
+    assert _hover_text({"contents": {"kind": "markdown", "value": "def foo() -> int"}}) == (
+        "def foo() -> int"
+    )
+    assert _hover_text({"contents": ["a", {"value": "b"}]}) == "a\nb"
+    assert _hover_text(None) == ""
+
+
 def test_symbol_rejects_bad_action(tmp_path: Path) -> None:
     f = tmp_path / "a.py"
     f.write_text("x\n")

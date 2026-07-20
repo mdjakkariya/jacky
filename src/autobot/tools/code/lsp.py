@@ -235,6 +235,25 @@ class LspClient:
         )
         return _as_locations(result)
 
+    def hover(self, uri: str, line: int, character: int) -> Any:
+        """Return the raw hover result (type/signature/doc) at 0-based (``line``, ``character``)."""
+        return self.request(
+            "textDocument/hover",
+            {"textDocument": {"uri": uri}, "position": {"line": line, "character": character}},
+        )
+
+    def rename(self, uri: str, line: int, character: int, new_name: str) -> dict[str, Any]:
+        """Return the ``WorkspaceEdit`` renaming the symbol at 0-based (``line``, ``character``)."""
+        result = self.request(
+            "textDocument/rename",
+            {
+                "textDocument": {"uri": uri},
+                "position": {"line": line, "character": character},
+                "newName": new_name,
+            },
+        )
+        return result if isinstance(result, dict) else {}
+
     def shutdown(self) -> None:
         """Best-effort ``shutdown`` + ``exit`` (never raises)."""
         try:
@@ -242,6 +261,55 @@ class LspClient:
             self.notify("exit", None)
         except (LspError, OSError):
             _log.debug("lsp shutdown failed", exc_info=True)
+
+
+def workspace_edit_files(edit: dict[str, Any]) -> dict[str, list[dict[str, Any]]]:
+    """Extract ``{uri: [TextEdit]}`` from a ``WorkspaceEdit``.
+
+    Handles both shapes (``changes`` and ``documentChanges``). Pure; ignores malformed entries.
+    """
+    out: dict[str, list[dict[str, Any]]] = {}
+    changes = edit.get("changes")
+    if isinstance(changes, dict):
+        for uri, edits in changes.items():
+            if isinstance(edits, list):
+                out.setdefault(str(uri), []).extend(e for e in edits if isinstance(e, dict))
+    for dc in edit.get("documentChanges") or []:
+        if isinstance(dc, dict) and isinstance(dc.get("textDocument"), dict):
+            uri = str(dc["textDocument"].get("uri", ""))
+            edits = dc.get("edits")
+            if uri and isinstance(edits, list):
+                out.setdefault(uri, []).extend(e for e in edits if isinstance(e, dict))
+    return out
+
+
+def apply_text_edits(text: str, edits: list[dict[str, Any]]) -> str:
+    """Apply LSP ``TextEdit``s (``range`` → ``newText``) to ``text``, end-first.
+
+    Edits are applied from the end so earlier ones keep their offsets. Pure. Overlapping edits
+    are undefined per spec and not guarded against.
+    """
+    line_starts = [0]
+    for line in text.split("\n"):
+        line_starts.append(line_starts[-1] + len(line) + 1)  # + the newline
+
+    def offset(pos: dict[str, Any]) -> int:
+        row = int(pos.get("line", 0))
+        base = line_starts[row] if 0 <= row < len(line_starts) else len(text)
+        return max(0, min(base + int(pos.get("character", 0)), len(text)))
+
+    def start_key(e: dict[str, Any]) -> tuple[int, int]:
+        s = e.get("range", {}).get("start", {})
+        return int(s.get("line", 0)), int(s.get("character", 0))
+
+    result = text
+    for e in sorted(edits, key=start_key, reverse=True):
+        rng = e.get("range", {})
+        lo, hi = offset(rng.get("start", {})), offset(rng.get("end", {}))
+        if lo > hi:
+            lo, hi = hi, lo
+        result = result[:lo] + str(e.get("newText", "")) + result[hi:]
+    return result
 
 
 def _as_locations(result: Any) -> list[dict[str, Any]]:

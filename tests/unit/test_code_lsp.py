@@ -12,9 +12,60 @@ import pytest
 from autobot.tools.code.lsp import (
     LspClient,
     LspError,
+    apply_text_edits,
     frame_message,
     read_message,
+    workspace_edit_files,
 )
+
+
+def _edit(sl: int, sc: int, el: int, ec: int, new: str) -> dict[str, Any]:
+    return {
+        "range": {"start": {"line": sl, "character": sc}, "end": {"line": el, "character": ec}},
+        "newText": new,
+    }
+
+
+def test_apply_text_edits_single() -> None:
+    assert apply_text_edits("hello world\n", [_edit(0, 6, 0, 11, "there")]) == "hello there\n"
+
+
+def test_apply_text_edits_multiple_on_one_line_end_first() -> None:
+    # Rename both `foo` -> `bar`; applied end-first so the first edit's offsets stay valid.
+    text = "foo = foo + 1\n"
+    out = apply_text_edits(text, [_edit(0, 0, 0, 3, "bar"), _edit(0, 6, 0, 9, "bar")])
+    assert out == "bar = bar + 1\n"
+
+
+def test_apply_text_edits_across_lines() -> None:
+    text = "a\nold\nc\n"
+    assert apply_text_edits(text, [_edit(1, 0, 1, 3, "new")]) == "a\nnew\nc\n"
+
+
+def test_workspace_edit_files_changes_shape() -> None:
+    we = {
+        "changes": {
+            "file:///a.py": [_edit(0, 0, 0, 3, "x")],
+            "file:///b.py": [_edit(1, 0, 1, 1, "y")],
+        }
+    }
+    files = workspace_edit_files(we)
+    assert set(files) == {"file:///a.py", "file:///b.py"}
+    assert len(files["file:///a.py"]) == 1
+
+
+def test_workspace_edit_files_document_changes_shape() -> None:
+    we = {
+        "documentChanges": [
+            {"textDocument": {"uri": "file:///a.py"}, "edits": [_edit(0, 0, 0, 1, "z")]}
+        ]
+    }
+    assert list(workspace_edit_files(we)) == ["file:///a.py"]
+
+
+def test_workspace_edit_files_ignores_malformed() -> None:
+    assert workspace_edit_files({"changes": {"file:///a": "not-a-list"}}) == {}
+    assert workspace_edit_files({}) == {}
 
 
 def test_frame_and_read_round_trip() -> None:

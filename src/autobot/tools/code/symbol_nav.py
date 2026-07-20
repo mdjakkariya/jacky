@@ -34,7 +34,7 @@ if TYPE_CHECKING:
 
 _log = get_logger("coder")
 
-_ACTIONS = ("definition", "references")
+_ACTIONS = ("definition", "references", "hover")
 _MAX_LOCS = 50  # cap locations returned so a widely-used symbol can't flood the turn
 
 # LSP language id -> candidate server argv; the first whose argv[0] is on PATH is used. Any
@@ -135,6 +135,23 @@ class LspManager:
         self._procs.clear()
 
 
+def _hover_text(result: Any) -> str:
+    """Flatten an LSP hover result (str | MarkupContent | MarkedString | list) to plain text."""
+
+    def one(content: Any) -> str:
+        if isinstance(content, str):
+            return content
+        if isinstance(content, dict):
+            return str(content.get("value", ""))
+        return ""
+
+    if not isinstance(result, dict):
+        return ""
+    contents = result.get("contents")
+    parts = [one(c) for c in contents] if isinstance(contents, list) else [one(contents)]
+    return "\n".join(p.strip() for p in parts if p and p.strip()).strip()
+
+
 def _loc_to_line(loc: dict[str, Any], root: Path) -> str:
     """Render an LSP Location as ``relpath:line`` (1-based), best-effort."""
     uri = str(loc.get("uri", ""))
@@ -170,12 +187,16 @@ def _lsp_lookup(  # pragma: no cover - requires a real server on PATH
     client = manager.client_for(str(root), language)
     if client is None:
         return None
+    uri = resolved.resolve().as_uri()
     try:
-        client.sync(resolved.resolve().as_uri(), language, text)
+        client.sync(uri, language, text)
+        if action == "hover":
+            hover = _hover_text(client.hover(uri, line - 1, col))
+            return f"hover for {name!r} (language server):\n{hover}" if hover else None
         locs = (
-            client.definition(resolved.resolve().as_uri(), line - 1, col)
+            client.definition(uri, line - 1, col)
             if action == "definition"
-            else client.references(resolved.resolve().as_uri(), line - 1, col)
+            else client.references(uri, line - 1, col)
         )
     except (LspError, OSError):
         return None
@@ -230,8 +251,8 @@ def symbol(
     return _fallback(action, name, broker, grep or _grep)
 
 
-def register_symbol_tool(registry: ToolRegistry, broker: AccessBroker) -> None:
-    """Register the read-only ``symbol`` tool with a shared, atexit-cleaned LSP manager."""
+def register_symbol_tool(registry: ToolRegistry, broker: AccessBroker) -> LspManager:
+    """Register the read-only ``symbol`` tool; return the shared, atexit-cleaned LSP manager."""
     import atexit
 
     manager = LspManager()
@@ -248,17 +269,18 @@ def register_symbol_tool(registry: ToolRegistry, broker: AccessBroker) -> None:
         ToolSpec(
             name="symbol",
             description=(
-                "Find where a symbol is defined or used. `action`: 'definition' or 'references'. "
-                "Pass the symbol `name`, the `path` you saw it in, and the 1-based `line`. Uses a "
-                "language server for precise, scope-aware results when one is installed; otherwise "
-                "falls back to a textual search. Prefer this over grep for navigating code."
+                "Navigate code by symbol. `action`: 'definition' (where it's defined), "
+                "'references' (where it's used), or 'hover' (its type/signature). Pass the symbol "
+                "`name`, the `path` you saw it in, and the 1-based `line`. Uses a language server "
+                "for precise, scope-aware results when one is installed; otherwise falls back to a "
+                "textual search. Prefer this over grep for navigating code."
             ),
             parameters={
                 "type": "object",
                 "properties": {
                     "action": {
                         "type": "string",
-                        "enum": ["definition", "references"],
+                        "enum": ["definition", "references", "hover"],
                         "description": "What to find.",
                     },
                     "name": {"type": "string", "description": "The symbol name."},
@@ -272,3 +294,4 @@ def register_symbol_tool(registry: ToolRegistry, broker: AccessBroker) -> None:
             ack="Looking up the symbol.",
         )
     )
+    return manager
