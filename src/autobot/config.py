@@ -168,6 +168,12 @@ class Settings:
     # returned — the human still sees the full stream live. Protects the model's context
     # (output is re-sent every turn, so it costs disproportionately) without losing detail.
     command_output_model_cap: int = 10_000
+    # Verify-after-edit: a shell command run automatically at the end of a coding turn that
+    # changed files (e.g. "make check", "pytest -q", "npm test"). On non-zero exit its output
+    # is fed back so the model fixes the breakage, bounded by a few attempts. Empty (default)
+    # disables it — the model must then verify by hand. Runs through run_command's cwd jail +
+    # command policy, pre-authorized (it's the user's own configured command).
+    verify_command: str = ""
     # Which agent this process is: "assistant" (voice/chat helper, default) or "coder"
     # (a code-editing agent — swaps in the code tools + a coding system prompt). Set by the
     # daemon's --profile flag or settings.json; the jack CLI runs a coder-profile daemon.
