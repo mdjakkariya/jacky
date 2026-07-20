@@ -118,6 +118,32 @@ ALL: tuple[Scenario, ...] = (
         checks=(ScreenContains("All time"),),
     ),
     Scenario(
+        # Exercises the LSP-backed `rename_symbol` tool end-to-end (epic #105): a real language
+        # server (pylsp, if installed) computes a cross-file WorkspaceEdit and the tool applies it
+        # atomically. The seed puts the definition in one file and the call + import in another, so
+        # a pass proves a *semantic* rename (all three sites) — not a textual s/greet/welcome/ that
+        # would also mangle the "greeter" module name. If no Python server is on PATH the tool
+        # declines (no unsafe textual rename); this scenario then legitimately won't pass, which is
+        # the intended signal to install one, so it's driven only when a server is available.
+        name="rename-symbol",
+        autonomy="auto",
+        strategy="unattended",
+        task="rename the function greet to welcome everywhere it is used",
+        success_criteria="Renamed the function greet to welcome across both files — the "
+        "definition in greeter.py and the import + call site in main.py — with no leftover "
+        "'greet' references.",
+        seed_files={
+            "greeter.py": 'def greet(name):\n    return f"Hello, {name}!"\n',
+            "main.py": 'from greeter import greet\n\nprint(greet("world"))\n',
+        },
+        checks=(
+            FileContains("greeter.py", "def welcome"),  # the definition was renamed
+            FileLacks("greeter.py", "greet"),  # …and nothing greet-shaped is left behind
+            FileContains("main.py", "welcome("),  # the call site was renamed (not just the import)
+            FileLacks("main.py", "greet("),  # …and the old call is gone (greeter module name stays)
+        ),
+    ),
+    Scenario(
         name="slash-and-chat",
         autonomy="auto",
         strategy="scripted",
