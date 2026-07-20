@@ -29,6 +29,23 @@ class ToolError(Exception):
     """
 
 
+class ToolFailure(str):
+    """A handler return value that also marks the call failed (``ok=False``).
+
+    Some tools report *expected* failures by **returning** a human-readable message
+    instead of raising — so a handler called directly still yields a string and a bad
+    tool can never crash the loop. A plain returned string is treated as success, which
+    hides those failures from the model-facing ``ok`` flag (and from the harness guards
+    that key off it). Wrapping the message in ``ToolFailure`` lets
+    :meth:`ToolRegistry.dispatch` set ``ok=False`` **without** changing the
+    return-a-string contract: the marker *is* a ``str``, so every existing caller and
+    assertion keeps working. Equivalent in effect to raising :class:`ToolError`; prefer
+    this for formatted, already-handled failures.
+    """
+
+    __slots__ = ()
+
+
 @dataclass(frozen=True, slots=True)
 class ToolSpec:
     """A registered tool: its advertised schema, handler, and risk level."""
@@ -146,7 +163,10 @@ class ToolRegistry:
 
         Tool errors are captured and returned as a failed :class:`ToolResult`
         rather than raised, so a misbehaving tool surfaces to the model as a
-        message instead of crashing the loop.
+        message instead of crashing the loop. A handler signals an expected
+        failure either by raising :class:`ToolError` or by returning a
+        :class:`ToolFailure` string; both map to ``ok=False``. Any other returned
+        string is a success.
 
         Args:
             name: The tool name requested by the model.
@@ -162,7 +182,11 @@ class ToolRegistry:
         # Phase 1: insert the permission gate here, keyed on ``spec.risk``.
         try:
             content = spec.handler(**(arguments or {}))
-            return ToolResult(name=name, content=content, ok=True)
+            # A ``ToolFailure`` return marks an expected failure; normalise to a plain
+            # ``str`` so the marker never leaks past this boundary into the transcript.
+            return ToolResult(
+                name=name, content=str(content), ok=not isinstance(content, ToolFailure)
+            )
         except ToolError as exc:  # expected failure — report verbatim, ok=False
             return ToolResult(name=name, content=str(exc), ok=False)
         except Exception as exc:  # unexpected — surface, don't crash the loop
