@@ -148,6 +148,12 @@ def read_only_executor(gate: PermissionGate) -> ToolExecutor:
     return execute
 
 
+# The only destructive tools an approved plan pre-authorizes (run without a second confirm).
+# Deliberately NOT the whole Risk.DESTRUCTIVE class: undo (data-loss) and network-egress MCP
+# tools (off-device sends must always confirm — CLAUDE.md constraint #1) stay confirmed.
+_PREAUTH_DESTRUCTIVE = frozenset({"delete_file", "move_file"})
+
+
 def act_executor(
     gate: PermissionGate,
     allowlist: list[str],
@@ -205,9 +211,12 @@ def act_executor(
         risk = gate.risk_of(call.name)
         if risk is not None and risk >= Risk.WRITE:
             snapshot_once()  # a file-mutating edit — snapshot the pre-change state first
-        # A destructive file op (delete_file/move_file) is authorized by an approved plan, so
+        # A destructive *file op* (delete_file/move_file) is authorized by an approved plan, so
         # it runs pre-authorized; in confirm mode it still asks — mirroring run_command above.
-        if risk is not None and risk >= Risk.DESTRUCTIVE and not ask_on_confirm:
+        # Gate on the exact tool NAMES, not the risk class: other destructive tools (undo, and
+        # network-egress MCP tools whose off-device sends must always confirm) must NOT be
+        # silently pre-authorized here.
+        if call.name in _PREAUTH_DESTRUCTIVE and not ask_on_confirm:
             return gate.execute(call, pre_authorized=True)
         return gate.execute(call)
 

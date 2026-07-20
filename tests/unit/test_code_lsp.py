@@ -204,13 +204,35 @@ def test_await_diagnostics_returns_matching_uri() -> None:
     assert LspClient(t).await_diagnostics("file:///a.py") == [{"message": "boom", "severity": 1}]
 
 
-def test_await_diagnostics_ignores_other_uris_then_times_out_empty() -> None:
+def test_await_diagnostics_none_when_uri_never_reported() -> None:
     t = _QueueTransport([_diag("file:///other.py", [{"message": "x"}])])  # never a.py, then None
-    assert LspClient(t, timeout=0.05).await_diagnostics("file:///a.py") == []
+    # Timed out without ever hearing about a.py -> None (unknown), NOT [] (falsely "clean").
+    assert LspClient(t, timeout=0.05).await_diagnostics("file:///a.py") is None
 
 
-def test_await_diagnostics_empty_on_timeout() -> None:
-    assert LspClient(_QueueTransport([]), timeout=0.05).await_diagnostics("file:///a.py") == []
+def test_await_diagnostics_none_on_timeout() -> None:
+    assert LspClient(_QueueTransport([]), timeout=0.05).await_diagnostics("file:///a.py") is None
+
+
+def test_await_diagnostics_returns_empty_list_when_server_reports_clean() -> None:
+    # A server that publishes an empty diagnostics list = genuinely clean (distinct from None).
+    t = _QueueTransport([_diag("file:///a.py", [])])
+    assert LspClient(t).await_diagnostics("file:///a.py") == []
+
+
+def test_empty_result_is_not_cached() -> None:
+    # An empty definition (server maybe still indexing) must NOT be cached — a retry re-asks.
+    def responder(msg: dict[str, Any]) -> list[dict[str, Any]]:
+        if msg.get("method") == "textDocument/definition":
+            return [{"jsonrpc": "2.0", "id": msg["id"], "result": None}]
+        return []
+
+    transport = _FakeTransport(responder)
+    client = LspClient(transport)
+    client.definition("file:///a.py", 0, 0)
+    client.definition("file:///a.py", 0, 0)
+    defs = [m for m in transport.sent if m.get("method") == "textDocument/definition"]
+    assert len(defs) == 2  # empty wasn't cached, so the second call re-requested
 
 
 def test_definition_result_is_cached_per_version() -> None:

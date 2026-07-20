@@ -40,8 +40,14 @@ def _make_diag_fn(manager: LspManager) -> DiagFn:  # pragma: no cover - needs a 
             return None
         try:
             uri = resolved.resolve().as_uri()
-            client.sync(uri, language, resolved.read_text(encoding="utf-8", errors="replace"))
-            return client.await_diagnostics(uri)
+            changed = client.sync(
+                uri, language, resolved.read_text(encoding="utf-8", errors="replace")
+            )
+            # Skip the wait only when the file is unchanged AND we already have its diagnostics
+            # (the server won't re-publish). If unchanged but not yet collected — or changed — wait
+            # normally so a pending/fresh publish is caught.
+            have = any(p.get("uri") == uri for p in client.diagnostics)
+            return client.await_diagnostics(uri, timeout=0.0 if (not changed and have) else None)
         except (LspError, OSError):
             return None
 
@@ -81,13 +87,13 @@ def diagnostics(path: str, broker: AccessBroker, *, diag_fn: DiagFn) -> str:
             ErrorCategory.NOT_FOUND,
         )
     diags = diag_fn(resolved, language)
-    if diags is None:
+    if diags is None:  # no server installed, OR the server didn't answer in time (still analyzing)
         return ToolFailure(
-            f"No language server is installed for {language}. Run your build/linter with "
-            "run_command to check this file instead.",
+            f"Couldn't get diagnostics for {resolved.name} — no language server for {language} is "
+            "installed, or it's still analyzing. Run your build/linter with run_command to check.",
             ErrorCategory.NOT_FOUND,
         )
-    if not diags:
+    if not diags:  # the server answered: genuinely clean
         return f"No problems reported for {resolved.name}."
     _log.info("diagnostics name=%r count=%d", resolved.name, len(diags))
     return _format(resolved, diags)

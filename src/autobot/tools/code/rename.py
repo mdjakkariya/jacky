@@ -11,12 +11,11 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
-from urllib.parse import unquote, urlparse
 
 from autobot.core.types import ErrorCategory, Risk
 from autobot.logging_setup import get_logger
 from autobot.tools.access import AccessBroker, AccessDeniedError
-from autobot.tools.code.lsp import LspError, apply_text_edits, workspace_edit_files
+from autobot.tools.code.lsp import LspError, apply_text_edits, uri_to_path, workspace_edit_files
 from autobot.tools.code.symbol_nav import LspManager, _column_of, _language_for
 from autobot.tools.registry import ToolFailure, ToolRegistry, ToolSpec
 
@@ -98,23 +97,40 @@ def rename_symbol(
     files = workspace_edit_files(edit)
     if not files:
         return f"The language server produced no rename for {name!r}."
-    changed: list[str] = []
+    # Phase 1: resolve + read + apply every file IN MEMORY. If any file can't be accessed (jail
+    # or a declined grant) or read, abort writing nothing — a rename must be all-or-nothing, not
+    # a half-renamed tree that no longer compiles.
+    planned: list[tuple[Path, str]] = []  # (resolved_target, new_text)
     for uri, edits in list(files.items())[:_MAX_RENAME_FILES]:
-        target = unquote(urlparse(uri).path) if uri.startswith("file:") else uri
         try:
-            resolved_target = broker.ensure(target, write=True)
-        except (AccessDeniedError, PermissionError):
-            continue  # a file outside the workspace jail — skip it
+            target = broker.ensure(uri_to_path(uri), write=True)
+        except (AccessDeniedError, PermissionError) as exc:
+            return ToolFailure(f"Rename aborted, no files changed: {exc}", ErrorCategory.DENIED)
         try:
-            text = resolved_target.read_text(encoding="utf-8", errors="replace")
-            new_text = apply_text_edits(text, edits)
-            if new_text != text:
-                resolved_target.write_text(new_text, encoding="utf-8")
-                changed.append(resolved_target.name)
-        except OSError:
-            continue
-    if not changed:
-        return "Nothing changed (the rename touched only files outside the workspace)."
+            text = target.read_text(encoding="utf-8", errors="replace")
+        except OSError as exc:
+            return ToolFailure(
+                f"Rename aborted, no files changed — couldn't read {target.name}: {exc}",
+                ErrorCategory.UNREADABLE,
+            )
+        new_text = apply_text_edits(text, edits)
+        if new_text != text:
+            planned.append((target, new_text))
+    if not planned:
+        return f"No change needed to rename {name!r} to {new_name!r}."
+    # Phase 2: write them all. A mid-write OS error is rare; report it honestly (the turn
+    # checkpoint can roll back) rather than claim a clean success.
+    changed: list[str] = []
+    for target, new_text in planned:
+        try:
+            target.write_text(new_text, encoding="utf-8")
+        except OSError as exc:
+            return ToolFailure(
+                f"Partly renamed ({len(changed)} of {len(planned)} files written) then failed on "
+                f"{target.name}: {exc}. Use the checkpoint to roll back.",
+                ErrorCategory.UNREADABLE,
+            )
+        changed.append(target.name)
     _log.info("rename_symbol %r -> %r files=%d", name, new_name, len(changed))
     return f"Renamed {name!r} → {new_name!r} across {len(changed)} file(s): " + ", ".join(
         sorted(set(changed))
