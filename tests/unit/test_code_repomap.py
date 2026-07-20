@@ -75,6 +75,47 @@ def test_extract_python_finds_classes_functions_methods() -> None:
     assert method.line == 9
 
 
+def test_extract_javascript_finds_classes_and_methods() -> None:
+    pytest.importorskip("tree_sitter_language_pack")
+    from autobot.tools.code.repomap import _SPECS, _extract
+
+    # `export`-wrapped declarations must be seen through (the common real-world shape).
+    src = (
+        b"export function top(a) {\n  return a;\n}\n\n"
+        b"export class C {\n  m(x) {\n    return x;\n  }\n}\n"
+    )
+    syms = _extract(src, _SPECS["javascript"])
+    sigs = [s.signature.strip() for s in syms]
+    assert any("function top" in sig for sig in sigs)
+    assert any("class C" in sig for sig in sigs)
+    m = next(s for s in syms if "m(x)" in s.signature)  # method captured...
+    assert m.depth == 1  # ...nested one level under its class
+
+
+def test_extract_python_sees_through_decorators() -> None:
+    pytest.importorskip("tree_sitter_language_pack")
+    src = (
+        b"@cache\ndef cached(x):\n    return x\n\n"
+        b"@dataclass\nclass D:\n    def m(self):\n        return 1\n"
+    )
+    got = {(s.name, s.depth) for s in extract_python(src)}
+    assert ("cached", 0) in got  # decorated function
+    assert ("D", 0) in got and ("m", 1) in got  # decorated class + its method
+
+
+def test_extract_go_finds_functions_and_types() -> None:
+    pytest.importorskip("tree_sitter_language_pack")
+    from autobot.tools.code.repomap import _SPECS, _extract
+
+    src = (
+        b"package main\n\nfunc Hello(name string) string {\n\treturn name\n}\n\n"
+        b"type T struct {\n\tX int\n}\n"
+    )
+    sigs = [s.signature.strip() for s in _extract(src, _SPECS["go"])]
+    assert any(sig.startswith("func Hello") for sig in sigs)
+    assert any(sig.startswith("type T") for sig in sigs)
+
+
 class _FakeConfirmer:
     def __init__(self, grant: bool) -> None:
         self._grant = grant
@@ -110,6 +151,19 @@ def test_build_repo_map_scans_python_files(tmp_path: Path) -> None:
     out = build_repo_map(str(tmp_path), _broker(tmp_path), extractor=_fake_extractor)
     assert "a.py" in out and "alpha" in out
     assert "b.py" in out and "beta" in out
+    assert "notes.txt" not in out
+
+
+def test_build_repo_map_scans_multiple_languages(tmp_path: Path) -> None:
+    pytest.importorskip("tree_sitter_language_pack")  # real per-language extractors
+    (tmp_path / "a.py").write_text("def alpha():\n    pass\n")
+    (tmp_path / "b.js").write_text("function beta() {\n  return 1;\n}\n")
+    (tmp_path / "c.go").write_text("package main\n\nfunc Gamma() {}\n")
+    (tmp_path / "notes.txt").write_text("def not_code():\n")  # unsupported extension ignored
+    out = build_repo_map(str(tmp_path), _broker(tmp_path))
+    assert "a.py" in out and "alpha" in out
+    assert "b.js" in out and "beta" in out
+    assert "c.go" in out and "Gamma" in out
     assert "notes.txt" not in out
 
 

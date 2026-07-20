@@ -101,6 +101,21 @@ def test_act_passes_edits_straight_through() -> None:
     assert gate.calls == [("edit_file", False)]  # WRITE < threshold → gate won't confirm
 
 
+def test_act_destructive_file_op_pre_authorized_under_approved_plan() -> None:
+    # An approved plan (ask_on_confirm=False) authorizes its delete/move — run pre-authorized.
+    gate = _FakeGate({"delete_file": Risk.DESTRUCTIVE})
+    ex = act_executor(gate, allowlist=[], blocklist=[], ask_on_confirm=False)  # type: ignore[arg-type]
+    ex(ToolCall(name="delete_file", arguments={"path": "x"}))
+    assert gate.calls == [("delete_file", True)]  # pre_authorized → no second prompt
+
+
+def test_act_destructive_file_op_asks_in_confirm_mode() -> None:
+    gate = _FakeGate({"move_file": Risk.DESTRUCTIVE})
+    ex = act_executor(gate, allowlist=[], blocklist=[], ask_on_confirm=True)  # type: ignore[arg-type]
+    ex(ToolCall(name="move_file", arguments={"source": "a", "dest": "b"}))
+    assert gate.calls == [("move_file", False)]  # confirm mode → gate asks
+
+
 def test_act_caps_logged_command_length(caplog: pytest.LogCaptureFixture) -> None:
     # A long/newline-laden command must not bloat the debug log (logs are "signal, not
     # noise") — the logged cmd= value is capped even though classify_command still sees

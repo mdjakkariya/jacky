@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from autobot.tools.access import AccessBroker, AccessPolicy
-from autobot.tools.code.search import glob_files, grep
+from autobot.tools.code.search import glob_files, grep, list_dir
 
 
 class _FakeConfirmer:
@@ -38,6 +38,59 @@ def test_glob_lists_matching_files(tmp_path: Path) -> None:
     out = glob_files("**/*.py", _broker(tmp_path), str(tmp_path))
     assert "a.py" in out and "b.py" in out
     assert "readme.md" not in out
+
+
+def test_grep_context_lines_python_fallback(tmp_path: Path, monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    # Force the pure-Python path so this is deterministic regardless of ripgrep, and check
+    # that `context` shows the surrounding lines (and only those).
+    from autobot.tools.code import search as search_mod
+
+    monkeypatch.setattr(search_mod, "_ripgrep", lambda *a, **k: None)
+    f = tmp_path / "a.py"
+    f.write_text("alpha\nbeta\nTARGET\ngamma\ndelta\n")
+    out = grep("TARGET", _broker(tmp_path), str(tmp_path), output_mode="content", context=1)
+    assert "TARGET" in out
+    assert "beta" in out and "gamma" in out  # one line of context each side
+    assert "alpha" not in out and "delta" not in out  # beyond the context window
+
+
+def test_grep_uses_ripgrep_when_available(tmp_path: Path) -> None:
+    import shutil as _sh
+
+    if _sh.which("rg") is None:
+        import pytest
+
+        pytest.skip("ripgrep not installed")
+    (tmp_path / "a.py").write_text("needle in a haystack\n")
+    out = grep("needle", _broker(tmp_path), str(tmp_path), output_mode="content")
+    assert "needle in a haystack" in out
+
+
+def test_glob_prunes_noise_dirs(tmp_path: Path) -> None:
+    _tree(tmp_path)
+    (tmp_path / "node_modules" / "dep").mkdir(parents=True)
+    (tmp_path / "node_modules" / "dep" / "junk.py").write_text("junk = 1\n")
+    (tmp_path / ".git").mkdir()
+    (tmp_path / ".git" / "hook.py").write_text("hook = 1\n")
+    out = glob_files("**/*.py", _broker(tmp_path), str(tmp_path))
+    assert "a.py" in out and "b.py" in out  # real sources kept
+    assert "junk.py" not in out and "hook.py" not in out  # noise dirs pruned
+
+
+def test_list_dir_lists_dirs_first_and_hides_noise(tmp_path: Path) -> None:
+    _tree(tmp_path)
+    (tmp_path / "node_modules").mkdir()
+    out = list_dir(_broker(tmp_path), str(tmp_path))
+    assert "pkg/" in out  # subfolder shown with trailing slash
+    assert "readme.md" in out
+    assert "node_modules" not in out  # noise dir hidden
+    assert out.index("pkg/") < out.index("readme.md")  # dirs before files
+
+
+def test_list_dir_rejects_a_file(tmp_path: Path) -> None:
+    f = tmp_path / "a.py"
+    f.write_text("x = 1\n")
+    assert "not a folder" in list_dir(_broker(tmp_path), str(f)).lower()
 
 
 def test_glob_no_matches(tmp_path: Path) -> None:

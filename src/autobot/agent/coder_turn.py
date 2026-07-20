@@ -205,6 +205,10 @@ def act_executor(
         risk = gate.risk_of(call.name)
         if risk is not None and risk >= Risk.WRITE:
             snapshot_once()  # a file-mutating edit — snapshot the pre-change state first
+        # A destructive file op (delete_file/move_file) is authorized by an approved plan, so
+        # it runs pre-authorized; in confirm mode it still asks — mirroring run_command above.
+        if risk is not None and risk >= Risk.DESTRUCTIVE and not ask_on_confirm:
+            return gate.execute(call, pre_authorized=True)
         return gate.execute(call)
 
     return execute
@@ -241,6 +245,12 @@ _SUPERSEDE_WAIT_S = 5.0  # how long a fresh turn waits for an interrupted one to
 MAX_ACT_CONTINUES = 2  # auto-nudge the model past a narrate-then-stop, at most this many times
 _CONTINUE_NUDGE = "Continue with the remaining steps of the task."
 _REMAINING_NUDGE = "Continue with the remaining steps:\n"
+
+_VERIFY_MAX_RETRIES = 2  # after a failing verify, let the model try to fix this many times
+_VERIFY_NUDGE = (
+    "I ran your verify command `{command}` after your edits and it failed. Fix the problem it "
+    "reports, then stop — I'll re-run the check. Output:\n"
+)
 
 # Forward-looking, first-person cues at the tail of a reply that mean the model announced a
 # next step and then stopped (the narrate-then-stop failure mode) rather than finishing.
@@ -594,17 +604,22 @@ class CoderTurnDriver:
         is ``None``), it falls back to the ``_is_continuation_intent`` narration heuristic.
         """
         settings = self._settings()
-        before_mutation: Callable[[], None] | None = None
         cp = self._checkpoint
-        if cp is not None:
+        mutated = False
 
-            def _snapshot() -> None:  # snapshot the workspace before the first change
+        def _on_first_mutation() -> None:
+            # Fires once, just before the first real workspace change. Records that the turn
+            # mutated the workspace (gates the verify-after-edit run below) and, when enabled,
+            # takes the pre-change checkpoint. A checkpoint failure must never break the turn.
+            nonlocal mutated
+            mutated = True
+            if cp is not None:
                 try:
                     cp(request_text)
-                except Exception:  # a checkpoint failure must never break the turn
+                except Exception:
                     _log.exception("checkpoint failed; continuing turn")
 
-            before_mutation = _snapshot
+        before_mutation = _on_first_mutation
 
         executor = act_executor(
             self._gate,
@@ -665,8 +680,60 @@ class CoderTurnDriver:
                 )
         finally:
             plan_sink.reset(token)
+        verify = settings.verify_command.strip()
+        if mutated and verify and not self._cancel.is_set():
+            reply = self._verify_and_reflect(channel, executor, verify, reply)
         _log.info("turn done")
         return reply
+
+    def _run_verify(self, channel: TurnChannel, command: str) -> tuple[bool, bool, str]:
+        """Run the verify command once via run_command's cwd jail + policy (pre-authorized).
+
+        Returns ``(passed, ran, output)``: ``passed`` when it exited 0 (run_command prefixes
+        its result with ``[ok]``); ``ran`` when it actually executed (vs. blocked by policy or
+        a workspace error), so a misconfigured command doesn't get mistaken for a code failure.
+        """
+        label = f"Verify: {command}"
+        channel.emit({"type": "tool", "event": "start", "name": "verify", "label": label})
+        result = self._gate.execute(
+            ToolCall(name="run_command", arguments={"command": command}), pre_authorized=True
+        )
+        stripped = result.content.lstrip()
+        passed = stripped.startswith("[ok]")
+        ran = passed or stripped.startswith("[exit") or "timed out" in stripped.lower()
+        channel.emit(
+            {"type": "tool", "event": "end", "name": "verify", "label": label, "ok": passed}
+        )
+        return passed, ran, result.content
+
+    def _verify_and_reflect(
+        self, channel: TurnChannel, executor: ToolExecutor, command: str, reply: str
+    ) -> str:
+        """Run verify after edits; on failure, feed the output back to fix it (bounded).
+
+        Loops at most :data:`_VERIFY_MAX_RETRIES` fix attempts. A command that couldn't run
+        (blocked/misconfigured) is logged and skipped rather than nagging the model about a
+        config problem it can't fix.
+        """
+        attempts = 0
+        while True:
+            passed, ran, output = self._run_verify(channel, command)
+            if passed:
+                if attempts:
+                    _log.info("verify passed after %d fix attempt(s)", attempts)
+                return reply
+            if not ran:
+                _log.warning("verify command did not run (skipping fix loop): %s", output[:200])
+                return reply
+            if attempts >= _VERIFY_MAX_RETRIES or self._cancel.is_set():
+                _log.info("verify still failing after %d fix attempt(s); stopping", attempts)
+                return reply
+            attempts += 1
+            _log.info("verify failed; nudging model to fix (%d/%d)", attempts, _VERIFY_MAX_RETRIES)
+            nudge = _VERIFY_NUDGE.format(command=command) + output
+            reply = self._llm.run_turn(
+                nudge, executor, on_event=channel.emit, should_cancel=self._cancel.is_set
+            )
 
     def _route(self, text: str) -> str:
         """Auto-select the execution mode for ``text``: ``"plan"`` or ``"confirm"``.

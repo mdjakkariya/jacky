@@ -246,6 +246,65 @@ def run_command(
     return f"[{status}]\n{body}" if body.strip() else f"[{status}] (no output)"
 
 
+_TAIL_DEFAULT_LINES = 50  # lines returned by a background_tasks tail
+_TAIL_MAX_CHARS = 8000  # char cap on a tail so a chatty log can't flood the turn
+
+
+def _status_text(task: object) -> str:
+    """Human status for a task row (``running`` or e.g. ``failed (exit 1)``)."""
+    status = getattr(task, "status", "?")
+    if status == "running":
+        return "running"
+    return f"{status} (exit {getattr(task, 'returncode', None)})"
+
+
+def background_tasks(
+    broker: AccessBroker,
+    registry: TaskRegistry | None,
+    action: str = "list",
+    task_id: str = "",
+    lines: int = _TAIL_DEFAULT_LINES,
+) -> str:
+    """List backgrounded commands and tail their output (read-only visibility into bg work).
+
+    ``action="list"`` shows this session's background tasks (id, status, label); ``"tail"``
+    returns the last ``lines`` of ``task_id``'s log. Lets the model check on a long-running
+    process instead of re-running it. (Killing a task is not yet supported — see #100.)
+    """
+    if registry is None:
+        return "Background tasks aren't available here."
+    if action == "list":
+        sid = active_session_id.get() or None
+        tasks = [t for t in registry.list(session_id=sid) if t.kind == "command"]
+        if not tasks:
+            return "No background tasks."
+        rows = [f"{t.id}  [{_status_text(t)}]  {t.label}" for t in tasks[:50]]
+        return "Background tasks (newest first):\n" + "\n".join(rows)
+    if action == "tail":
+        if not task_id:
+            return "Which task? Pass `task_id` (see the list action)."
+        task = registry.get(task_id)
+        if task is None:
+            return f"No background task {task_id!r} (it may have been evicted)."
+        try:
+            base = broker.ensure(".", write=False)
+        except (AccessDeniedError, PermissionError) as exc:
+            return str(exc)
+        log_path = base / ".jack" / "tasks" / f"{task_id}.log"
+        if not log_path.exists():
+            return f"No log yet for {task_id} (status: {_status_text(task)})."
+        try:
+            content = log_path.read_text(encoding="utf-8", errors="replace")
+        except OSError as exc:
+            return f"I couldn't read {task_id}'s log: {exc}"
+        tail_lines = content.splitlines()[-max(1, lines) :]
+        text = "\n".join(tail_lines)
+        if len(text) > _TAIL_MAX_CHARS:
+            text = "…" + text[-_TAIL_MAX_CHARS:]
+        return f"{task_id} [{_status_text(task)}] — last {len(tail_lines)} line(s):\n{text}"
+    return "action must be 'list' or 'tail'."
+
+
 def register_exec_tools(
     registry: ToolRegistry,
     broker: AccessBroker,
@@ -329,4 +388,34 @@ def register_exec_tools(
             ack="Running that command.",
         )
     )
+    if task_registry is not None:
+        registry.register(
+            ToolSpec(
+                name="background_tasks",
+                description=(
+                    "Check on commands you started with run_command `run_in_background: true`. "
+                    "`action`: 'list' (default — id, status, label of your background tasks) or "
+                    "'tail' (pass `task_id`, optional `lines`, to see recent output). Use this "
+                    "instead of re-running a long process to see how it's going."
+                ),
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "action": {
+                            "type": "string",
+                            "enum": ["list", "tail"],
+                            "description": "'list' (default) or 'tail'.",
+                        },
+                        "task_id": {"type": "string", "description": "Task id for 'tail'."},
+                        "lines": {"type": "integer", "description": "Lines to tail (default 50)."},
+                    },
+                    "required": [],
+                },
+                handler=lambda action="list", task_id="", lines=_TAIL_DEFAULT_LINES: (
+                    background_tasks(broker, task_registry, action, task_id, lines)
+                ),
+                risk=Risk.READ_ONLY,
+                ack="Checking background tasks.",
+            )
+        )
     _log.info("exec tools registered (run_command background=%s)", task_registry is not None)

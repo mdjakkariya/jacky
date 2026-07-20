@@ -8,9 +8,13 @@ from typing import Any
 from autobot.core.types import ErrorCategory, Risk
 from autobot.tools.access import AccessBroker, AccessPolicy
 from autobot.tools.code.tools import (
+    delete_file,
     edit_file,
+    move_file,
     multi_edit,
+    multi_patch,
     read_file,
+    read_files,
     register_code_tools,
     write_file,
 )
@@ -72,6 +76,96 @@ def test_read_file_rejects_binary(tmp_path: Path) -> None:
 def test_read_file_missing(tmp_path: Path) -> None:
     out = read_file(str(tmp_path / "nope.py"), _broker(tmp_path))
     assert "no file" in out.lower()
+
+
+def test_read_file_char_cap_gives_accurate_resume_offset(tmp_path: Path) -> None:
+    # When the char cap truncates before the line window ends, the tail must point at the
+    # exact next line so a follow-up read resumes with no gap/overlap (G20).
+    import re
+
+    f = tmp_path / "big.py"
+    f.write_text("\n".join("x" * 200 + str(i) for i in range(2000)) + "\n")
+    out = read_file(str(f), _broker(tmp_path))
+    m = re.search(r"continue with offset (\d+)", out)
+    assert m, "expected a resume-offset hint when the char cap truncates"
+    resume = int(m.group(1))
+    assert 1 < resume < 2000
+    out2 = read_file(str(f), _broker(tmp_path), offset=resume)
+    assert f"\n{resume}\t" in out2  # the resume read starts exactly at the promised line
+
+
+def test_read_files_reads_several(tmp_path: Path) -> None:
+    (tmp_path / "a.py").write_text("aaa\n")
+    (tmp_path / "b.py").write_text("bbb\n")
+    out = read_files([str(tmp_path / "a.py"), str(tmp_path / "b.py")], _broker(tmp_path))
+    assert "a.py" in out and "aaa" in out
+    assert "b.py" in out and "bbb" in out
+
+
+def test_read_files_shows_per_file_error_inline(tmp_path: Path) -> None:
+    (tmp_path / "a.py").write_text("aaa\n")
+    out = read_files([str(tmp_path / "a.py"), str(tmp_path / "missing.py")], _broker(tmp_path))
+    assert "aaa" in out  # the readable file still shown
+    assert "no file" in out.lower()  # the missing one's error is inline, not a hard failure
+
+
+def test_read_files_rejects_non_list(tmp_path: Path) -> None:
+    out = read_files("a.py", _broker(tmp_path))  # type: ignore[arg-type]
+    assert isinstance(out, str)
+    assert "list" in out.lower()
+
+
+def test_read_files_registered(tmp_path: Path) -> None:
+    reg = _registry(tmp_path)
+    assert reg.get("read_files") is not None
+
+
+def test_delete_file_removes_a_file(tmp_path: Path) -> None:
+    f = tmp_path / "gone.py"
+    f.write_text("bye\n")
+    out = delete_file(str(f), _broker(tmp_path))
+    assert not f.exists()
+    assert "deleted" in out.lower()
+
+
+def test_delete_file_refuses_a_folder(tmp_path: Path) -> None:
+    d = tmp_path / "dir"
+    d.mkdir()
+    out = delete_file(str(d), _broker(tmp_path))
+    assert d.exists()  # untouched — no recursive removal
+    assert "folder" in out.lower()
+
+
+def test_delete_file_missing_is_not_ok(tmp_path: Path) -> None:
+    reg = _registry(tmp_path)
+    res = reg.dispatch("delete_file", {"path": str(tmp_path / "nope.py")})
+    assert res.ok is False and res.category == ErrorCategory.NOT_FOUND
+
+
+def test_move_file_renames(tmp_path: Path) -> None:
+    src = tmp_path / "a.py"
+    src.write_text("data\n")
+    dst = tmp_path / "b.py"
+    out = move_file(str(src), str(dst), _broker(tmp_path))
+    assert not src.exists() and dst.read_text() == "data\n"
+    assert "moved" in out.lower()
+
+
+def test_move_file_refuses_to_overwrite(tmp_path: Path) -> None:
+    src = tmp_path / "a.py"
+    src.write_text("new\n")
+    dst = tmp_path / "b.py"
+    dst.write_text("keep\n")
+    reg = _registry(tmp_path)
+    res = reg.dispatch("move_file", {"source": str(src), "dest": str(dst)})
+    assert res.ok is False and res.category == ErrorCategory.EXISTS
+    assert src.exists() and dst.read_text() == "keep\n"  # both untouched
+
+
+def test_delete_and_move_are_destructive(tmp_path: Path) -> None:
+    reg = _registry(tmp_path)
+    assert reg.get("delete_file").risk == Risk.DESTRUCTIVE  # type: ignore[union-attr]
+    assert reg.get("move_file").risk == Risk.DESTRUCTIVE  # type: ignore[union-attr]
 
 
 def test_write_file_creates_new(tmp_path: Path) -> None:
@@ -159,6 +253,26 @@ def test_edit_file_identical_find_replace(tmp_path: Path) -> None:
     assert "identical" in out.lower()
 
 
+def test_edit_missing_search_hints_to_read_first_when_unread(tmp_path: Path) -> None:
+    # Editing a file the model hasn't read this session, with a search that misses, nudges
+    # it to read first (G5 read-before-edit hint).
+    f = tmp_path / "m.py"
+    f.write_text("x = 1\n")
+    out = edit_file(str(f), "zzz", "q", _broker(tmp_path))
+    assert "read the file first" in out.lower()
+
+
+def test_edit_missing_search_no_hint_after_reading(tmp_path: Path) -> None:
+    # Once the file has been read this session, a later missed search does not nag to read.
+    f = tmp_path / "m.py"
+    f.write_text("x = 1\n")
+    broker = _broker(tmp_path)  # same broker instance tracks the read
+    read_file(str(f), broker)
+    out = edit_file(str(f), "zzz", "q", broker)
+    assert "read the file first" not in out.lower()
+    assert "not found" in out.lower()  # still reports the miss, just without the read nudge
+
+
 def test_multi_edit_applies_all_in_order(tmp_path: Path) -> None:
     f = tmp_path / "m.py"
     f.write_text("a = 1\nb = 2\nc = 3\n")
@@ -186,6 +300,47 @@ def test_multi_edit_rejects_cascade_substring(tmp_path: Path) -> None:
     out = multi_edit(str(f), edits, _broker(tmp_path))
     assert f.read_text() == "foo\n"
     assert "earlier edit" in out.lower()
+
+
+def test_multi_patch_applies_across_files(tmp_path: Path) -> None:
+    a = tmp_path / "a.py"
+    a.write_text("x = 1\n")
+    b = tmp_path / "b.py"
+    b.write_text("y = 2\n")
+    files = [
+        {"path": str(a), "edits": [{"find": "x = 1", "replace": "x = 9"}]},
+        {"path": str(b), "edits": [{"find": "y = 2", "replace": "y = 8"}]},
+    ]
+    out = multi_patch(files, _broker(tmp_path))
+    assert a.read_text() == "x = 9\n" and b.read_text() == "y = 8\n"
+    assert "2 file" in out
+
+
+def test_multi_patch_is_atomic_across_files(tmp_path: Path) -> None:
+    # File 2's edit can't match; NEITHER file may change (validated before any write).
+    a = tmp_path / "a.py"
+    a.write_text("x = 1\n")
+    b = tmp_path / "b.py"
+    b.write_text("y = 2\n")
+    files = [
+        {"path": str(a), "edits": [{"find": "x = 1", "replace": "x = 9"}]},
+        {"path": str(b), "edits": [{"find": "zzz", "replace": "q"}]},
+    ]
+    reg = _registry(tmp_path)
+    res = reg.dispatch("multi_patch", {"files": files})
+    assert res.ok is False
+    assert a.read_text() == "x = 1\n" and b.read_text() == "y = 2\n"  # both untouched — atomic
+
+
+def test_multi_patch_rejects_malformed(tmp_path: Path) -> None:
+    out = multi_patch([{"path": str(tmp_path / "a.py")}], _broker(tmp_path))  # no "edits"
+    assert isinstance(out, str) and "malformed" in out.lower()
+
+
+def test_multi_patch_registered_as_write(tmp_path: Path) -> None:
+    reg = _registry(tmp_path)
+    assert reg.get("multi_patch") is not None
+    assert reg.get("multi_patch").risk == Risk.WRITE  # type: ignore[union-attr]
 
 
 def test_multi_edit_rejects_empty_list(tmp_path: Path) -> None:
@@ -354,7 +509,7 @@ def test_dispatch_failure_categories(tmp_path: Path) -> None:
 
 def test_register_adds_nav_and_exec_tools(tmp_path: Path) -> None:
     reg = _registry(tmp_path)
-    for name in ("glob", "grep", "run_command"):
+    for name in ("glob", "grep", "list_dir", "run_command"):
         assert reg.get(name) is not None, name
 
 
@@ -362,12 +517,13 @@ def test_nav_exec_risk_levels(tmp_path: Path) -> None:
     reg = _registry(tmp_path)
     assert reg.get("glob").risk == Risk.READ_ONLY  # type: ignore[union-attr]
     assert reg.get("grep").risk == Risk.READ_ONLY  # type: ignore[union-attr]
+    assert reg.get("list_dir").risk == Risk.READ_ONLY  # type: ignore[union-attr]
     assert reg.get("run_command").risk == Risk.DESTRUCTIVE  # type: ignore[union-attr]
 
 
 def test_nav_exec_handlers_are_no_arg_safe(tmp_path: Path) -> None:
     reg = _registry(tmp_path)
-    for name in ("glob", "grep", "run_command"):
+    for name in ("glob", "grep", "list_dir", "run_command"):
         spec = reg.get(name)
         assert spec is not None
         out = spec.handler()

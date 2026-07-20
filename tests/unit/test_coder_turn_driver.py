@@ -594,3 +594,98 @@ def test_act_emits_plan_update_events() -> None:
     assert len(plan_updates) == 2  # one emitted per update_plan the fake makes
     assert plan_updates[0]["todos"] == running
     assert plan_updates[-1]["todos"] == settled
+
+
+# ---------------------------------------------------------------------------
+# Verify-after-edit loop (G4)
+# ---------------------------------------------------------------------------
+
+
+class _VerifyLLM:
+    """Fake llm: the first act turn runs the scripted edits; fix turns just record prompts."""
+
+    def __init__(self, act_calls: list[ToolCall] | None = None) -> None:
+        self.act_calls = act_calls or []
+        self.act_prompts: list[str] = []
+
+    def run_turn(self, user_text, execute, on_event=None, should_cancel=None):  # type: ignore[no-untyped-def]
+        if "PLANNING" in user_text:
+            return "1. edit"
+        self.act_prompts.append(user_text)
+        if len(self.act_prompts) == 1:  # only the initial act turn performs the edits
+            for call in self.act_calls:
+                execute(call)
+        return "done"
+
+    def complete(self, prompt: str, *, temperature: float = 0.0) -> str:
+        return "CONFIRM"
+
+
+def _verify_gate(
+    confirmer: SuspendingConfirmer, run_outputs: list[str], *, write: bool = True
+) -> PermissionGate:
+    """A gate whose run_command returns the next scripted output each call."""
+    reg = ToolRegistry()
+    seq = list(run_outputs)
+
+    def _run(**_k: object) -> str:
+        return seq.pop(0) if seq else "[ok]"
+
+    reg.register(
+        ToolSpec(
+            name="run_command", description="", parameters={}, handler=_run, risk=Risk.DESTRUCTIVE
+        )
+    )
+    edit_risk = Risk.WRITE if write else Risk.READ_ONLY
+    edit_name = "write_file" if write else "read_file"
+    reg.register(
+        ToolSpec(
+            name=edit_name, description="", parameters={}, handler=lambda **_k: "ok", risk=edit_risk
+        )
+    )
+    return PermissionGate(reg, AuditLog(":memory:"), confirmer)
+
+
+def _verify_driver(
+    llm: Any,
+    gate: PermissionGate,
+    confirmer: SuspendingConfirmer,
+    verify_command: str = "make check",
+) -> CoderTurnDriver:
+    settings = Settings(profile="coder", coding_autonomy="confirm", verify_command=verify_command)
+    return CoderTurnDriver(llm, gate, confirmer, settings_provider=lambda: settings)
+
+
+def test_verify_runs_after_edit_and_reflects_on_failure() -> None:
+    sc = SuspendingConfirmer()
+    gate = _verify_gate(sc, ["[exit 1]\nboom", "[ok]\nall good"])  # fail, then pass after the fix
+    llm = _VerifyLLM(act_calls=[ToolCall(name="write_file", arguments={"path": "a.py"})])
+    final = list(_verify_driver(llm, gate, sc).start_stream("make the change"))
+    assert final[-1]["status"] == "done"
+    assert len(llm.act_prompts) == 2  # initial act + one fix reflection
+    assert "verify command" in llm.act_prompts[1].lower()
+
+
+def test_verify_passing_first_time_sends_no_reflection() -> None:
+    sc = SuspendingConfirmer()
+    gate = _verify_gate(sc, ["[ok]\nall good"])
+    llm = _VerifyLLM(act_calls=[ToolCall(name="write_file", arguments={"path": "a.py"})])
+    list(_verify_driver(llm, gate, sc).start_stream("make the change"))
+    assert len(llm.act_prompts) == 1  # no fix turn needed
+
+
+def test_verify_skipped_without_edits() -> None:
+    # A read-only act (no mutation) must not trigger verify at all.
+    sc = SuspendingConfirmer()
+    gate = _verify_gate(sc, ["[exit 1]\nboom"], write=False)  # would fail if it ran
+    llm = _VerifyLLM(act_calls=[ToolCall(name="read_file", arguments={"path": "a.py"})])
+    list(_verify_driver(llm, gate, sc).start_stream("just look"))
+    assert len(llm.act_prompts) == 1  # verify never ran — no reflection
+
+
+def test_verify_disabled_when_command_empty() -> None:
+    sc = SuspendingConfirmer()
+    gate = _verify_gate(sc, ["[exit 1]\nboom"])  # would fail if it ran
+    llm = _VerifyLLM(act_calls=[ToolCall(name="write_file", arguments={"path": "a.py"})])
+    list(_verify_driver(llm, gate, sc, verify_command="").start_stream("make the change"))
+    assert len(llm.act_prompts) == 1  # verify disabled → no reflection

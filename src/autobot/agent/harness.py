@@ -77,8 +77,18 @@ def tool_label(call: ToolCall) -> str:
         return f"Listed {target}".strip()
     if call.name == "run_command":
         return f"$ {str(args.get('command', ''))[:80]}"
+    if call.name == "read_files":
+        paths = args.get("paths") or []
+        return f"Read {len(paths)} file(s)" if isinstance(paths, list) else "Read files"
     if call.name in ("write_file", "edit_file", "multi_edit"):
         return f"Edited {_file_name(str(args.get('path', '')))}".strip()
+    if call.name == "multi_patch":
+        files = args.get("files") or []
+        return f"Edited {len(files)} file(s)" if isinstance(files, list) else "Edited files"
+    if call.name == "delete_file":
+        return f"Deleted {_file_name(str(args.get('path', '')))}".strip()
+    if call.name == "move_file":
+        return f"Moved {_file_name(str(args.get('source', '')))}".strip()
     if call.name == "spawn_agent":
         return f"Spawned subagent: {str(args.get('label') or args.get('task', ''))[:70]}".strip()
     # MCP tools (<server>__<tool>): show the server as the label's subject so the activity

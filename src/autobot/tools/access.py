@@ -334,6 +334,15 @@ class AccessBroker:
     def __init__(self, policy: AccessPolicy, confirmer: Confirming) -> None:
         self._policy = policy
         self._confirmer = confirmer
+        self._read: set[str] = set()  # resolved paths read this session (read-before-edit hint)
+
+    def mark_read(self, resolved: Path) -> None:
+        """Record that ``resolved`` was read this session (feeds the read-before-edit hint)."""
+        self._read.add(str(resolved))
+
+    def was_read(self, resolved: Path) -> bool:
+        """Whether ``resolved`` has been read this session."""
+        return str(resolved) in self._read
 
     def ensure(self, path: str | Path, write: bool = False) -> Path:
         """Return the resolved (cwd-relative) path if allowed, prompting if needed."""

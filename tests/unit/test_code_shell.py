@@ -9,7 +9,7 @@ from pathlib import Path
 from autobot.core.streaming import active_session_id
 from autobot.tasks import NotificationInbox, Task, TaskRegistry
 from autobot.tools.access import AccessBroker, AccessPolicy
-from autobot.tools.code.shell import CommandRunner, run_command
+from autobot.tools.code.shell import CommandRunner, background_tasks, run_command
 
 
 class _FakeConfirmer:
@@ -245,3 +245,40 @@ def test_run_command_blocks_command_matching_user_blocklist(tmp_path: Path) -> N
     )
     assert "blocked" in out.lower()
     assert calls == []
+
+
+# ---------------------------------------------------------------------------
+# background_tasks — list / tail (G14)
+# ---------------------------------------------------------------------------
+
+
+def test_background_tasks_list(tmp_path: Path) -> None:
+    reg = TaskRegistry()
+    reg.add(kind="command", session_id="s1", label="$ npm run dev")
+    out = background_tasks(_broker(tmp_path), reg)
+    assert "task-1" in out and "npm run dev" in out and "running" in out
+
+
+def test_background_tasks_list_empty(tmp_path: Path) -> None:
+    assert "no background" in background_tasks(_broker(tmp_path), TaskRegistry()).lower()
+
+
+def test_background_tasks_tail(tmp_path: Path) -> None:
+    reg = TaskRegistry()
+    task = reg.add(kind="command", session_id="s1", label="$ build")
+    base = _broker(tmp_path).ensure(".", write=False)  # where the tool looks for the log
+    log = base / ".jack" / "tasks" / f"{task.id}.log"
+    log.parent.mkdir(parents=True, exist_ok=True)
+    log.write_text("line1\nline2\nline3\n")
+    out = background_tasks(_broker(tmp_path), reg, action="tail", task_id=task.id, lines=2)
+    assert "line2" in out and "line3" in out
+    assert "line1" not in out  # only the last 2 lines
+
+
+def test_background_tasks_tail_unknown(tmp_path: Path) -> None:
+    out = background_tasks(_broker(tmp_path), TaskRegistry(), action="tail", task_id="task-99")
+    assert "no background task" in out.lower()
+
+
+def test_background_tasks_disabled_without_registry(tmp_path: Path) -> None:
+    assert "aren't available" in background_tasks(_broker(tmp_path), None).lower()
