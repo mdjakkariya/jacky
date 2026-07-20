@@ -19,7 +19,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from typing import Protocol, runtime_checkable
 
-from autobot.core.types import Decision, Risk, ToolCall, ToolResult
+from autobot.core.types import Decision, ErrorCategory, Risk, ToolCall, ToolResult
 from autobot.logging_setup import get_logger
 from autobot.mcp.adapter import split_namespaced
 from autobot.tools.audit import AuditLog
@@ -188,7 +188,12 @@ class PermissionGate:
                 ok=None,
                 detail="unknown tool",
             )
-            return ToolResult(name=call.name, content=f"unknown tool: {call.name!r}", ok=False)
+            return ToolResult(
+                name=call.name,
+                content=f"unknown tool: {call.name!r}",
+                ok=False,
+                category=ErrorCategory.UNKNOWN_TOOL,
+            )
 
         # Permission gate: if this tool needs a macOS permission we know is missing,
         # refuse before running and surface the right Settings pane — rather than
@@ -211,7 +216,10 @@ class PermissionGate:
                     detail=f"missing permission: {spec.requires}",
                 )
                 return ToolResult(
-                    name=call.name, content=permissions.needed_message(spec.requires), ok=False
+                    name=call.name,
+                    content=permissions.needed_message(spec.requires),
+                    ok=False,
+                    category=ErrorCategory.DENIED,
                 )
 
         needs_confirm = spec.risk >= self._threshold or (spec.network and spec.risk >= Risk.WRITE)
@@ -263,7 +271,9 @@ class PermissionGate:
                         "The user declined this action, so it was not performed. "
                         "Acknowledge in one short sentence; do not ask again or retry."
                     )
-                return ToolResult(name=call.name, content=content, ok=False)
+                return ToolResult(
+                    name=call.name, content=content, ok=False, category=ErrorCategory.DENIED
+                )
             if granted:
                 _log.info("auto-approved tool=%s via session grant", call.name)
 

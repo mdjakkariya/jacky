@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from autobot.core.streaming import output_sink
-from autobot.core.types import Risk
+from autobot.core.types import ErrorCategory, Risk
 from autobot.logging_setup import get_logger
 from autobot.tools.access import AccessBroker, AccessDeniedError
 from autobot.tools.code.edits import apply_replace
@@ -55,19 +55,27 @@ def _emit_diff(old: str, new: str, name: str) -> None:
         sink(line)
 
 
-def _read_text(resolved: Path) -> tuple[str | None, str]:
-    """Read a text file. Returns (text, "") on success or (None, error_message)."""
+def _read_text(resolved: Path) -> tuple[str | None, str, str]:
+    """Read a text file.
+
+    Returns ``(text, "", "")`` on success or ``(None, error_message, category)`` on
+    failure, where ``category`` is an :class:`~autobot.core.types.ErrorCategory` value.
+    """
     if not resolved.exists():
-        return None, f"There's no file at {resolved}."
+        return None, f"There's no file at {resolved}.", ErrorCategory.NOT_FOUND
     if resolved.is_dir():
-        return None, f"'{resolved.name}' is a folder, not a file."
+        return None, f"'{resolved.name}' is a folder, not a file.", ErrorCategory.INVALID
     try:
         data = resolved.read_bytes()
     except OSError as exc:
-        return None, f"I couldn't read {resolved.name}: {exc}"
+        return None, f"I couldn't read {resolved.name}: {exc}", ErrorCategory.UNREADABLE
     if b"\x00" in data[:4096]:
-        return None, f"'{resolved.name}' looks like a binary file, so I can't read it as text."
-    return data.decode("utf-8", errors="replace"), ""
+        return (
+            None,
+            f"'{resolved.name}' looks like a binary file, so I can't read it as text.",
+            ErrorCategory.UNREADABLE,
+        )
+    return data.decode("utf-8", errors="replace"), "", ""
 
 
 def read_file(path: str, broker: AccessBroker, offset: int = 1, limit: int = 0) -> str:
@@ -80,14 +88,14 @@ def read_file(path: str, broker: AccessBroker, offset: int = 1, limit: int = 0) 
         limit: Max lines to return; 0 (default) means up to ``_READ_LINE_CAP``.
     """
     if not path:
-        return ToolFailure("Which file should I read? Tell me its path.")
+        return ToolFailure("Which file should I read? Tell me its path.", ErrorCategory.INVALID)
     try:
         resolved = broker.ensure(path, write=False)
     except (AccessDeniedError, PermissionError) as exc:
-        return ToolFailure(str(exc))
-    text, err = _read_text(resolved)
+        return ToolFailure(str(exc), ErrorCategory.DENIED)
+    text, err, cat = _read_text(resolved)
     if text is None:
-        return ToolFailure(err)
+        return ToolFailure(err, cat)
     lines = text.split("\n")
     if lines and lines[-1] == "":  # a final newline yields a trailing "" — not a line
         lines = lines[:-1]
@@ -107,21 +115,22 @@ def read_file(path: str, broker: AccessBroker, offset: int = 1, limit: int = 0) 
 def write_file(path: str, content: str, broker: AccessBroker) -> str:
     """Create a NEW text file (gated; create-only — refuses to overwrite an existing one)."""
     if not path:
-        return ToolFailure("Where should I save it? Tell me the file path.")
+        return ToolFailure("Where should I save it? Tell me the file path.", ErrorCategory.INVALID)
     try:
         resolved = broker.ensure(path, write=True)
     except (AccessDeniedError, PermissionError) as exc:
-        return ToolFailure(str(exc))
+        return ToolFailure(str(exc), ErrorCategory.DENIED)
     if resolved.exists():
         return ToolFailure(
             f"'{resolved.name}' already exists — use edit_file or multi_edit to change it "
-            "(write_file only creates new files)."
+            "(write_file only creates new files).",
+            ErrorCategory.EXISTS,
         )
     try:
         resolved.parent.mkdir(parents=True, exist_ok=True)
         resolved.write_text(content, encoding="utf-8")
     except OSError as exc:
-        return ToolFailure(f"I couldn't write {resolved.name}: {exc}")
+        return ToolFailure(f"I couldn't write {resolved.name}: {exc}", ErrorCategory.UNREADABLE)
     _emit_diff("", content, resolved.name)  # new file → all-additions diff for inline review
     n = len(content)
     _log.info("write_file name=%r chars=%d", resolved.name, n)
@@ -133,23 +142,25 @@ def edit_file(
 ) -> str:
     """Replace ``find`` with ``replace`` in an EXISTING file (gated). See :mod:`.edits`."""
     if not path:
-        return ToolFailure("Which file should I edit? Tell me its path.")
+        return ToolFailure("Which file should I edit? Tell me its path.", ErrorCategory.INVALID)
     if not find:
-        return ToolFailure("Tell me the exact text to replace (a non-empty `find`).")
+        return ToolFailure(
+            "Tell me the exact text to replace (a non-empty `find`).", ErrorCategory.INVALID
+        )
     try:
         resolved = broker.ensure(path, write=True)
     except (AccessDeniedError, PermissionError) as exc:
-        return ToolFailure(str(exc))
-    text, err = _read_text(resolved)
+        return ToolFailure(str(exc), ErrorCategory.DENIED)
+    text, err, cat = _read_text(resolved)
     if text is None:
-        return ToolFailure(err)
+        return ToolFailure(err, cat)
     result = apply_replace(text, find, replace, replace_all=replace_all)
     if not result.ok:
-        return ToolFailure(f"I couldn't edit {resolved.name}: {result.detail}.")
+        return ToolFailure(f"I couldn't edit {resolved.name}: {result.detail}.", result.category)
     try:
         resolved.write_text(result.content, encoding="utf-8")
     except OSError as exc:
-        return ToolFailure(f"I couldn't save {resolved.name}: {exc}")
+        return ToolFailure(f"I couldn't save {resolved.name}: {exc}", ErrorCategory.UNREADABLE)
     _emit_diff(text, result.content, resolved.name)  # inline diff of what changed
     _log.info("edit_file name=%r detail=%r", resolved.name, result.detail)
     return f"Edited {resolved.name} ({result.detail})."
@@ -164,45 +175,55 @@ def multi_edit(path: str, edits: list[dict[str, str]] | None, broker: AccessBrok
     edit can never corrupt the file.
     """
     if not path:
-        return ToolFailure("Which file should I edit? Tell me its path.")
+        return ToolFailure("Which file should I edit? Tell me its path.", ErrorCategory.INVALID)
     if not edits:
-        return ToolFailure("No edits to apply — pass a list of {find, replace} objects.")
+        return ToolFailure(
+            "No edits to apply — pass a list of {find, replace} objects.", ErrorCategory.INVALID
+        )
     if not isinstance(edits, list):  # untrusted JSON: a scalar would raise on iteration
-        return ToolFailure("The `edits` value must be a list of {find, replace} objects.")
+        return ToolFailure(
+            "The `edits` value must be a list of {find, replace} objects.", ErrorCategory.INVALID
+        )
     try:
         resolved = broker.ensure(path, write=True)
     except (AccessDeniedError, PermissionError) as exc:
-        return ToolFailure(str(exc))
-    text, err = _read_text(resolved)
+        return ToolFailure(str(exc), ErrorCategory.DENIED)
+    text, err, cat = _read_text(resolved)
     if text is None:
-        return ToolFailure(err)
+        return ToolFailure(err, cat)
     working = text
     applied_replacements: list[str] = []
     for idx, edit in enumerate(edits, start=1):
         if not isinstance(edit, dict) or "find" not in edit or "replace" not in edit:
             return ToolFailure(
-                f"Edit {idx} is malformed — each edit needs a `find` and a `replace`."
+                f"Edit {idx} is malformed — each edit needs a `find` and a `replace`.",
+                ErrorCategory.INVALID,
             )
         find, replace = edit["find"], edit["replace"]
         if not isinstance(find, str) or not isinstance(replace, str) or not find:
             return ToolFailure(
-                f"Edit {idx} is malformed — `find` and `replace` must be text, `find` non-empty."
+                f"Edit {idx} is malformed — `find` and `replace` must be text, `find` non-empty.",
+                ErrorCategory.INVALID,
             )
         probe = find.rstrip("\n")
         if probe and any(probe in prev for prev in applied_replacements):
             return ToolFailure(
                 f"Edit {idx}'s search text was produced by an earlier edit; "
-                "combine them into one edit or reorder them."
+                "combine them into one edit or reorder them.",
+                ErrorCategory.INVALID,
             )
         result = apply_replace(working, find, replace)
         if not result.ok:
-            return ToolFailure(f"Edit {idx} didn't apply ({result.detail}); nothing was changed.")
+            return ToolFailure(
+                f"Edit {idx} didn't apply ({result.detail}); nothing was changed.",
+                result.category,
+            )
         working = result.content
         applied_replacements.append(replace)
     try:
         resolved.write_text(working, encoding="utf-8")
     except OSError as exc:
-        return ToolFailure(f"I couldn't save {resolved.name}: {exc}")
+        return ToolFailure(f"I couldn't save {resolved.name}: {exc}", ErrorCategory.UNREADABLE)
     _emit_diff(text, working, resolved.name)  # inline diff of the combined edits
     n = len(edits)
     _log.info("multi_edit name=%r edits=%d", resolved.name, n)

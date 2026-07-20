@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from autobot.core.types import ErrorCategory
 from autobot.tools.code.edits import apply_replace
 
 
@@ -10,6 +11,15 @@ def test_exact_unique_replace() -> None:
     assert r.ok
     assert r.content == "a = 1\nb = 3\n"
     assert "exact" in r.detail.lower()
+    assert r.category == ""  # success carries no error category
+
+
+def test_failure_categories() -> None:
+    # apply_replace classifies its failures (G3) so edit_file can propagate the cause.
+    assert apply_replace("x", "", "y").category == ErrorCategory.INVALID  # empty search
+    assert apply_replace("x = 1\n", "x = 1", "x = 1").category == ErrorCategory.INVALID  # identical
+    assert apply_replace("a\n", "zzz", "q").category == ErrorCategory.NOT_FOUND  # no match
+    assert apply_replace("x\nx\n", "x", "y").category == ErrorCategory.AMBIGUOUS  # multiple
 
 
 def test_empty_search_is_rejected() -> None:

@@ -78,6 +78,26 @@ class ToolCall:
     arguments: dict[str, Any] = field(default_factory=dict)
 
 
+class ErrorCategory(enum.StrEnum):
+    """Coarse cause of a failed :class:`ToolResult`.
+
+    Lets a caller branch on the *kind* of failure without parsing the human-readable
+    message. The empty default (:data:`NONE`) means success or unspecified. Values are
+    plain strings, so they round-trip through logs and the audit record unchanged.
+    """
+
+    NONE = ""
+    NOT_FOUND = "not_found"  # a target file or search text does not exist
+    AMBIGUOUS = "ambiguous"  # matched more than one place; needs disambiguation
+    EXISTS = "exists"  # target already exists (create-only tool)
+    DENIED = "denied"  # the permission/access gate refused it
+    INVALID = "invalid"  # missing or malformed arguments
+    UNREADABLE = "unreadable"  # binary / undecodable / OS read-write error
+    DEPENDENCY = "dependency"  # skipped: an earlier step in the batch failed
+    UNEXPECTED = "unexpected"  # an uncaught handler exception
+    UNKNOWN_TOOL = "unknown_tool"  # no tool by that name is registered
+
+
 @dataclass(frozen=True, slots=True)
 class ToolResult:
     """The outcome of dispatching a :class:`ToolCall`."""
@@ -85,6 +105,8 @@ class ToolResult:
     name: str
     content: str
     ok: bool = True
+    category: str = ""
+    """Coarse failure cause (an :class:`ErrorCategory` value); empty when ok/unspecified."""
 
 
 # A function that takes a planned tool call and returns its result. The

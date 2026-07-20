@@ -24,7 +24,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from autobot.core.streaming import active_session_id, output_sink
-from autobot.core.types import ToolCall, ToolResult
+from autobot.core.types import ErrorCategory, ToolCall, ToolResult
 from autobot.logging_setup import get_logger
 from autobot.mcp.adapter import split_namespaced
 
@@ -221,6 +221,7 @@ class AgentHarness:
                                     "this call if it's still needed."
                                 ),
                                 ok=False,
+                                category=ErrorCategory.DEPENDENCY,
                             ),
                         )
                     )
