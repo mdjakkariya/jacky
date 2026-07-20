@@ -12,9 +12,60 @@ import pytest
 from autobot.tools.code.lsp import (
     LspClient,
     LspError,
+    apply_text_edits,
     frame_message,
     read_message,
+    workspace_edit_files,
 )
+
+
+def _edit(sl: int, sc: int, el: int, ec: int, new: str) -> dict[str, Any]:
+    return {
+        "range": {"start": {"line": sl, "character": sc}, "end": {"line": el, "character": ec}},
+        "newText": new,
+    }
+
+
+def test_apply_text_edits_single() -> None:
+    assert apply_text_edits("hello world\n", [_edit(0, 6, 0, 11, "there")]) == "hello there\n"
+
+
+def test_apply_text_edits_multiple_on_one_line_end_first() -> None:
+    # Rename both `foo` -> `bar`; applied end-first so the first edit's offsets stay valid.
+    text = "foo = foo + 1\n"
+    out = apply_text_edits(text, [_edit(0, 0, 0, 3, "bar"), _edit(0, 6, 0, 9, "bar")])
+    assert out == "bar = bar + 1\n"
+
+
+def test_apply_text_edits_across_lines() -> None:
+    text = "a\nold\nc\n"
+    assert apply_text_edits(text, [_edit(1, 0, 1, 3, "new")]) == "a\nnew\nc\n"
+
+
+def test_workspace_edit_files_changes_shape() -> None:
+    we = {
+        "changes": {
+            "file:///a.py": [_edit(0, 0, 0, 3, "x")],
+            "file:///b.py": [_edit(1, 0, 1, 1, "y")],
+        }
+    }
+    files = workspace_edit_files(we)
+    assert set(files) == {"file:///a.py", "file:///b.py"}
+    assert len(files["file:///a.py"]) == 1
+
+
+def test_workspace_edit_files_document_changes_shape() -> None:
+    we = {
+        "documentChanges": [
+            {"textDocument": {"uri": "file:///a.py"}, "edits": [_edit(0, 0, 0, 1, "z")]}
+        ]
+    }
+    assert list(workspace_edit_files(we)) == ["file:///a.py"]
+
+
+def test_workspace_edit_files_ignores_malformed() -> None:
+    assert workspace_edit_files({"changes": {"file:///a": "not-a-list"}}) == {}
+    assert workspace_edit_files({}) == {}
 
 
 def test_frame_and_read_round_trip() -> None:
@@ -51,7 +102,7 @@ class _FakeTransport:
         self.sent.append(message)
         self._inbox.extend(self._responder(message))
 
-    def receive(self) -> dict[str, Any] | None:
+    def receive(self, timeout: float | None = None) -> dict[str, Any] | None:
         return self._inbox.popleft() if self._inbox else None
 
 
@@ -102,9 +153,32 @@ def test_references_normalises_location_link() -> None:
     assert locs == [{"uri": "file:///b.py", "range": {"line": 2}}]
 
 
-def test_initialize_sends_handshake_then_initialized() -> None:
-    transport = _FakeTransport(
-        lambda m: [{"jsonrpc": "2.0", "id": m["id"], "result": {}}] if "id" in m else []
-    )
+def _echo_ok(m: dict[str, Any]) -> list[dict[str, Any]]:
+    """Responder that answers every request with an empty result (notifications get nothing)."""
+    return [{"jsonrpc": "2.0", "id": m["id"], "result": {}}] if "id" in m else []
+
+
+def test_initialize_declares_capabilities_then_initialized() -> None:
+    transport = _FakeTransport(_echo_ok)
     LspClient(transport).initialize("file:///repo")
     assert [m.get("method") for m in transport.sent] == ["initialize", "initialized"]
+    caps = transport.sent[0]["params"]["capabilities"]["textDocument"]
+    assert "definition" in caps and "references" in caps and "rename" in caps
+
+
+def test_request_times_out_when_no_response() -> None:
+    # A transport that never yields a message must not hang — the client gives up (falls back).
+    client = LspClient(_FakeTransport(lambda m: []), timeout=0.05)
+    with pytest.raises(LspError):
+        client.request("textDocument/definition", {})
+
+
+def test_sync_dedups_open_and_change() -> None:
+    transport = _FakeTransport(lambda m: [])  # sync only sends notifications, no responses
+    client = LspClient(transport)
+    client.sync("file:///a.py", "python", "x = 1\n")  # first sight -> didOpen
+    client.sync("file:///a.py", "python", "x = 1\n")  # unchanged -> nothing
+    client.sync("file:///a.py", "python", "x = 2\n")  # changed -> didChange
+    methods = [m.get("method") for m in transport.sent]
+    assert methods == ["textDocument/didOpen", "textDocument/didChange"]
+    assert transport.sent[1]["params"]["textDocument"]["version"] == 2

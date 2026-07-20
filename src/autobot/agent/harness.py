@@ -91,6 +91,8 @@ def tool_label(call: ToolCall) -> str:
         return f"Moved {_file_name(str(args.get('source', '')))}".strip()
     if call.name == "symbol":
         return f"Looked up {str(args.get('name', ''))[:40]}".strip()
+    if call.name == "rename_symbol":
+        return f"Renamed {str(args.get('name', ''))[:24]} → {str(args.get('new_name', ''))[:24]}"
     if call.name == "spawn_agent":
         return f"Spawned subagent: {str(args.get('label') or args.get('task', ''))[:70]}".strip()
     # MCP tools (<server>__<tool>): show the server as the label's subject so the activity

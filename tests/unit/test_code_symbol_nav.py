@@ -40,7 +40,19 @@ def test_column_of_finds_word() -> None:
 
 def test_language_for() -> None:
     assert _language_for("a.py") == "python"
-    assert _language_for("a.rb") is None  # unsupported → will fall back
+    assert _language_for("main.go") == "go"
+    assert _language_for("lib.rs") == "rust"
+    assert _language_for("app.ts") == "typescript"
+    assert _language_for("App.tsx") == "typescriptreact"
+    assert _language_for("index.js") == "javascript"
+    assert _language_for("a.rb") is None  # unsupported → falls back to grep
+
+
+def test_server_argv_covers_new_languages() -> None:
+    # Each supported language has candidate server argv(s); resolution depends on PATH.
+    for lang in ("python", "go", "rust", "typescript", "javascript"):
+        result = _server_argv(lang)
+        assert result is None or (isinstance(result, list) and result)
 
 
 def test_server_argv_shape() -> None:
@@ -83,6 +95,26 @@ def test_symbol_definition_falls_back_to_definition_pattern(tmp_path: Path) -> N
     store: dict[str, Any] = {}
     symbol("definition", "foo", str(f), _broker(tmp_path), grep=_capture_grep(store))
     assert "def" in store["pattern"] and "foo" in store["pattern"]  # definition-shaped
+
+
+def test_symbol_hover_is_a_valid_action_and_falls_back(tmp_path: Path) -> None:
+    # hover is semantic (needs a server); without one it falls back to the definition search.
+    f = tmp_path / "a.py"
+    f.write_text("def foo():\n    pass\n")
+    store: dict[str, Any] = {}
+    out = symbol("hover", "foo", str(f), _broker(tmp_path), grep=_capture_grep(store))
+    assert "fallback" in out.lower()
+    assert "def" in store["pattern"]  # hover falls back to the definition-shaped search
+
+
+def test_hover_text_flattens_markup() -> None:
+    from autobot.tools.code.symbol_nav import _hover_text
+
+    assert _hover_text({"contents": {"kind": "markdown", "value": "def foo() -> int"}}) == (
+        "def foo() -> int"
+    )
+    assert _hover_text({"contents": ["a", {"value": "b"}]}) == "a\nb"
+    assert _hover_text(None) == ""
 
 
 def test_symbol_rejects_bad_action(tmp_path: Path) -> None:

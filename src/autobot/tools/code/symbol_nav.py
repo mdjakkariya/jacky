@@ -26,7 +26,7 @@ from urllib.parse import unquote, urlparse
 from autobot.core.types import Risk
 from autobot.logging_setup import get_logger
 from autobot.tools.access import AccessBroker, AccessDeniedError
-from autobot.tools.code.lsp import LspClient, LspError, frame_message, read_message
+from autobot.tools.code.lsp import LspClient, LspError, StdioTransport
 from autobot.tools.registry import ToolRegistry, ToolSpec
 
 if TYPE_CHECKING:
@@ -34,19 +34,38 @@ if TYPE_CHECKING:
 
 _log = get_logger("coder")
 
-_ACTIONS = ("definition", "references")
+_ACTIONS = ("definition", "references", "hover")
 _MAX_LOCS = 50  # cap locations returned so a widely-used symbol can't flood the turn
 
-# LSP language id -> candidate server argv; the first whose argv[0] is on PATH is used.
-# Phase 1: Python. Phase 2 extends this (gopls, rust-analyzer, typescript-language-server).
+# LSP language id -> candidate server argv; the first whose argv[0] is on PATH is used. Any
+# language/extension not covered here transparently uses the textual fallback (grep).
+_TS_SERVER = [["typescript-language-server", "--stdio"]]
 _SERVERS: dict[str, list[list[str]]] = {
     "python": [
         ["basedpyright-langserver", "--stdio"],
         ["pyright-langserver", "--stdio"],
         ["pylsp"],
     ],
+    "go": [["gopls"]],
+    "rust": [["rust-analyzer"]],
+    "typescript": _TS_SERVER,
+    "typescriptreact": _TS_SERVER,
+    "javascript": _TS_SERVER,
+    "javascriptreact": _TS_SERVER,
 }
-_EXT_LANG: dict[str, str] = {".py": "python"}  # file extension -> LSP language id
+_EXT_LANG: dict[str, str] = {  # file extension -> LSP language id
+    ".py": "python",
+    ".go": "go",
+    ".rs": "rust",
+    ".ts": "typescript",
+    ".mts": "typescript",
+    ".cts": "typescript",
+    ".tsx": "typescriptreact",
+    ".js": "javascript",
+    ".mjs": "javascript",
+    ".cjs": "javascript",
+    ".jsx": "javascriptreact",
+}
 
 _FALLBACK_NOTE = "(textual fallback — install a language server for precise, semantic results)\n"
 
@@ -68,22 +87,6 @@ def _column_of(line_text: str, name: str) -> int | None:
     """0-based column of ``name`` as a whole word in ``line_text`` (``None`` if absent)."""
     match = re.search(rf"\b{re.escape(name)}\b", line_text)
     return match.start() if match else None
-
-
-class _StdioTransport:  # pragma: no cover - real subprocess boundary
-    """Frame LSP messages over a language server subprocess's stdin/stdout."""
-
-    def __init__(self, proc: Any) -> None:
-        self._proc = proc
-
-    def send(self, message: dict[str, Any]) -> None:
-        """Write a framed message to the server's stdin."""
-        self._proc.stdin.write(frame_message(message))
-        self._proc.stdin.flush()
-
-    def receive(self) -> dict[str, Any] | None:
-        """Read the next framed message from the server's stdout."""
-        return read_message(self._proc.stdout)
 
 
 class LspManager:
@@ -111,7 +114,7 @@ class LspManager:
                 stdout=subprocess.PIPE,
                 stderr=subprocess.DEVNULL,
             )
-            client = LspClient(_StdioTransport(proc))
+            client = LspClient(StdioTransport(proc))
             client.initialize(Path(root).resolve().as_uri())
         except (OSError, LspError, ValueError):
             _log.warning("lsp server for %s failed to start; falling back", language, exc_info=True)
@@ -130,6 +133,23 @@ class LspManager:
                 proc.terminate()
         self._clients.clear()
         self._procs.clear()
+
+
+def _hover_text(result: Any) -> str:
+    """Flatten an LSP hover result (str | MarkupContent | MarkedString | list) to plain text."""
+
+    def one(content: Any) -> str:
+        if isinstance(content, str):
+            return content
+        if isinstance(content, dict):
+            return str(content.get("value", ""))
+        return ""
+
+    if not isinstance(result, dict):
+        return ""
+    contents = result.get("contents")
+    parts = [one(c) for c in contents] if isinstance(contents, list) else [one(contents)]
+    return "\n".join(p.strip() for p in parts if p and p.strip()).strip()
 
 
 def _loc_to_line(loc: dict[str, Any], root: Path) -> str:
@@ -167,12 +187,16 @@ def _lsp_lookup(  # pragma: no cover - requires a real server on PATH
     client = manager.client_for(str(root), language)
     if client is None:
         return None
+    uri = resolved.resolve().as_uri()
     try:
-        client.did_open(resolved.resolve().as_uri(), language, text)
+        client.sync(uri, language, text)
+        if action == "hover":
+            hover = _hover_text(client.hover(uri, line - 1, col))
+            return f"hover for {name!r} (language server):\n{hover}" if hover else None
         locs = (
-            client.definition(resolved.resolve().as_uri(), line - 1, col)
+            client.definition(uri, line - 1, col)
             if action == "definition"
-            else client.references(resolved.resolve().as_uri(), line - 1, col)
+            else client.references(uri, line - 1, col)
         )
     except (LspError, OSError):
         return None
@@ -227,8 +251,8 @@ def symbol(
     return _fallback(action, name, broker, grep or _grep)
 
 
-def register_symbol_tool(registry: ToolRegistry, broker: AccessBroker) -> None:
-    """Register the read-only ``symbol`` tool with a shared, atexit-cleaned LSP manager."""
+def register_symbol_tool(registry: ToolRegistry, broker: AccessBroker) -> LspManager:
+    """Register the read-only ``symbol`` tool; return the shared, atexit-cleaned LSP manager."""
     import atexit
 
     manager = LspManager()
@@ -245,17 +269,18 @@ def register_symbol_tool(registry: ToolRegistry, broker: AccessBroker) -> None:
         ToolSpec(
             name="symbol",
             description=(
-                "Find where a symbol is defined or used. `action`: 'definition' or 'references'. "
-                "Pass the symbol `name`, the `path` you saw it in, and the 1-based `line`. Uses a "
-                "language server for precise, scope-aware results when one is installed; otherwise "
-                "falls back to a textual search. Prefer this over grep for navigating code."
+                "Navigate code by symbol. `action`: 'definition' (where it's defined), "
+                "'references' (where it's used), or 'hover' (its type/signature). Pass the symbol "
+                "`name`, the `path` you saw it in, and the 1-based `line`. Uses a language server "
+                "for precise, scope-aware results when one is installed; otherwise falls back to a "
+                "textual search. Prefer this over grep for navigating code."
             ),
             parameters={
                 "type": "object",
                 "properties": {
                     "action": {
                         "type": "string",
-                        "enum": ["definition", "references"],
+                        "enum": ["definition", "references", "hover"],
                         "description": "What to find.",
                     },
                     "name": {"type": "string", "description": "The symbol name."},
@@ -269,3 +294,4 @@ def register_symbol_tool(registry: ToolRegistry, broker: AccessBroker) -> None:
             ack="Looking up the symbol.",
         )
     )
+    return manager
