@@ -74,6 +74,22 @@ def test_read_file_missing(tmp_path: Path) -> None:
     assert "no file" in out.lower()
 
 
+def test_read_file_char_cap_gives_accurate_resume_offset(tmp_path: Path) -> None:
+    # When the char cap truncates before the line window ends, the tail must point at the
+    # exact next line so a follow-up read resumes with no gap/overlap (G20).
+    import re
+
+    f = tmp_path / "big.py"
+    f.write_text("\n".join("x" * 200 + str(i) for i in range(2000)) + "\n")
+    out = read_file(str(f), _broker(tmp_path))
+    m = re.search(r"continue with offset (\d+)", out)
+    assert m, "expected a resume-offset hint when the char cap truncates"
+    resume = int(m.group(1))
+    assert 1 < resume < 2000
+    out2 = read_file(str(f), _broker(tmp_path), offset=resume)
+    assert f"\n{resume}\t" in out2  # the resume read starts exactly at the promised line
+
+
 def test_write_file_creates_new(tmp_path: Path) -> None:
     f = tmp_path / "p" / "new.py"
     f.parent.mkdir()
@@ -374,7 +390,7 @@ def test_dispatch_failure_categories(tmp_path: Path) -> None:
 
 def test_register_adds_nav_and_exec_tools(tmp_path: Path) -> None:
     reg = _registry(tmp_path)
-    for name in ("glob", "grep", "run_command"):
+    for name in ("glob", "grep", "list_dir", "run_command"):
         assert reg.get(name) is not None, name
 
 
@@ -382,12 +398,13 @@ def test_nav_exec_risk_levels(tmp_path: Path) -> None:
     reg = _registry(tmp_path)
     assert reg.get("glob").risk == Risk.READ_ONLY  # type: ignore[union-attr]
     assert reg.get("grep").risk == Risk.READ_ONLY  # type: ignore[union-attr]
+    assert reg.get("list_dir").risk == Risk.READ_ONLY  # type: ignore[union-attr]
     assert reg.get("run_command").risk == Risk.DESTRUCTIVE  # type: ignore[union-attr]
 
 
 def test_nav_exec_handlers_are_no_arg_safe(tmp_path: Path) -> None:
     reg = _registry(tmp_path)
-    for name in ("glob", "grep", "run_command"):
+    for name in ("glob", "grep", "list_dir", "run_command"):
         spec = reg.get(name)
         assert spec is not None
         out = spec.handler()

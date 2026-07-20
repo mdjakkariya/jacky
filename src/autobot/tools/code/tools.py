@@ -104,12 +104,26 @@ def read_file(path: str, broker: AccessBroker, offset: int = 1, limit: int = 0) 
     start = max(1, offset)
     count = limit if limit and limit > 0 else _READ_LINE_CAP
     window = lines[start - 1 : start - 1 + count]
-    numbered = "\n".join(f"{start + idx}\t{line}" for idx, line in enumerate(window))
-    if len(numbered) > _READ_CHAR_CAP:
-        numbered = numbered[:_READ_CHAR_CAP] + "\n…(truncated)"
-    shown = start - 1 + len(window)
-    tail = f"\n…({total - shown} more line(s); read with a higher offset)" if shown < total else ""
-    _log.info("read_file name=%r lines=%d offset=%d", resolved.name, len(window), start)
+    numbered_lines = [f"{start + idx}\t{line}" for idx, line in enumerate(window)]
+    # Keep WHOLE lines within the char cap so the resume offset below is accurate (the first
+    # line is always kept, even if it alone exceeds the cap — handled just after).
+    used = 0
+    kept = 0
+    for ln in numbered_lines:
+        if kept and used + len(ln) + 1 > _READ_CHAR_CAP:
+            break
+        used += len(ln) + 1
+        kept += 1
+    numbered = "\n".join(numbered_lines[:kept])
+    if len(numbered) > _READ_CHAR_CAP:  # a single over-long line — hard-cap it as a backstop
+        numbered = numbered[:_READ_CHAR_CAP] + "\n…(line truncated at the character cap)"
+    shown = start - 1 + kept  # lines actually returned (the char cap may stop short of the window)
+    tail = (
+        f"\n…({total - shown} more line(s); continue with offset {shown + 1})"
+        if shown < total
+        else ""
+    )
+    _log.info("read_file name=%r lines=%d offset=%d", resolved.name, kept, start)
     return f"{resolved.name} (lines {start}-{shown} of {total}):\n{numbered}{tail}"
 
 

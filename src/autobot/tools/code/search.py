@@ -1,8 +1,9 @@
-"""File navigation tools for the coder profile: glob + grep (path-jailed, pure Python).
+"""File navigation tools for the coder profile: glob, grep, list_dir (path-jailed, pure Python).
 
 ``glob`` lists files matching a shell-style pattern under a jailed root, newest first;
-``grep`` searches file contents with a regular expression. Both walk the tree with
-``pathlib``/``os`` (no external binary, so behaviour is identical on every OS) and cap
+``grep`` searches file contents with a regular expression; ``list_dir`` lists a folder's
+immediate entries. All walk the tree with ``pathlib``/``os`` (no external binary, so
+behaviour is identical on every OS), prune noise dirs (``.git``/``node_modules``/…), and cap
 their results so a large tree can't flood the model. Every root is resolved through the
 shared :class:`~autobot.tools.access.AccessBroker`.
 """
@@ -46,6 +47,9 @@ def glob_files(pattern: str, broker: AccessBroker, path: str = ".") -> str:
         matches = [p for p in base.glob(pattern) if p.is_file()]
     except (OSError, ValueError, NotImplementedError) as exc:
         return f"I couldn't search with that pattern: {exc}"
+    # Prune noise dirs (.git/node_modules/…) so a broad '**/*' isn't flooded with junk that
+    # exhausts the result cap — matching grep/repo_map, which already skip these.
+    matches = [p for p in matches if not (_SKIP_DIRS & set(p.relative_to(base).parts))]
     if not matches:
         return f"No files match {pattern!r} under {base}."
     matches.sort(key=_safe_mtime, reverse=True)
@@ -151,8 +155,61 @@ def grep(
     return f"matches for {pattern!r} ({output_mode}):\n{text}{tail}"
 
 
+_LIST_LIMIT = 300  # max entries returned by list_dir
+
+
+def list_dir(broker: AccessBroker, path: str = ".") -> str:
+    """List a folder's immediate entries (gated): subfolders first (with a trailing ``/``).
+
+    Noise dirs (``.git``, ``node_modules``, …) are hidden so the listing stays signal.
+    """
+    try:
+        base = broker.ensure(path or ".", write=False)
+    except (AccessDeniedError, PermissionError) as exc:
+        return str(exc)
+    if not base.is_dir():
+        return f"'{base.name}' is not a folder to list."
+    try:
+        entries = list(base.iterdir())
+    except OSError as exc:
+        return f"I couldn't list {base.name}: {exc}"
+    dirs = sorted(
+        (p.name for p in entries if p.is_dir() and p.name not in _SKIP_DIRS), key=str.lower
+    )
+    files = sorted((p.name for p in entries if not p.is_dir()), key=str.lower)
+    lines = [f"{d}/" for d in dirs] + files
+    if not lines:
+        return f"{base.name}/ is empty (nothing but hidden noise dirs, if any)."
+    shown = lines[:_LIST_LIMIT]
+    tail = f"\n…({len(lines) - len(shown)} more)" if len(lines) > len(shown) else ""
+    _log.info("list_dir path=%s entries=%d", base.name, len(lines))
+    plural = "y" if len(lines) == 1 else "ies"
+    return f"{base.name}/ ({len(lines)} entr{plural}):\n" + "\n".join(shown) + tail
+
+
 def register_nav_tools(registry: ToolRegistry, broker: AccessBroker) -> None:
-    """Register the navigation tools (glob, grep). Both are read-only and gated."""
+    """Register the navigation tools (glob, grep, list_dir). All are read-only and gated."""
+    registry.register(
+        ToolSpec(
+            name="list_dir",
+            description=(
+                "List the files and subfolders directly inside a folder (subfolders first, each "
+                "shown with a trailing '/'). Use it to see what's in a directory before globbing "
+                "or reading. Pass `path` (defaults to the working folder). Noise dirs like .git "
+                "and node_modules are hidden."
+            ),
+            parameters={
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string", "description": "Folder to list (optional)."},
+                },
+                "required": [],
+            },
+            handler=lambda path=".": list_dir(broker, path),
+            risk=Risk.READ_ONLY,
+            ack="Listing files.",
+        )
+    )
     registry.register(
         ToolSpec(
             name="glob",
@@ -221,4 +278,4 @@ def register_nav_tools(registry: ToolRegistry, broker: AccessBroker) -> None:
             ack="Searching the code.",
         )
     )
-    _log.info("nav tools registered (glob/grep)")
+    _log.info("nav tools registered (glob/grep/list_dir)")
