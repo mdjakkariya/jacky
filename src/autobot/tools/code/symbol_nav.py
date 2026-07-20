@@ -26,7 +26,7 @@ from urllib.parse import unquote, urlparse
 from autobot.core.types import Risk
 from autobot.logging_setup import get_logger
 from autobot.tools.access import AccessBroker, AccessDeniedError
-from autobot.tools.code.lsp import LspClient, LspError, frame_message, read_message
+from autobot.tools.code.lsp import LspClient, LspError, StdioTransport
 from autobot.tools.registry import ToolRegistry, ToolSpec
 
 if TYPE_CHECKING:
@@ -70,22 +70,6 @@ def _column_of(line_text: str, name: str) -> int | None:
     return match.start() if match else None
 
 
-class _StdioTransport:  # pragma: no cover - real subprocess boundary
-    """Frame LSP messages over a language server subprocess's stdin/stdout."""
-
-    def __init__(self, proc: Any) -> None:
-        self._proc = proc
-
-    def send(self, message: dict[str, Any]) -> None:
-        """Write a framed message to the server's stdin."""
-        self._proc.stdin.write(frame_message(message))
-        self._proc.stdin.flush()
-
-    def receive(self) -> dict[str, Any] | None:
-        """Read the next framed message from the server's stdout."""
-        return read_message(self._proc.stdout)
-
-
 class LspManager:
     """Spawns and reuses one language server per (workspace root, language)."""
 
@@ -111,7 +95,7 @@ class LspManager:
                 stdout=subprocess.PIPE,
                 stderr=subprocess.DEVNULL,
             )
-            client = LspClient(_StdioTransport(proc))
+            client = LspClient(StdioTransport(proc))
             client.initialize(Path(root).resolve().as_uri())
         except (OSError, LspError, ValueError):
             _log.warning("lsp server for %s failed to start; falling back", language, exc_info=True)
@@ -168,7 +152,7 @@ def _lsp_lookup(  # pragma: no cover - requires a real server on PATH
     if client is None:
         return None
     try:
-        client.did_open(resolved.resolve().as_uri(), language, text)
+        client.sync(resolved.resolve().as_uri(), language, text)
         locs = (
             client.definition(resolved.resolve().as_uri(), line - 1, col)
             if action == "definition"

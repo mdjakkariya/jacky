@@ -51,7 +51,7 @@ class _FakeTransport:
         self.sent.append(message)
         self._inbox.extend(self._responder(message))
 
-    def receive(self) -> dict[str, Any] | None:
+    def receive(self, timeout: float | None = None) -> dict[str, Any] | None:
         return self._inbox.popleft() if self._inbox else None
 
 
@@ -102,9 +102,32 @@ def test_references_normalises_location_link() -> None:
     assert locs == [{"uri": "file:///b.py", "range": {"line": 2}}]
 
 
-def test_initialize_sends_handshake_then_initialized() -> None:
-    transport = _FakeTransport(
-        lambda m: [{"jsonrpc": "2.0", "id": m["id"], "result": {}}] if "id" in m else []
-    )
+def _echo_ok(m: dict[str, Any]) -> list[dict[str, Any]]:
+    """Responder that answers every request with an empty result (notifications get nothing)."""
+    return [{"jsonrpc": "2.0", "id": m["id"], "result": {}}] if "id" in m else []
+
+
+def test_initialize_declares_capabilities_then_initialized() -> None:
+    transport = _FakeTransport(_echo_ok)
     LspClient(transport).initialize("file:///repo")
     assert [m.get("method") for m in transport.sent] == ["initialize", "initialized"]
+    caps = transport.sent[0]["params"]["capabilities"]["textDocument"]
+    assert "definition" in caps and "references" in caps and "rename" in caps
+
+
+def test_request_times_out_when_no_response() -> None:
+    # A transport that never yields a message must not hang — the client gives up (falls back).
+    client = LspClient(_FakeTransport(lambda m: []), timeout=0.05)
+    with pytest.raises(LspError):
+        client.request("textDocument/definition", {})
+
+
+def test_sync_dedups_open_and_change() -> None:
+    transport = _FakeTransport(lambda m: [])  # sync only sends notifications, no responses
+    client = LspClient(transport)
+    client.sync("file:///a.py", "python", "x = 1\n")  # first sight -> didOpen
+    client.sync("file:///a.py", "python", "x = 1\n")  # unchanged -> nothing
+    client.sync("file:///a.py", "python", "x = 2\n")  # changed -> didChange
+    methods = [m.get("method") for m in transport.sent]
+    assert methods == ["textDocument/didOpen", "textDocument/didChange"]
+    assert transport.sent[1]["params"]["textDocument"]["version"] == 2
