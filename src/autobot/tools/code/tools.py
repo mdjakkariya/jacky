@@ -24,7 +24,7 @@ from autobot.tools.code.plan import register_plan_tool
 from autobot.tools.code.repomap import register_repomap_tool
 from autobot.tools.code.search import register_nav_tools
 from autobot.tools.code.shell import register_exec_tools
-from autobot.tools.registry import ToolRegistry, ToolSpec
+from autobot.tools.registry import ToolFailure, ToolRegistry, ToolSpec
 
 if TYPE_CHECKING:
     from autobot.tasks import NotificationInbox, TaskRegistry
@@ -80,14 +80,14 @@ def read_file(path: str, broker: AccessBroker, offset: int = 1, limit: int = 0) 
         limit: Max lines to return; 0 (default) means up to ``_READ_LINE_CAP``.
     """
     if not path:
-        return "Which file should I read? Tell me its path."
+        return ToolFailure("Which file should I read? Tell me its path.")
     try:
         resolved = broker.ensure(path, write=False)
     except (AccessDeniedError, PermissionError) as exc:
-        return str(exc)
+        return ToolFailure(str(exc))
     text, err = _read_text(resolved)
     if text is None:
-        return err
+        return ToolFailure(err)
     lines = text.split("\n")
     if lines and lines[-1] == "":  # a final newline yields a trailing "" — not a line
         lines = lines[:-1]
@@ -107,13 +107,13 @@ def read_file(path: str, broker: AccessBroker, offset: int = 1, limit: int = 0) 
 def write_file(path: str, content: str, broker: AccessBroker) -> str:
     """Create a NEW text file (gated; create-only — refuses to overwrite an existing one)."""
     if not path:
-        return "Where should I save it? Tell me the file path."
+        return ToolFailure("Where should I save it? Tell me the file path.")
     try:
         resolved = broker.ensure(path, write=True)
     except (AccessDeniedError, PermissionError) as exc:
-        return str(exc)
+        return ToolFailure(str(exc))
     if resolved.exists():
-        return (
+        return ToolFailure(
             f"'{resolved.name}' already exists — use edit_file or multi_edit to change it "
             "(write_file only creates new files)."
         )
@@ -121,7 +121,7 @@ def write_file(path: str, content: str, broker: AccessBroker) -> str:
         resolved.parent.mkdir(parents=True, exist_ok=True)
         resolved.write_text(content, encoding="utf-8")
     except OSError as exc:
-        return f"I couldn't write {resolved.name}: {exc}"
+        return ToolFailure(f"I couldn't write {resolved.name}: {exc}")
     _emit_diff("", content, resolved.name)  # new file → all-additions diff for inline review
     n = len(content)
     _log.info("write_file name=%r chars=%d", resolved.name, n)
@@ -133,23 +133,23 @@ def edit_file(
 ) -> str:
     """Replace ``find`` with ``replace`` in an EXISTING file (gated). See :mod:`.edits`."""
     if not path:
-        return "Which file should I edit? Tell me its path."
+        return ToolFailure("Which file should I edit? Tell me its path.")
     if not find:
-        return "Tell me the exact text to replace (a non-empty `find`)."
+        return ToolFailure("Tell me the exact text to replace (a non-empty `find`).")
     try:
         resolved = broker.ensure(path, write=True)
     except (AccessDeniedError, PermissionError) as exc:
-        return str(exc)
+        return ToolFailure(str(exc))
     text, err = _read_text(resolved)
     if text is None:
-        return err
+        return ToolFailure(err)
     result = apply_replace(text, find, replace, replace_all=replace_all)
     if not result.ok:
-        return f"I couldn't edit {resolved.name}: {result.detail}."
+        return ToolFailure(f"I couldn't edit {resolved.name}: {result.detail}.")
     try:
         resolved.write_text(result.content, encoding="utf-8")
     except OSError as exc:
-        return f"I couldn't save {resolved.name}: {exc}"
+        return ToolFailure(f"I couldn't save {resolved.name}: {exc}")
     _emit_diff(text, result.content, resolved.name)  # inline diff of what changed
     _log.info("edit_file name=%r detail=%r", resolved.name, result.detail)
     return f"Edited {resolved.name} ({result.detail})."
@@ -164,41 +164,45 @@ def multi_edit(path: str, edits: list[dict[str, str]] | None, broker: AccessBrok
     edit can never corrupt the file.
     """
     if not path:
-        return "Which file should I edit? Tell me its path."
+        return ToolFailure("Which file should I edit? Tell me its path.")
     if not edits:
-        return "No edits to apply — pass a list of {find, replace} objects."
+        return ToolFailure("No edits to apply — pass a list of {find, replace} objects.")
     if not isinstance(edits, list):  # untrusted JSON: a scalar would raise on iteration
-        return "The `edits` value must be a list of {find, replace} objects."
+        return ToolFailure("The `edits` value must be a list of {find, replace} objects.")
     try:
         resolved = broker.ensure(path, write=True)
     except (AccessDeniedError, PermissionError) as exc:
-        return str(exc)
+        return ToolFailure(str(exc))
     text, err = _read_text(resolved)
     if text is None:
-        return err
+        return ToolFailure(err)
     working = text
     applied_replacements: list[str] = []
     for idx, edit in enumerate(edits, start=1):
         if not isinstance(edit, dict) or "find" not in edit or "replace" not in edit:
-            return f"Edit {idx} is malformed — each edit needs a `find` and a `replace`."
+            return ToolFailure(
+                f"Edit {idx} is malformed — each edit needs a `find` and a `replace`."
+            )
         find, replace = edit["find"], edit["replace"]
         if not isinstance(find, str) or not isinstance(replace, str) or not find:
-            return f"Edit {idx} is malformed — `find` and `replace` must be text, `find` non-empty."
+            return ToolFailure(
+                f"Edit {idx} is malformed — `find` and `replace` must be text, `find` non-empty."
+            )
         probe = find.rstrip("\n")
         if probe and any(probe in prev for prev in applied_replacements):
-            return (
+            return ToolFailure(
                 f"Edit {idx}'s search text was produced by an earlier edit; "
                 "combine them into one edit or reorder them."
             )
         result = apply_replace(working, find, replace)
         if not result.ok:
-            return f"Edit {idx} didn't apply ({result.detail}); nothing was changed."
+            return ToolFailure(f"Edit {idx} didn't apply ({result.detail}); nothing was changed.")
         working = result.content
         applied_replacements.append(replace)
     try:
         resolved.write_text(working, encoding="utf-8")
     except OSError as exc:
-        return f"I couldn't save {resolved.name}: {exc}"
+        return ToolFailure(f"I couldn't save {resolved.name}: {exc}")
     _emit_diff(text, working, resolved.name)  # inline diff of the combined edits
     n = len(edits)
     _log.info("multi_edit name=%r edits=%d", resolved.name, n)

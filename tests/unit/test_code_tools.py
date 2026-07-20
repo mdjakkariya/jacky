@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
 
 from autobot.core.types import Risk
 from autobot.tools.access import AccessBroker, AccessPolicy
@@ -269,6 +270,58 @@ def test_dispatch_edit_file_replace_all_through_registry(tmp_path: Path) -> None
     )
     assert res.ok
     assert f.read_text() == "v = 2\nv = 2\n"
+
+
+def test_dispatch_write_file_success_is_ok(tmp_path: Path) -> None:
+    reg = _registry(tmp_path)
+    res = reg.dispatch("write_file", {"path": str(tmp_path / "n.py"), "content": "x\n"})
+    assert res.ok
+
+
+def test_dispatch_multi_edit_success_is_ok(tmp_path: Path) -> None:
+    f = tmp_path / "z.py"
+    f.write_text("a = 1\n")
+    reg = _registry(tmp_path)
+    res = reg.dispatch(
+        "multi_edit", {"path": str(f), "edits": [{"find": "a = 1", "replace": "a = 2"}]}
+    )
+    assert res.ok and f.read_text() == "a = 2\n"
+
+
+def test_dispatch_reports_failures_as_not_ok(tmp_path: Path) -> None:
+    # Every expected code-tool failure must surface as ok=False (not a success-looking
+    # string), so the harness guards that key off `ok` can see it. Regression for G1.
+    exists = tmp_path / "exists.py"
+    exists.write_text("original\n")
+    binary = tmp_path / "b.bin"
+    binary.write_bytes(b"\x00\x01data")
+    editable = tmp_path / "m.py"
+    editable.write_text("x = 1\nx = 1\n")
+
+    reg = _registry(tmp_path)
+    cases: list[tuple[str, dict[str, Any]]] = [
+        ("read_file", {"path": str(tmp_path / "nope.py")}),  # missing
+        ("read_file", {"path": str(binary)}),  # binary
+        ("read_file", {}),  # missing arg
+        ("write_file", {"path": str(exists), "content": "clobber\n"}),  # already exists
+        ("edit_file", {"path": str(tmp_path / "nope.py"), "find": "a", "replace": "b"}),  # missing
+        ("edit_file", {"path": str(editable), "find": "x = 1", "replace": "x = 2"}),  # ambiguous
+        ("edit_file", {"path": str(editable), "find": "", "replace": "y"}),  # empty find
+        (
+            "multi_edit",
+            {"path": str(editable), "edits": [{"find": "zzz", "replace": "q"}]},
+        ),  # no match
+        ("multi_edit", {"path": str(editable), "edits": []}),  # no edits
+        ("multi_edit", {"path": str(editable), "edits": [{"find": "x = 1"}]}),  # malformed
+    ]
+    for name, args in cases:
+        res = reg.dispatch(name, args)
+        assert res.ok is False, f"{name}({args}) should be ok=False"
+        assert res.content, f"{name}({args}) should carry an error message"
+
+    # The failing edits/writes must not have touched anything.
+    assert exists.read_text() == "original\n"
+    assert editable.read_text() == "x = 1\nx = 1\n"
 
 
 def test_register_adds_nav_and_exec_tools(tmp_path: Path) -> None:
