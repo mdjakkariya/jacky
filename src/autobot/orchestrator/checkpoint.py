@@ -194,9 +194,11 @@ def restore_checkpoint(
 ) -> tuple[bool, str]:
     """Restore the working tree + index to a checkpoint's snapshot.
 
-    Known MVP limitation: this resets *tracked* paths (as of the snapshot) back to
-    their snapshotted content, but files created *after* the snapshot are not removed
-    — v1 does not delete extra untracked files, only reverts what the snapshot covers.
+    Resets tracked paths back to their snapshotted content, re-creates snapshotted files
+    that were deleted afterwards, and removes files created *after* the snapshot: they are
+    absent from the snapshot tree, so once the index matches the snapshot they are the only
+    untracked entries and ``git clean`` drops them. ``.gitignore`` is honored (no ``-x``),
+    so ignored build artifacts / virtualenvs are left untouched.
     """
     rc, out = _run(root, runner, ["rev-parse", "--verify", ref_or_sha])
     if rc != 0:
@@ -219,6 +221,14 @@ def restore_checkpoint(
     if rc != 0:
         _log.warning("restore_checkpoint: restore failed: %s", out)
         return False, f"failed to restore worktree: {out.strip()}"
+
+    # The steps above only revert paths the snapshot covers; a file created after the
+    # snapshot would otherwise survive a "restore". The index now matches the snapshot, so
+    # such files are the only untracked entries — clean removes them (honoring .gitignore).
+    rc, out = _run(root, runner, ["clean", "-fd"])
+    if rc != 0:
+        _log.warning("restore_checkpoint: clean failed: %s", out)
+        return False, f"failed to remove files created after the snapshot: {out.strip()}"
 
     _log.info("checkpoint restored sha=%s", sha)
     return True, f"restored to {ref_or_sha}"
