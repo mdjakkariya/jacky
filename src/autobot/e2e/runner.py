@@ -139,19 +139,24 @@ def run_scenario(
     judge_mode: str,
     judge_model: str | None = None,
     keep: bool = False,
+    model: str | None = None,
     session_factory: SessionFactory = lambda argv, cwd: PtySession.spawn(argv, cwd),
     judge_fn: JudgeFn = judge_auto,
 ) -> Result:
-    """Run one scenario and return its scored result."""
+    """Run one scenario and return its scored result.
+
+    ``model`` overrides the LLM for this run only (the field matching the active provider —
+    ``anthropic_model`` in cloud mode, else ``llm_model``); it is applied via the settings scope
+    and restored afterward, so cross-model benchmarking never mutates the user's config.
+    """
     sc.validate()
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     settings = Settings.load()
+    is_cloud = settings.llm_provider == "anthropic"
     # Report the model actually in use: the anthropic provider drives ``anthropic_model``,
     # not ``llm_model`` (which stays the local default). Getting this wrong makes a cloud
-    # bundle read as a local run.
-    active_model = (
-        settings.anthropic_model if settings.llm_provider == "anthropic" else settings.llm_model
-    )
+    # bundle read as a local run. A ``model`` override wins (that's the model this run uses).
+    active_model = model or (settings.anthropic_model if is_cloud else settings.llm_model)
     provider = f"{settings.llm_provider}:{active_model}"
     log: list[dict[str, Any]] = []
     screen, raw = "", b""
@@ -166,6 +171,8 @@ def run_scenario(
         "access_store": access_store,
         "usage_ledger_path": usage_ledger,
     }
+    if model:  # override the LLM for this run only (restored with the rest of the scope)
+        scope["anthropic_model" if is_cloud else "llm_model"] = model
     # Read only the daemon log written from here on — the run's own slice, not history.
     log_path = Path(settings.log_dir).expanduser() / "autobot.log"
     log_start = observe.log_offset(log_path)

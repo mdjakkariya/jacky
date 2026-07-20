@@ -142,6 +142,50 @@ def test_bundle_captures_observability_files(tmp_path: Path) -> None:
     assert '"content": "do X"' in (bundle / "session.jsonl").read_text()
 
 
+def test_model_override_injected_into_settings_scope(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # A --model override must reach the settings scope on the field that matches the active
+    # provider (anthropic_model in cloud mode, llm_model locally), so the run uses that model
+    # and the byte-exact restore afterward leaves the user's config untouched.
+    import contextlib
+    from collections.abc import Iterator
+
+    captured: dict[str, object] = {}
+
+    @contextlib.contextmanager
+    def _fake_scope(updates: dict[str, object], **_: object) -> Iterator[None]:
+        captured.update(updates)
+        yield
+
+    monkeypatch.setattr(runner, "settings_scope", _fake_scope)
+    sc = Scenario(
+        name="t",
+        autonomy="auto",
+        strategy="unattended",
+        task="do X",
+        success_criteria="did X",
+        checks=(FileExists("hello.py"),),
+    )
+    sess = _FakeSession(["❯ ", "⏺ done\n❯ "])
+
+    def factory(argv, cwd):  # type: ignore[no-untyped-def]
+        (Path(cwd) / "hello.py").write_text("hi")
+        return sess
+
+    res = runner.run_scenario(
+        sc,
+        port=8999,
+        judge_mode="manual",
+        model="claude-sonnet-4-5",
+        session_factory=factory,
+        judge_fn=lambda *a, **k: None,
+    )
+    assert res.passed is True
+    # Landed on whichever model field the active provider uses.
+    assert "claude-sonnet-4-5" in (captured.get("anthropic_model"), captured.get("llm_model"))
+
+
 def test_failed_check_fails_the_result(tmp_path: Path) -> None:
     sc = Scenario(
         name="t",

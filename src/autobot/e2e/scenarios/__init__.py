@@ -144,6 +144,36 @@ ALL: tuple[Scenario, ...] = (
         ),
     ),
     Scenario(
+        # A richer LSP exercise (epic #105): a cross-file rename that a *textual* rename would get
+        # wrong. `scale` is a function in mathx.py used from a.py and b.py (three files, three call
+        # sites incl. two in b.py) — AND there's a decoy module-level `scale` string in notes.py
+        # that is a different symbol. A semantic (LSP) rename touches only the function's real
+        # references and leaves the decoy alone; a naive s/scale/double/ would corrupt notes.py.
+        # The "then check for problems" tail nudges the `diagnostics` tool in the same turn. This
+        # is the effectiveness proof: semantic precision + multi-tool orchestration on a tiny seed.
+        name="rename-across-files",
+        autonomy="auto",
+        strategy="unattended",
+        task="rename the scale function from mathx.py to double everywhere it is used, then "
+        "check the files have no problems",
+        success_criteria="Renamed the mathx.scale function to double across mathx.py and both "
+        "call sites (a.py, b.py) with a semantic rename — leaving the unrelated 'scale' string "
+        "variable in notes.py untouched — and confirmed no problems remain.",
+        seed_files={
+            "mathx.py": "def scale(x):\n    return x * 2\n",
+            "a.py": "from mathx import scale\n\n\ndef run_a():\n    return scale(10)\n",
+            "b.py": "from mathx import scale\n\n\ndef run_b():\n    return scale(20) + scale(30)\n",
+            "notes.py": 'scale = "map scale is 1:1000"\n\n\ndef describe():\n    return scale\n',
+        },
+        checks=(
+            FileContains("mathx.py", "def double"),  # the definition was renamed
+            FileContains("a.py", "double(10)"),  # call site in a.py renamed
+            FileContains("b.py", "double(20)"),  # call sites in b.py renamed
+            FileLacks("a.py", "scale"),  # import + call both gone ('mathx' has no 'scale')
+            FileContains("notes.py", 'scale = "map scale is 1:1000"'),  # decoy untouched (semantic)
+        ),
+    ),
+    Scenario(
         name="slash-and-chat",
         autonomy="auto",
         strategy="scripted",
