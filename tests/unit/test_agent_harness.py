@@ -154,6 +154,83 @@ def test_identical_call_repeated_trips_doom_loop_guard(store: SessionStore) -> N
     assert len(model.recorded) < 8  # stopped early
 
 
+def test_batch_short_circuits_after_first_failure(store: SessionStore) -> None:
+    # One response asks for two dependent calls; the first fails, so the second must NOT
+    # run and comes back as a deferred/skipped result the model sees at the next round.
+    model = FakeChatModel(
+        [
+            ChatResponse(
+                text="",
+                tool_calls=[
+                    ToolCall(name="write_file", arguments={"path": "a"}),
+                    ToolCall(name="edit_file", arguments={"path": "a"}),
+                ],
+            ),
+            ChatResponse(text="done", tool_calls=[]),
+        ]
+    )
+    executed: list[str] = []
+
+    def exec_(call: ToolCall) -> ToolResult:
+        executed.append(call.name)
+        ok = call.name != "write_file"
+        return ToolResult(name=call.name, content=("ok" if ok else "boom"), ok=ok)
+
+    reply = AgentHarness(model, store).run_turn("go", exec_)
+    assert reply == "done"
+    assert executed == ["write_file"]  # edit_file never ran against the failed write
+    first_round = model.recorded[0]
+    assert len(first_round) == 2  # the model still sees both entries
+    assert first_round[0][1].ok is False and first_round[0][1].content == "boom"
+    skipped = first_round[1][1]
+    assert skipped.ok is False and "skipped" in skipped.content.lower()
+
+
+def test_batch_runs_calls_before_the_failure_then_defers(store: SessionStore) -> None:
+    # Calls up to and including the failing one run; everything after is deferred.
+    model = FakeChatModel(
+        [
+            ChatResponse(
+                text="",
+                tool_calls=[ToolCall(name="read_a"), ToolCall(name="bad"), ToolCall(name="read_b")],
+            ),
+            ChatResponse(text="ok", tool_calls=[]),
+        ]
+    )
+    executed: list[str] = []
+
+    def exec_(call: ToolCall) -> ToolResult:
+        executed.append(call.name)
+        return ToolResult(name=call.name, content="x", ok=call.name != "bad")
+
+    AgentHarness(model, store).run_turn("go", exec_)
+    assert executed == ["read_a", "bad"]  # read_b deferred, never ran
+    results = model.recorded[0]
+    assert [r.ok for _, r in results] == [True, False, False]
+    assert "skipped" in results[2][1].content.lower()
+
+
+def test_deferred_call_can_be_reissued_next_round(store: SessionStore) -> None:
+    # A deferred call is NOT poisoned into the anti-thrash memo: re-issued alone next
+    # round, it runs normally.
+    model = FakeChatModel(
+        [
+            ChatResponse(text="", tool_calls=[ToolCall(name="bad"), ToolCall(name="dep")]),
+            ChatResponse(text="", tool_calls=[ToolCall(name="dep")]),
+            ChatResponse(text="finished", tool_calls=[]),
+        ]
+    )
+    executed: list[str] = []
+
+    def exec_(call: ToolCall) -> ToolResult:
+        executed.append(call.name)
+        return ToolResult(name=call.name, content="x", ok=call.name != "bad")
+
+    reply = AgentHarness(model, store).run_turn("go", exec_)
+    assert reply == "finished"
+    assert executed == ["bad", "dep"]  # dep was deferred in round 1, then ran in round 2
+
+
 def test_delegation_methods_forward_to_model(store: SessionStore) -> None:
     model = FakeChatModel([ChatResponse(text="x", tool_calls=[])])
     harness = AgentHarness(model, store)
