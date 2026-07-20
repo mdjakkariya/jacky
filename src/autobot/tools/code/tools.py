@@ -20,6 +20,7 @@ from autobot.core.streaming import output_sink
 from autobot.core.types import ErrorCategory, Risk
 from autobot.logging_setup import get_logger
 from autobot.tools.access import AccessBroker, AccessDeniedError
+from autobot.tools.code.diagnostics import register_diagnostics_tool
 from autobot.tools.code.edits import apply_replace
 from autobot.tools.code.plan import register_plan_tool
 from autobot.tools.code.rename import register_rename_tool
@@ -678,4 +679,5 @@ def register_code_tools(
     register_repomap_tool(registry, broker)
     lsp_manager = register_symbol_tool(registry, broker)
     register_rename_tool(registry, broker, lsp_manager)  # shares the language servers
+    register_diagnostics_tool(registry, broker, lsp_manager)
     register_plan_tool(registry)

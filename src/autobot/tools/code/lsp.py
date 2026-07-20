@@ -254,6 +254,31 @@ class LspClient:
         )
         return result if isinstance(result, dict) else {}
 
+    def await_diagnostics(self, uri: str, timeout: float | None = None) -> list[dict[str, Any]]:
+        """Wait up to ``timeout`` for the server to publish diagnostics for ``uri`` (push model).
+
+        Call right after :meth:`sync` so the server re-analyzes and publishes. Returns the
+        diagnostics list (empty = clean). Reads past unrelated messages; on timeout it returns
+        the most recent diagnostics already collected for ``uri`` (or ``[]``) rather than hang.
+        """
+        timeout = self._timeout if timeout is None else timeout
+        deadline = time.monotonic() + timeout
+        while True:
+            remaining = max(0.0, deadline - time.monotonic())
+            msg = self._t.receive(timeout=remaining)
+            if msg is None:  # timed out — fall back to the latest collected diagnostics for uri
+                for params in reversed(self.diagnostics):
+                    if params.get("uri") == uri:
+                        return list(params.get("diagnostics") or [])
+                return []
+            if msg.get("method") == "textDocument/publishDiagnostics":
+                params = msg.get("params", {})
+                self.diagnostics.append(params)
+                if params.get("uri") == uri:
+                    return list(params.get("diagnostics") or [])
+            # Any other message (a response to an abandoned request, another uri's diagnostics,
+            # a log notification): keep reading until ours arrives or we time out.
+
     def shutdown(self) -> None:
         """Best-effort ``shutdown`` + ``exit`` (never raises)."""
         try:
