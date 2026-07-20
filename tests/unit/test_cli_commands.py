@@ -35,3 +35,9 @@ def test_new_command_names_registered() -> None:
 
     for name in ("/diff", "/undo", "/model", "/autonomy", "/sessions", "/new"):
         assert name in COMMANDS
+
+
+def test_mcp_is_a_known_command() -> None:
+    from autobot.cli.commands import COMMANDS
+
+    assert "/mcp" in COMMANDS

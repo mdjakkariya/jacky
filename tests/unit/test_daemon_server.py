@@ -21,6 +21,7 @@ if TYPE_CHECKING:
     from collections.abc import Iterator
 
     from autobot.mcp.manager import McpManager
+    from autobot.mcp.provider import McpProvider
 
 
 def test_healthz_reports_current_state() -> None:
@@ -521,6 +522,9 @@ class _FakeMcp:
             return {"ok": False, "error": f"unknown server: {server_id!r}"}
         return {"ok": True, "started": True}
 
+    def consent_pending(self, server_id: str) -> dict[str, Any] | None:
+        return None
+
     def shutdown(self) -> None:
         return None
 
@@ -799,3 +803,51 @@ def test_coder_routes_graceful_when_disabled() -> None:
     client = TestClient(create_app(EventBus()))  # no coder callbacks
     assert 'data: {"status": "error"' in client.post("/coder/turn", json={"text": "x"}).text
     assert 'data: {"status": "error"' in client.post("/coder/reply", json={"value": "yes"}).text
+
+
+def _mcp_app(manager: Any) -> TestClient:
+    from types import SimpleNamespace
+
+    return TestClient(
+        create_app(EventBus(), mcp_provider=cast("McpProvider", SimpleNamespace(manager=manager)))
+    )
+
+
+def test_mcp_enable_reports_pending_consent() -> None:
+    class _Mgr:
+        def set_enabled(self, sid: str, enabled: bool) -> bool:
+            return sid == "s1"
+
+        def consent_pending(self, sid: str) -> dict[str, Any] | None:
+            return {"command": "npx", "args": ["-y", "srv"]}
+
+    body = _mcp_app(_Mgr()).post("/mcp/servers/s1/enable").json()
+    assert body == {"ok": True, "pending_consent": True, "command": "npx", "args": ["-y", "srv"]}
+
+
+def test_mcp_enable_plain_ok_when_no_consent_needed() -> None:
+    class _Mgr:
+        def set_enabled(self, sid: str, enabled: bool) -> bool:
+            return True
+
+        def consent_pending(self, sid: str) -> dict[str, Any] | None:
+            return None
+
+    assert _mcp_app(_Mgr()).post("/mcp/servers/s1/enable").json() == {"ok": True}
+
+
+def test_mcp_consent_endpoint_grants() -> None:
+    calls: list[str] = []
+
+    class _Mgr:
+        def grant_consent(self, sid: str) -> dict[str, Any]:
+            calls.append(sid)
+            return {"ok": True, "server": {"server": sid, "state": "connected"}}
+
+    body = _mcp_app(_Mgr()).post("/mcp/servers/s1/consent").json()
+    assert calls == ["s1"] and body["ok"] is True
+
+
+def test_mcp_consent_disabled_without_provider() -> None:
+    client = TestClient(create_app(EventBus()))
+    assert client.post("/mcp/servers/s1/consent").json() == {"ok": False, "error": "mcp disabled"}

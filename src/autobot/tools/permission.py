@@ -21,6 +21,7 @@ from typing import Protocol, runtime_checkable
 
 from autobot.core.types import Decision, Risk, ToolCall, ToolResult
 from autobot.logging_setup import get_logger
+from autobot.mcp.adapter import split_namespaced
 from autobot.tools.audit import AuditLog
 from autobot.tools.registry import ToolRegistry, ToolSpec
 
@@ -218,7 +219,7 @@ class PermissionGate:
             _log.info("pre-authorized tool=%s risk=%s", call.name, spec.risk.name)
         if needs_confirm and not pre_authorized:
             prompt = spec.confirm_prompt or self._format_prompt(
-                spec.name, spec.risk, call.arguments
+                spec.name, spec.risk, call.arguments, network=spec.network
             )
             kind = self._confirm_kind(spec)
             granted = False
@@ -309,7 +310,9 @@ class PermissionGate:
         return "write"
 
     @staticmethod
-    def _format_prompt(name: str, risk: Risk, arguments: dict[str, object]) -> str:
+    def _format_prompt(
+        name: str, risk: Risk, arguments: dict[str, object], *, network: bool = False
+    ) -> str:
         """Build a clear, human-readable confirmation prompt for a risky call.
 
         Plain language about *what* will happen (with the actual target), so the
@@ -331,6 +334,15 @@ class PermissionGate:
             cwd = str(arguments.get("cwd", "")).strip()
             where = f"\n\nin {cwd}" if cwd and cwd != "." else ""
             return f"Run this command?\n\n  $ {command}{where}"
+        # MCP tool: name the server and the action plainly, and make the off-device moment
+        # explicit for network-egress servers.
+        ns = split_namespaced(name)
+        if ns is not None:
+            server, bare = ns
+            detail = ", ".join(f"{k}: {v}" for k, v in arguments.items())
+            suffix = f"\n\n  {detail}" if detail else ""
+            disclosure = "\n\nThis sends data off-device (network server)." if network else ""
+            return f"Run {server}: {bare.replace('_', ' ')}?{suffix}{disclosure}"
         # Generic fallback — readable, with the targets spelled out.
         detail = ", ".join(f"{k}: {v}" for k, v in arguments.items())
         suffix = f" ({detail})" if detail else ""

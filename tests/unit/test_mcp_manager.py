@@ -378,3 +378,114 @@ def test_concurrent_status_and_crud_does_not_raise(tmp_path: Path) -> None:
     t_writer.join(timeout=2.0)
 
     assert not errors, f"concurrent access raised: {errors}"
+
+
+def test_consent_pending_reports_unapproved_stdio(tmp_path: Path) -> None:
+    from autobot.mcp.config import McpServerConfig
+
+    cfg = {
+        "s1": McpServerConfig(
+            id="s1",
+            label="s1",
+            transport="stdio",
+            command="npx",
+            args=("-y", "srv"),
+            enabled=True,
+        )
+    }
+    mgr = McpManager(
+        cfg,
+        ToolRegistry(),
+        config_path=tmp_path / "servers.json",
+        approvals_path=tmp_path / "approved.json",
+        consent="explicit",
+    )
+    assert mgr.consent_pending("s1") == {"command": "npx", "args": ["-y", "srv"]}
+    assert mgr.consent_pending("nope") is None
+
+
+def test_consent_pending_none_for_http(tmp_path: Path) -> None:
+    from autobot.mcp.config import McpServerConfig
+
+    cfg = {"h": McpServerConfig(id="h", label="h", transport="http", url="https://x/mcp")}
+    mgr = McpManager(
+        cfg,
+        ToolRegistry(),
+        config_path=tmp_path / "servers.json",
+        approvals_path=tmp_path / "approved.json",
+    )
+    assert mgr.consent_pending("h") is None
+
+
+def test_grant_consent_records_and_clears_pending(tmp_path: Path) -> None:
+    from autobot.mcp.approvals import load_approvals
+    from autobot.mcp.config import McpServerConfig
+
+    cfg = {
+        "s1": McpServerConfig(
+            id="s1",
+            label="s1",
+            transport="stdio",
+            command="npx",
+            args=("-y", "srv"),
+            enabled=False,
+        )
+    }
+    mgr = McpManager(
+        cfg,
+        ToolRegistry(),
+        config_path=tmp_path / "servers.json",
+        approvals_path=tmp_path / "approved.json",
+        consent="explicit",
+    )
+    res = mgr.grant_consent("s1")
+    assert res["ok"] is True
+    approved = load_approvals(tmp_path / "approved.json").spawn_approvals["s1"]
+    assert approved.command == "npx" and approved.args == ["-y", "srv"]
+    assert mgr.consent_pending("s1") is None
+    assert mgr.grant_consent("nope")["ok"] is False
+
+
+def test_grant_consent_drops_blocked_fingerprints(tmp_path: Path) -> None:
+    """Rug-pull re-consent: blocked tools' fingerprints are dropped so resync re-baselines."""
+    from autobot.mcp.approvals import ApprovalsFile, load_approvals, save_approvals
+    from autobot.mcp.config import McpServerConfig
+
+    save_approvals(
+        ApprovalsFile(
+            fingerprints={"s1": {"s1__create_repo": "oldfp", "s1__list": "fp2"}},
+            risks={"s1": {"s1__create_repo": "write", "s1__list": "read_only"}},
+        ),
+        tmp_path / "approved.json",
+    )
+    cfg = {
+        "s1": McpServerConfig(id="s1", label="s1", transport="stdio", command="npx", enabled=False)
+    }
+    mgr = McpManager(
+        cfg,
+        ToolRegistry(),
+        config_path=tmp_path / "servers.json",
+        approvals_path=tmp_path / "approved.json",
+        consent="explicit",
+    )
+
+    class _StubWorker:
+        state = "connected"
+        tool_count = 2
+
+        def all_tools(self) -> list[dict[str, Any]]:
+            return [
+                {"name": "create_repo", "pending_reconsent": True},
+                {"name": "list", "pending_reconsent": False},
+            ]
+
+        def request_shutdown(self) -> None:
+            pass
+
+    mgr._workers["s1"] = _StubWorker()  # type: ignore[assignment]
+    res = mgr.grant_consent("s1")
+    assert res["ok"] is True
+    af = load_approvals(tmp_path / "approved.json")
+    assert "s1__create_repo" not in af.fingerprints["s1"]
+    assert "s1__list" in af.fingerprints["s1"]
+    assert "s1__create_repo" not in af.risks["s1"]

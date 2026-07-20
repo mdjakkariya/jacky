@@ -69,6 +69,46 @@ def test_stdio_echo_connect_call_shutdown() -> None:
     assert registry.get("echo__echo") is None
 
 
+def test_explicit_consent_roundtrip_parks_then_connects(tmp_path: Path) -> None:
+    """Explicit mode: enabled stdio server parks; grant_consent connects it with tools."""
+    server = McpServerConfig(
+        id="echo",
+        label="echo",
+        transport="stdio",
+        command=sys.executable,
+        args=(_SERVER,),
+        enabled=True,
+    )
+    registry = ToolRegistry()
+    manager = McpManager(
+        {"echo": server},
+        registry,
+        config_path=tmp_path / "servers.json",
+        approvals_path=tmp_path / "approved.json",
+        consent="explicit",
+    )
+    try:
+        manager.start()
+        manager.connect_enabled()
+        assert _wait(lambda: manager.status()[0]["state"] == "pending_consent")
+        assert manager.consent_pending("echo") is not None
+
+        res = manager.grant_consent("echo")
+        assert res["ok"] is True
+        assert _wait(
+            lambda: (
+                manager.status()[0]["state"] == "connected"
+                and manager.status()[0]["tool_count"] > 0
+            ),
+            timeout=15.0,
+        )
+        row = manager.status()[0]
+        assert row["state"] == "connected" and row["tool_count"] > 0
+        assert manager.consent_pending("echo") is None
+    finally:
+        manager.shutdown()
+
+
 def test_stdio_env_var_reaches_subprocess() -> None:
     """Prove that env vars (and by extension token injection) reach the subprocess."""
     cfg = McpServerConfig(

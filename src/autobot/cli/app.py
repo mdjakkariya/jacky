@@ -46,6 +46,7 @@ from prompt_toolkit.layout import (
 from prompt_toolkit.layout.controls import BufferControl, FormattedTextControl
 from prompt_toolkit.layout.dimension import Dimension
 from prompt_toolkit.layout.menus import CompletionsMenu
+from prompt_toolkit.layout.processors import ConditionalProcessor, PasswordProcessor
 from prompt_toolkit.mouse_events import MouseEvent, MouseEventType
 from prompt_toolkit.styles import Style
 from prompt_toolkit.widgets import Frame
@@ -273,6 +274,7 @@ class JackApp:
         self._modal: asyncio.Future[Answer] | None = None
         self._modal_seg: Segment | None = None
         self._modal_edit = False  # True while typing a plan refinement (after pressing 'e')
+        self._secret_mode = False  # mask the input buffer while a "secret" ask is active
         self._pending_pickups: list[dict[str, Any]] = []
         self._pastes = PasteStore()  # large pastes stashed behind [Pasted #N] placeholders
         self._input = Buffer(
@@ -414,7 +416,13 @@ class JackApp:
         )
         # The input grows with content (1 → MAX_INPUT_LINES lines), then scrolls within.
         entry = Window(
-            BufferControl(buffer=self._input),
+            BufferControl(
+                buffer=self._input,
+                input_processors=[
+                    ConditionalProcessor(PasswordProcessor(), Condition(lambda: self._secret_mode))
+                ],
+                include_default_input_processors=True,
+            ),
             height=Dimension(min=1, max=MAX_INPUT_LINES),
             wrap_lines=True,
         )
@@ -583,6 +591,17 @@ class JackApp:
         if self._modal is not None and not self._modal.done():
             if self._modal_edit:
                 text = buff.text.strip()
+                if self._secret_mode:
+                    # Resolve, then wipe the buffer ourselves: prompt_toolkit's
+                    # validate_and_handle() calls append_to_history() UNCONDITIONALLY after
+                    # this handler returns, but append_to_history() only records non-empty
+                    # text — and buff.reset() (called here, before we return) already
+                    # cleared it, so the secret never touches .jack/cli_history. The
+                    # `return True` doesn't gate that append; it only tells
+                    # validate_and_handle() to skip its own redundant post-handler reset().
+                    self._modal.set_result(Answer("refine", text) if text else Answer("reject"))
+                    buff.reset()
+                    return True
                 self._modal.set_result(Answer("refine", text) if text else Answer("reject"))
             return False
         text = buff.text.strip()
@@ -611,6 +630,7 @@ class JackApp:
             self._activity = None
             self._todos = []  # the live checklist vanishes with the live region at turn end
             self._modal_hint = None
+            self._secret_mode = False
             self._modal = None
             self._modal_seg = None
             self.app.invalidate()
@@ -633,8 +653,14 @@ class JackApp:
         fut: asyncio.Future[Answer] = loop.create_future()
         self._modal = fut
         self._modal_seg = seg
-        self._modal_edit = False
-        hint = "[y]es · [n]o · [e]dit" if seg.kind == "plan" else "Approve? [y]es · [n]o"
+        self._modal_edit = seg.kind in ("input", "secret")
+        self._secret_mode = seg.kind == "secret"
+        if seg.kind in ("input", "secret"):
+            hint = f"{seg.text}  (enter submits · empty cancels)"
+        elif seg.kind == "plan":
+            hint = "[y]es · [n]o · [e]dit"
+        else:
+            hint = "Approve? [y]es · [n]o"
         self._modal_hint = [("class:amber", f" {hint}")]
         self.app.invalidate()
         try:
@@ -644,6 +670,7 @@ class JackApp:
             self._modal = None
             self._modal_seg = None
             self._modal_edit = False
+            self._secret_mode = False
             self.app.invalidate()
 
     def append_transcript(self, renderable: Any) -> None:
@@ -772,6 +799,26 @@ class JackApp:
             loop.call_soon_threadsafe(_enqueue)
         except RuntimeError:  # loop closing at shutdown — nothing to resume onto
             _log.debug("could not schedule task pickup (loop closing)")
+
+    def on_mcp_event(self, evt: dict[str, Any]) -> None:
+        """Commit a one-line MCP status/OAuth update to the transcript (thread-safe).
+
+        Fired on the events-listener thread; hops to the app loop. Quiet by design:
+        ``render_mcp_event`` returns ``None`` for chatter (e.g. disconnects), and a
+        closed loop at shutdown is ignored.
+        """
+        loop = self.app.loop
+        if loop is None:
+            return
+        from autobot.cli import mcp_render
+
+        line = mcp_render.render_mcp_event(evt)
+        if line is None:
+            return
+        try:
+            loop.call_soon_threadsafe(self.append_transcript, line)
+        except RuntimeError:  # loop closing at shutdown
+            _log.debug("dropped mcp event line (loop closing)")
 
     def _maybe_pickup(self) -> None:
         """If idle and pickups are queued, notice them and run a continuation turn."""

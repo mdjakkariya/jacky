@@ -736,11 +736,20 @@ def build(
         from autobot.mcp.config import load_mcp_config
         from autobot.mcp.manager import McpManager
 
-        mgr = McpManager(load_mcp_config(), registry, on_event=on_mcp_event)
+        # Coder profile: explicit consent — unapproved stdio servers park in
+        # pending_consent and are approved via /mcp/.../consent (the CLI's flow).
+        # The SuspendingConfirmer can't answer at connect time (no active turn).
+        mgr = McpManager(
+            load_mcp_config(),
+            registry,
+            on_event=on_mcp_event,
+            consent="explicit" if coder else "confirmer",
+        )
         mgr.start()
-        # Confirmer wired BEFORE connecting so stdio spawn-consent goes through the
-        # gate rather than auto-approving.
-        mgr.set_confirmer(confirmer)
+        if not coder:
+            # Confirmer wired BEFORE connecting so stdio spawn-consent goes through
+            # the gate rather than auto-approving (assistant profile only).
+            mgr.set_confirmer(confirmer)
         mgr.connect_enabled()
         return mgr
 

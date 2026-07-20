@@ -136,6 +136,27 @@ def test_friendly_error_translates_oauth_registration_failure() -> None:
     assert "registration failed" not in msg  # raw text replaced with guidance
 
 
+def test_friendly_error_translates_missing_mcp_extra() -> None:
+    # A build without the opt-in `mcp` extra: `from mcp import ...` raises this. The raw
+    # "No module named 'mcp'" is useless in the UI — replace it with install guidance.
+    msg = friendly_error(ModuleNotFoundError("No module named 'mcp'", name="mcp"))
+    assert "mcp" in msg.lower()
+    assert "no module named" not in msg.lower()  # raw text replaced with guidance
+    assert "extra" in msg.lower()  # points at the fix
+
+
+def test_friendly_error_missing_mcp_submodule() -> None:
+    # `from mcp.client.stdio import ...` fails at the absent top-level `mcp` package.
+    exc = ModuleNotFoundError("No module named 'mcp'", name="mcp.client.stdio")
+    assert "no module named" not in friendly_error(exc).lower()
+
+
+def test_friendly_error_other_missing_module_passthrough() -> None:
+    # A different missing module isn't the mcp-extra case — keep its raw message.
+    exc = ModuleNotFoundError("No module named 'widget'", name="widget")
+    assert friendly_error(exc) == "No module named 'widget'"
+
+
 @dataclass
 class _FakeReq:
     """Minimal stand-in for httpx.Request (the hook only reads method/content/headers)."""
@@ -912,3 +933,87 @@ def test_mcp_manager_set_confirmer_stores_confirmer() -> None:
     confirmer = _AlwaysAllowConfirmer()
     manager.set_confirmer(confirmer)
     assert manager._confirmer is confirmer
+
+
+# ---------------------------------------------------------------------------
+# Explicit-consent mode tests
+# ---------------------------------------------------------------------------
+
+
+def test_explicit_consent_parks_unapproved_stdio(tmp_path: Path) -> None:
+    """In explicit mode an unapproved stdio server parks pending_consent — nothing spawns."""
+    import asyncio
+
+    from autobot.mcp.config import McpServerConfig
+    from autobot.mcp.session import McpServerWorker
+    from autobot.tools.registry import ToolRegistry
+
+    cfg = McpServerConfig(id="s1", label="s1", transport="stdio", command="echo", enabled=True)
+    events: list[dict[str, Any]] = []
+    loop = asyncio.new_event_loop()
+    try:
+        worker = McpServerWorker(
+            cfg,
+            ToolRegistry(),
+            loop=loop,
+            on_event=events.append,
+            approvals_path=tmp_path / "approved.json",
+            consent="explicit",
+        )
+        loop.run_until_complete(worker.run())
+    finally:
+        loop.close()
+    assert worker.state == "pending_consent"
+    # No auto-approval was recorded (explicit mode never writes approvals itself).
+    from autobot.mcp.approvals import load_approvals
+
+    assert load_approvals(tmp_path / "approved.json").spawn_approvals == {}
+    # A status event carried the parked state to the UI/CLI.
+    assert any(
+        e.get("type") == "mcp_status" and e.get("state") == "pending_consent" for e in events
+    )
+
+
+def test_explicit_consent_passes_when_already_approved(tmp_path: Path) -> None:
+    """A prior recorded approval short-circuits the check (True), same as today."""
+    import asyncio
+
+    from autobot.mcp.approvals import record_spawn_approval
+    from autobot.mcp.config import McpServerConfig
+    from autobot.mcp.session import McpServerWorker
+    from autobot.tools.registry import ToolRegistry
+
+    record_spawn_approval("s1", "echo", ["hi"], tmp_path / "approved.json")
+    cfg = McpServerConfig(id="s1", label="s1", transport="stdio", command="echo", args=("hi",))
+    loop = asyncio.new_event_loop()
+    try:
+        worker = McpServerWorker(
+            cfg,
+            ToolRegistry(),
+            loop=loop,
+            approvals_path=tmp_path / "approved.json",
+            consent="explicit",
+        )
+        assert loop.run_until_complete(worker._check_spawn_consent()) is True
+    finally:
+        loop.close()
+
+
+def test_oauth_stage_event_carries_url_when_given() -> None:
+    import asyncio
+
+    from autobot.mcp.config import McpServerConfig
+    from autobot.mcp.session import McpServerWorker
+    from autobot.tools.registry import ToolRegistry
+
+    cfg = McpServerConfig(id="s1", label="s1", transport="http", url="https://x/mcp")
+    events: list[dict[str, Any]] = []
+    loop = asyncio.new_event_loop()
+    try:
+        worker = McpServerWorker(cfg, ToolRegistry(), loop=loop, on_event=events.append)
+        worker._emit_oauth_stage("browser_open", url="https://auth.example/authorize?x=1")
+        worker._emit_oauth_stage("waiting_callback")
+    finally:
+        loop.close()
+    assert events[0]["url"] == "https://auth.example/authorize?x=1"
+    assert "url" not in events[1]

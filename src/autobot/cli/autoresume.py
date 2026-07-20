@@ -33,6 +33,7 @@ class BackgroundEvents:
         self._lock = threading.Lock()
         self._completed: list[dict[str, Any]] = []
         self._waker: Callable[[], None] | None = None
+        self._on_mcp: Callable[[dict[str, Any]], None] | None = None
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
 
@@ -57,6 +58,11 @@ class BackgroundEvents:
                         _log.info("background task finished id=%s", evt.get("id"))
                         if waker is not None:
                             waker()
+                    elif evt.get("type") in ("mcp_status", "mcp_oauth"):
+                        with self._lock:
+                            on_mcp = self._on_mcp
+                        if on_mcp is not None:
+                            on_mcp(evt)
             except Exception:  # a listener error must never crash the CLI — just retry
                 _log.debug("events stream errored; will retry", exc_info=True)
             # Stream ended (daemon restart, drop). Pause briefly, then reconnect.
@@ -67,6 +73,11 @@ class BackgroundEvents:
         """Install (or clear) the callback fired when a task finishes (the prompt-waker)."""
         with self._lock:
             self._waker = waker
+
+    def set_on_mcp(self, callback: Callable[[dict[str, Any]], None] | None) -> None:
+        """Install (or clear) the callback fired for live MCP status/OAuth events."""
+        with self._lock:
+            self._on_mcp = callback
 
     def pending(self) -> bool:
         """Whether any finished-task events are waiting to be picked up."""

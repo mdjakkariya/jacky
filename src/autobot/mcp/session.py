@@ -68,6 +68,14 @@ def friendly_error(exc: BaseException) -> str:
         A concise, user-facing error string.
     """
     inner = _root_cause(exc)
+    if isinstance(inner, ModuleNotFoundError) and (inner.name or "").split(".")[0] == "mcp":
+        # The `mcp` client SDK is an opt-in extra; a plain install can configure servers
+        # it can't connect to. Point at the fix instead of the useless raw import error.
+        return (
+            "MCP support isn't installed in this build. Add it with "
+            "`uv tool install --reinstall 'jacky[mcp]'` (or `uv sync --extra mcp` "
+            "from a source checkout), then reconnect."
+        )
     msg = str(inner).strip() or inner.__class__.__name__
     low = msg.lower()
     _dcr_markers = ("registration failed", "registrationerror", "dynamic client registration")
@@ -200,6 +208,7 @@ class McpServerWorker:
         on_event: Callable[[dict[str, Any]], None] | None = None,
         approvals_path: str | Path = DEFAULT_APPROVALS_PATH,
         confirmer: Confirmer | None = None,
+        consent: str = "confirmer",
     ) -> None:
         self._cfg = config
         self._registry = registry
@@ -207,6 +216,7 @@ class McpServerWorker:
         self._on_event = on_event
         self._approvals_path = approvals_path
         self._confirmer = confirmer
+        self._consent = consent
         self._queue: asyncio.Queue[_Call | str] | None = None
         self._registered: list[str] = []
         self._state = "disconnected"
@@ -218,7 +228,11 @@ class McpServerWorker:
 
     @property
     def state(self) -> str:
-        """One of ``"disconnected"``, ``"connected"``, ``"error"``, ``"denied"``."""
+        """Worker state.
+
+        One of ``"disconnected"``, ``"connected"``, ``"error"``, ``"denied"``,
+        ``"pending_consent"``.
+        """
         return self._state
 
     @property
@@ -286,9 +300,16 @@ class McpServerWorker:
                 await self._run_http()
             else:
                 if not await self._check_spawn_consent():
-                    self._state = "denied"
-                    _log.info("mcp spawn denied by user server=%s", self._cfg.id)
-                    self._emit_status(error="spawn denied by user")
+                    if self._consent == "explicit":
+                        # Parked: consent is granted later via the API (grant_consent),
+                        # which reconnects this server. Nothing was spawned.
+                        self._state = "pending_consent"
+                        _log.info("mcp spawn pending consent server=%s", self._cfg.id)
+                        self._emit_status()
+                    else:
+                        self._state = "denied"
+                        _log.info("mcp spawn denied by user server=%s", self._cfg.id)
+                        self._emit_status(error="spawn denied by user")
                     return
                 await self._run_stdio()
         except Exception as exc:  # never let the worker crash the loop
@@ -339,6 +360,11 @@ class McpServerWorker:
 
         if existing is not None and existing.command == command and existing.args == args:
             return True  # previously approved — skip the prompt
+
+        if self._consent == "explicit":
+            # Explicit mode never prompts and never auto-approves: the CLI grants
+            # consent through the manager's grant_consent (POST /mcp/.../consent).
+            return False
 
         if self._confirmer is None:
             # No UI confirmer: auto-approve (headless / non-interactive).
@@ -501,7 +527,7 @@ class McpServerWorker:
 
         async def redirect_handler(url: str) -> None:
             _log.info("mcp oauth redirect server=%s", self._cfg.id)
-            self._emit_oauth_stage("browser_open")
+            self._emit_oauth_stage("browser_open", url=url)
             open_browser(url)
 
         async def callback_handler() -> tuple[str, str | None]:
@@ -536,19 +562,22 @@ class McpServerWorker:
         provider._initialize = _initialize_then_expire
         return provider
 
-    def _emit_oauth_stage(self, stage: str) -> None:
+    def _emit_oauth_stage(self, stage: str, url: str | None = None) -> None:
         """Publish an mcp_oauth event for the UI (never raises).
 
         Args:
             stage: A string identifying the OAuth flow stage (e.g. ``"browser_open"``).
+            url: The authorize URL, included only for ``browser_open`` so a UI can
+                offer it as a fallback when the browser didn't open.
         """
-        self._emit_event(
-            {
-                "type": "mcp_oauth",
-                "server": self._cfg.id,
-                "stage": stage,
-            }
-        )
+        payload: dict[str, Any] = {
+            "type": "mcp_oauth",
+            "server": self._cfg.id,
+            "stage": stage,
+        }
+        if url:
+            payload["url"] = url
+        self._emit_event(payload)
 
     def _emit_event(self, payload: dict[str, Any]) -> None:
         """Publish any structured event to the sink (never raises).

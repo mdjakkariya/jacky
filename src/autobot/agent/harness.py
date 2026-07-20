@@ -26,6 +26,7 @@ from typing import TYPE_CHECKING, Any
 from autobot.core.streaming import active_session_id, output_sink
 from autobot.core.types import ToolCall, ToolResult
 from autobot.logging_setup import get_logger
+from autobot.mcp.adapter import split_namespaced
 
 if TYPE_CHECKING:
     from autobot.agent.chat_model import ChatModel, OnEvent
@@ -80,6 +81,12 @@ def tool_label(call: ToolCall) -> str:
         return f"Edited {_file_name(str(args.get('path', '')))}".strip()
     if call.name == "spawn_agent":
         return f"Spawned subagent: {str(args.get('label') or args.get('task', ''))[:70]}".strip()
+    # MCP tools (<server>__<tool>): show the server as the label's subject so the activity
+    # line reads "github: create issue" instead of a mangled capitalization.
+    ns = split_namespaced(call.name)
+    if ns is not None:
+        server, bare = ns
+        return f"{server}: {bare.replace('_', ' ')}".strip()
     # Fallback for any other tool: humanize the raw name so casing stays consistent with the
     # verb-prefixed labels above (e.g. "repo_map" → "Repo map", "update_plan" → "Update plan").
     return call.name.replace("_", " ").strip().capitalize()
