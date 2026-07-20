@@ -21,6 +21,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from autobot.core.types import ErrorCategory
+
 
 @dataclass(frozen=True, slots=True)
 class ReplaceResult:
@@ -33,6 +35,9 @@ class ReplaceResult:
     """The edited content when ``ok``; the original content unchanged otherwise."""
     detail: str
     """Which pass matched (e.g. ``"exact match"``) or why it failed."""
+    category: str = ""
+    """Coarse failure cause (an :class:`~autobot.core.types.ErrorCategory` value) when not
+    ``ok``; empty on success."""
 
 
 def _lines(text: str) -> list[str]:
@@ -73,9 +78,14 @@ def apply_replace(
     unchanged so the caller can leave the file untouched.
     """
     if find == "":
-        return ReplaceResult(False, content, "empty search text")
+        return ReplaceResult(False, content, "empty search text", category=ErrorCategory.INVALID)
     if find == replace:
-        return ReplaceResult(False, content, "the search and replacement text are identical")
+        return ReplaceResult(
+            False,
+            content,
+            "the search and replacement text are identical",
+            category=ErrorCategory.INVALID,
+        )
 
     # Pass 1 — exact.
     n = content.count(find)
@@ -86,6 +96,7 @@ def apply_replace(
                 content,
                 f"the search text appears {n} times; add surrounding context to make it "
                 "unique, or set replace_all to replace every occurrence",
+                category=ErrorCategory.AMBIGUOUS,
             )
         edited = content.replace(find, replace, -1 if replace_all else 1)
         return ReplaceResult(True, edited, f"exact match ({n})" if replace_all else "exact match")
@@ -101,10 +112,11 @@ def apply_replace(
                 content,
                 f"the search text matches {len(hits)} places (ignoring trailing whitespace); "
                 "add surrounding context to make it unique",
+                category=ErrorCategory.AMBIGUOUS,
             )
         if len(hits) == 1:
             i = hits[0]
             new_lines = c_lines[:i] + _block_lines(replace) + c_lines[i + len(f_keys) :]
             return ReplaceResult(True, "\n".join(new_lines), "whitespace match")
 
-    return ReplaceResult(False, content, "search text not found")
+    return ReplaceResult(False, content, "search text not found", category=ErrorCategory.NOT_FOUND)

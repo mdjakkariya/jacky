@@ -13,7 +13,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
-from autobot.core.types import Risk, ToolResult
+from autobot.core.types import ErrorCategory, Risk, ToolResult
 
 # A tool handler takes JSON-decoded keyword arguments and returns a string.
 ToolHandler = Callable[..., str]
@@ -25,8 +25,14 @@ class ToolError(Exception):
     The registry maps it to a failed :class:`ToolResult` whose ``content`` is the
     message verbatim — so the model (and the audit log) see ``ok=False`` instead of a
     success-looking string, without the generic ``"tool failed:"`` prefix used for
-    unexpected crashes.
+    unexpected crashes. The optional ``category`` is an :class:`ErrorCategory` value
+    carried onto the result so callers can branch on the cause.
     """
+
+    def __init__(self, message: str, category: str = "") -> None:
+        """Store the message and an optional :class:`ErrorCategory` cause."""
+        super().__init__(message)
+        self.category = category
 
 
 class ToolFailure(str):
@@ -40,10 +46,18 @@ class ToolFailure(str):
     :meth:`ToolRegistry.dispatch` set ``ok=False`` **without** changing the
     return-a-string contract: the marker *is* a ``str``, so every existing caller and
     assertion keeps working. Equivalent in effect to raising :class:`ToolError`; prefer
-    this for formatted, already-handled failures.
+    this for formatted, already-handled failures. The optional ``category`` is an
+    :class:`ErrorCategory` value carried onto the result.
     """
 
-    __slots__ = ()
+    category: str
+    __slots__ = ("category",)
+
+    def __new__(cls, message: str, category: str = "") -> ToolFailure:
+        """Build the failure string, tagging it with an optional cause ``category``."""
+        obj = super().__new__(cls, message)
+        obj.category = category
+        return obj
 
 
 @dataclass(frozen=True, slots=True)
@@ -178,19 +192,31 @@ class ToolRegistry:
         with self._lock:
             spec = self._tools.get(name)
         if spec is None:
-            return ToolResult(name=name, content=f"unknown tool: {name!r}", ok=False)
+            return ToolResult(
+                name=name,
+                content=f"unknown tool: {name!r}",
+                ok=False,
+                category=ErrorCategory.UNKNOWN_TOOL,
+            )
         # Phase 1: insert the permission gate here, keyed on ``spec.risk``.
         try:
             content = spec.handler(**(arguments or {}))
-            # A ``ToolFailure`` return marks an expected failure; normalise to a plain
-            # ``str`` so the marker never leaks past this boundary into the transcript.
-            return ToolResult(
-                name=name, content=str(content), ok=not isinstance(content, ToolFailure)
-            )
+            if isinstance(content, ToolFailure):
+                # An expected failure. Normalise to a plain ``str`` so the marker never
+                # leaks past this boundary into the transcript; carry its cause category.
+                return ToolResult(
+                    name=name, content=str(content), ok=False, category=content.category
+                )
+            return ToolResult(name=name, content=str(content), ok=True)
         except ToolError as exc:  # expected failure — report verbatim, ok=False
-            return ToolResult(name=name, content=str(exc), ok=False)
+            return ToolResult(name=name, content=str(exc), ok=False, category=exc.category)
         except Exception as exc:  # unexpected — surface, don't crash the loop
-            return ToolResult(name=name, content=f"tool failed: {exc}", ok=False)
+            return ToolResult(
+                name=name,
+                content=f"tool failed: {exc}",
+                ok=False,
+                category=ErrorCategory.UNEXPECTED,
+            )
 
 
 def default_registry() -> ToolRegistry:

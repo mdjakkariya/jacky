@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 
-from autobot.core.types import Risk
+from autobot.core.types import ErrorCategory, Risk
 from autobot.tools.registry import ToolError, ToolFailure, ToolRegistry, ToolSpec
 
 
@@ -51,3 +51,33 @@ def test_tool_failure_marker_does_not_leak_into_content() -> None:
     # The failure marker is normalised to a plain str in the result content.
     result = _registry_with(lambda **_kw: ToolFailure("nope")).dispatch("t", {})
     assert type(result.content) is str
+
+
+def test_success_result_has_no_category() -> None:
+    result = _registry_with(lambda **_kw: "done").dispatch("t", {})
+    assert result.category == ""
+
+
+def test_tool_failure_carries_category() -> None:
+    fn = lambda **_kw: ToolFailure("gone", ErrorCategory.NOT_FOUND)  # noqa: E731
+    result = _registry_with(fn).dispatch("t", {})
+    assert result.ok is False and result.category == ErrorCategory.NOT_FOUND
+
+
+def test_tool_error_carries_category() -> None:
+    def boom(**_kw: object) -> str:
+        raise ToolError("no access", ErrorCategory.DENIED)
+
+    result = _registry_with(boom).dispatch("t", {})
+    assert result.ok is False and result.category == ErrorCategory.DENIED
+
+
+def test_unexpected_exception_is_categorised() -> None:
+    def boom(**_kw: object) -> str:
+        raise ValueError("kaboom")
+
+    assert _registry_with(boom).dispatch("t", {}).category == ErrorCategory.UNEXPECTED
+
+
+def test_unknown_tool_is_categorised() -> None:
+    assert ToolRegistry().dispatch("nope", {}).category == ErrorCategory.UNKNOWN_TOOL

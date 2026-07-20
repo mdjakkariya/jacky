@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from autobot.core.types import Risk
+from autobot.core.types import ErrorCategory, Risk
 from autobot.tools.access import AccessBroker, AccessPolicy
 from autobot.tools.code.tools import (
     edit_file,
@@ -322,6 +322,34 @@ def test_dispatch_reports_failures_as_not_ok(tmp_path: Path) -> None:
     # The failing edits/writes must not have touched anything.
     assert exists.read_text() == "original\n"
     assert editable.read_text() == "x = 1\nx = 1\n"
+
+
+def test_dispatch_failure_categories(tmp_path: Path) -> None:
+    # The error taxonomy (G3) is carried through to the ToolResult so callers can branch
+    # on cause without parsing the message.
+    exists = tmp_path / "exists.py"
+    exists.write_text("original\n")
+    ambiguous = tmp_path / "m.py"
+    ambiguous.write_text("x = 1\nx = 1\n")
+    reg = _registry(tmp_path)
+    checks: list[tuple[str, dict[str, Any], str]] = [
+        ("read_file", {"path": str(tmp_path / "nope.py")}, ErrorCategory.NOT_FOUND),
+        ("read_file", {}, ErrorCategory.INVALID),
+        ("write_file", {"path": str(exists), "content": "y"}, ErrorCategory.EXISTS),
+        (
+            "edit_file",
+            {"path": str(ambiguous), "find": "x = 1", "replace": "x = 2"},
+            ErrorCategory.AMBIGUOUS,
+        ),
+        (
+            "edit_file",
+            {"path": str(tmp_path / "nope.py"), "find": "a", "replace": "b"},
+            ErrorCategory.NOT_FOUND,
+        ),
+    ]
+    for name, args, cat in checks:
+        res = reg.dispatch(name, args)
+        assert res.category == cat, f"{name}: {res.category!r} != {cat!r}"
 
 
 def test_register_adds_nav_and_exec_tools(tmp_path: Path) -> None:
