@@ -69,6 +69,9 @@ class TaskRegistry:
         self._tasks: dict[str, Task] = {}
         self._counter = 0
         self._listeners: list[Callable[[Task], None]] = []
+        # task_id -> a callable that kills the underlying process (set by the command runner
+        # for a background command); dropped when the task settles. Enables `kill`.
+        self._killers: dict[str, Callable[[], None]] = {}
 
     def add_listener(self, listener: Callable[[Task], None]) -> Callable[[], None]:
         """Call ``listener(task)`` each time a task *settles* (done/failed); return unsubscribe.
@@ -137,6 +140,28 @@ class TaskRegistry:
                 and (kind is None or t.kind == kind)
             )
 
+    def set_killer(self, task_id: str, killer: Callable[[], None]) -> None:
+        """Record how to kill ``task_id``'s process (set by the runner once it has spawned)."""
+        with self._lock:
+            if task_id in self._tasks:
+                self._killers[task_id] = killer
+
+    def kill(self, task_id: str) -> bool:
+        """Kill ``task_id`` if it's running. Returns whether a killer was found and invoked.
+
+        The killer runs the OS terminate; the background worker then settles the task (as
+        failed) when the process dies, so callers don't mark it here.
+        """
+        with self._lock:
+            killer = self._killers.pop(task_id, None)
+        if killer is None:
+            return False
+        try:
+            killer()
+        except Exception:  # a kill that fails must never raise into the turn
+            return False
+        return True
+
     def _finish(
         self, task_id: str, *, status: TaskStatus, result: str, returncode: int | None
     ) -> Task | None:
@@ -152,6 +177,7 @@ class TaskRegistry:
                 finished=self._now(),
             )
             self._tasks[task_id] = updated
+            self._killers.pop(task_id, None)  # process finished — its killer is moot
             listeners = list(self._listeners)  # snapshot under lock, fire outside it
         for listener in listeners:
             with contextlib.suppress(Exception):  # a bad listener must not lose the update

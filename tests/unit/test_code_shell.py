@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import threading
 import time
 from collections.abc import Callable
 from pathlib import Path
@@ -32,7 +33,11 @@ def _broker(tmp_path: Path, *, grant: bool = True) -> AccessBroker:
 
 def _fake_runner(rc: int, out: str, timed_out: bool = False) -> CommandRunner:
     def run(
-        command: str, cwd: str, timeout: float, on_output: Callable[[str], None] | None = None
+        command: str,
+        cwd: str,
+        timeout: float,
+        on_output: Callable[[str], None] | None = None,
+        on_spawn: Callable[[object], None] | None = None,
     ) -> tuple[int, str, bool]:
         if on_output is not None:
             for line in out.splitlines():
@@ -282,3 +287,90 @@ def test_background_tasks_tail_unknown(tmp_path: Path) -> None:
 
 def test_background_tasks_disabled_without_registry(tmp_path: Path) -> None:
     assert "aren't available" in background_tasks(_broker(tmp_path), None).lower()
+
+
+# ---------------------------------------------------------------------------
+# Killing a background task (G-kill)
+# ---------------------------------------------------------------------------
+
+
+def test_registry_set_and_kill_invokes_killer() -> None:
+    reg = TaskRegistry()
+    task = reg.add(kind="command", session_id="s", label="$ x")
+    calls: list[str] = []
+    reg.set_killer(task.id, lambda: calls.append("killed"))
+    assert reg.kill(task.id) is True
+    assert calls == ["killed"]
+    assert reg.kill(task.id) is False  # killer consumed — a second kill finds nothing
+
+
+def test_registry_kill_unknown_is_false() -> None:
+    assert TaskRegistry().kill("task-99") is False
+
+
+def test_registry_drops_killer_when_task_settles() -> None:
+    reg = TaskRegistry()
+    task = reg.add(kind="command", session_id="s", label="$ x")
+    reg.set_killer(task.id, lambda: None)
+    reg.mark_done(task.id, result="ok", returncode=0)
+    assert reg.kill(task.id) is False  # settled → killer was dropped
+
+
+def test_background_tasks_kill_action(tmp_path: Path) -> None:
+    reg = TaskRegistry()
+    task = reg.add(kind="command", session_id="s", label="$ dev")
+    fired: list[str] = []
+    reg.set_killer(task.id, lambda: fired.append("x"))
+    out = background_tasks(_broker(tmp_path), reg, action="kill", task_id=task.id)
+    assert fired == ["x"]
+    assert "killing" in out.lower()
+
+
+def test_background_tasks_kill_already_finished(tmp_path: Path) -> None:
+    reg = TaskRegistry()
+    task = reg.add(kind="command", session_id="s", label="$ x")
+    reg.mark_done(task.id, result="ok", returncode=0)
+    out = background_tasks(_broker(tmp_path), reg, action="kill", task_id=task.id)
+    assert "already finished" in out.lower()
+
+
+def test_background_command_registers_a_killer(tmp_path: Path) -> None:
+    # Prove the runner's on_spawn hook wires a kill handle into the registry while running.
+    reg = TaskRegistry()
+    inbox = NotificationInbox()
+    spawned = threading.Event()
+    release = threading.Event()
+
+    class _FakeProc:
+        pid = 4242
+
+    def runner(
+        command: str,
+        cwd: str,
+        timeout: float,
+        on_output: Callable[[str], None] | None = None,
+        on_spawn: Callable[[object], None] | None = None,
+    ) -> tuple[int, str, bool]:
+        if on_spawn is not None:
+            on_spawn(_FakeProc())  # register the kill handle
+        spawned.set()
+        release.wait(2.0)  # stay "running" so the killer isn't dropped before we check
+        return 0, "done", False
+
+    token = active_session_id.set("s")
+    try:
+        run_command(
+            "sleep 5",
+            _broker(tmp_path),
+            str(tmp_path),
+            runner=runner,
+            run_in_background=True,
+            registry=reg,
+            inbox=inbox,
+        )
+    finally:
+        active_session_id.reset(token)
+    assert spawned.wait(2.0)  # runner has spawned + registered the killer
+    assert reg.kill("task-1") is True  # a kill handle was registered (real killpg no-ops here)
+    release.set()
+    _wait_settled(reg, "task-1")
