@@ -159,6 +159,26 @@ def test_edit_file_identical_find_replace(tmp_path: Path) -> None:
     assert "identical" in out.lower()
 
 
+def test_edit_missing_search_hints_to_read_first_when_unread(tmp_path: Path) -> None:
+    # Editing a file the model hasn't read this session, with a search that misses, nudges
+    # it to read first (G5 read-before-edit hint).
+    f = tmp_path / "m.py"
+    f.write_text("x = 1\n")
+    out = edit_file(str(f), "zzz", "q", _broker(tmp_path))
+    assert "read the file first" in out.lower()
+
+
+def test_edit_missing_search_no_hint_after_reading(tmp_path: Path) -> None:
+    # Once the file has been read this session, a later missed search does not nag to read.
+    f = tmp_path / "m.py"
+    f.write_text("x = 1\n")
+    broker = _broker(tmp_path)  # same broker instance tracks the read
+    read_file(str(f), broker)
+    out = edit_file(str(f), "zzz", "q", broker)
+    assert "read the file first" not in out.lower()
+    assert "not found" in out.lower()  # still reports the miss, just without the read nudge
+
+
 def test_multi_edit_applies_all_in_order(tmp_path: Path) -> None:
     f = tmp_path / "m.py"
     f.write_text("a = 1\nb = 2\nc = 3\n")

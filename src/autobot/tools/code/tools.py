@@ -96,6 +96,7 @@ def read_file(path: str, broker: AccessBroker, offset: int = 1, limit: int = 0) 
     text, err, cat = _read_text(resolved)
     if text is None:
         return ToolFailure(err, cat)
+    broker.mark_read(resolved)  # read-before-edit: remember we've seen this file's contents
     lines = text.split("\n")
     if lines and lines[-1] == "":  # a final newline yields a trailing "" — not a line
         lines = lines[:-1]
@@ -156,7 +157,10 @@ def edit_file(
         return ToolFailure(err, cat)
     result = apply_replace(text, find, replace, replace_all=replace_all)
     if not result.ok:
-        return ToolFailure(f"I couldn't edit {resolved.name}: {result.detail}.", result.category)
+        detail = result.detail
+        if result.category == ErrorCategory.NOT_FOUND and not broker.was_read(resolved):
+            detail += "; read the file first so your search text matches its current contents"
+        return ToolFailure(f"I couldn't edit {resolved.name}: {detail}.", result.category)
     try:
         resolved.write_text(result.content, encoding="utf-8")
     except OSError as exc:
@@ -214,8 +218,11 @@ def multi_edit(path: str, edits: list[dict[str, str]] | None, broker: AccessBrok
             )
         result = apply_replace(working, find, replace)
         if not result.ok:
+            detail = result.detail
+            if result.category == ErrorCategory.NOT_FOUND and not broker.was_read(resolved):
+                detail += "; read the file first so your search text matches its current contents"
             return ToolFailure(
-                f"Edit {idx} didn't apply ({result.detail}); nothing was changed.",
+                f"Edit {idx} didn't apply ({detail}); nothing was changed.",
                 result.category,
             )
         working = result.content
