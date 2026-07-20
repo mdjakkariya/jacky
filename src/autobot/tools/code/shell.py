@@ -35,19 +35,25 @@ _DEFAULT_TIMEOUT = 120.0  # seconds
 _MAX_TIMEOUT = 600.0
 _BG_EXCERPT_CHARS = 800  # tail of a finished background command folded into the next turn
 
-# (command, cwd, timeout, on_output) -> (returncode, combined_output, timed_out). The
-# ``on_output`` sink (if any) is called with each output line as it arrives, so the CLI can
-# stream progress live. Injectable for tests.
-CommandRunner = Callable[[str, str, float, "Callable[[str], None] | None"], tuple[int, str, bool]]
+# (command, cwd, timeout, on_output, on_spawn=None) -> (returncode, combined_output, timed_out).
+# ``on_output`` streams each output line live; the optional ``on_spawn`` is called with the
+# process handle right after spawn, so a background command can be killed. Injectable for tests.
+CommandRunner = Callable[..., tuple[int, str, bool]]
 
 
 def _streaming_runner(  # pragma: no cover - the real OS boundary; tests inject a fake runner
-    command: str, cwd: str, timeout: float, on_output: Callable[[str], None] | None
+    command: str,
+    cwd: str,
+    timeout: float,
+    on_output: Callable[[str], None] | None,
+    on_spawn: Callable[[object], None] | None = None,
 ) -> tuple[int, str, bool]:
     """Run ``command`` in the platform shell, streaming each output line to ``on_output``.
 
     Reads combined stdout/stderr on a reader thread so a deadline can enforce the timeout
-    and kill the whole process group (dev servers spawn children). Never raises.
+    and kill the whole process group (dev servers spawn children). ``on_spawn`` (if given) is
+    handed the live process right after it starts, so a caller can register a kill handle.
+    Never raises.
     """
     import subprocess
     import threading
@@ -70,6 +76,8 @@ def _streaming_runner(  # pragma: no cover - the real OS boundary; tests inject 
             text=True,
             start_new_session=True,
         )
+    if on_spawn is not None:
+        on_spawn(proc)
     lines: list[str] = []
 
     def _read() -> None:
@@ -157,9 +165,12 @@ def _start_background(
                 handle.write(line + "\n")
                 handle.flush()
 
+        def _register_killer(proc: object) -> None:
+            registry.set_killer(task.id, lambda: _kill_tree(proc))
+
         prefix = f"Background command {task.id} (`{short}`)"
         try:
-            rc, out, timed_out = runner(command, str(workdir), timeout, _to_file)
+            rc, out, timed_out = runner(command, str(workdir), timeout, _to_file, _register_killer)
         except OSError as exc:  # spawn failure (missing shell, etc.)
             registry.mark_failed(task.id, result=f"couldn't run: {exc}", returncode=None)
             inbox.push(session_id, f"{prefix} failed to start: {exc}")
@@ -302,7 +313,18 @@ def background_tasks(
         if len(text) > _TAIL_MAX_CHARS:
             text = "…" + text[-_TAIL_MAX_CHARS:]
         return f"{task_id} [{_status_text(task)}] — last {len(tail_lines)} line(s):\n{text}"
-    return "action must be 'list' or 'tail'."
+    if action == "kill":
+        if not task_id:
+            return "Which task? Pass `task_id` (see the list action)."
+        task = registry.get(task_id)
+        if task is None:
+            return f"No background task {task_id!r} (it may have been evicted)."
+        if task.settled:
+            return f"{task_id} already finished ({_status_text(task)}); nothing to kill."
+        if registry.kill(task_id):
+            return f"Killing {task_id}. Its result arrives at your next step once it stops."
+        return f"Couldn't kill {task_id} — it may have just finished."
+    return "action must be 'list', 'tail', or 'kill'."
 
 
 def register_exec_tools(
@@ -393,18 +415,19 @@ def register_exec_tools(
             ToolSpec(
                 name="background_tasks",
                 description=(
-                    "Check on commands you started with run_command `run_in_background: true`. "
-                    "`action`: 'list' (default — id, status, label of your background tasks) or "
-                    "'tail' (pass `task_id`, optional `lines`, to see recent output). Use this "
-                    "instead of re-running a long process to see how it's going."
+                    "Check on or stop commands you started with run_command "
+                    "`run_in_background: true`. `action`: 'list' (default — id, status, label), "
+                    "'tail' (pass `task_id`, optional `lines`, to see recent output), or 'kill' "
+                    "(pass `task_id` to stop a running one). Use this instead of re-running a "
+                    "long process."
                 ),
                 parameters={
                     "type": "object",
                     "properties": {
                         "action": {
                             "type": "string",
-                            "enum": ["list", "tail"],
-                            "description": "'list' (default) or 'tail'.",
+                            "enum": ["list", "tail", "kill"],
+                            "description": "'list' (default), 'tail', or 'kill'.",
                         },
                         "task_id": {"type": "string", "description": "Task id for 'tail'."},
                         "lines": {"type": "integer", "description": "Lines to tail (default 50)."},
