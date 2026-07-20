@@ -213,6 +213,41 @@ def test_await_diagnostics_empty_on_timeout() -> None:
     assert LspClient(_QueueTransport([]), timeout=0.05).await_diagnostics("file:///a.py") == []
 
 
+def test_definition_result_is_cached_per_version() -> None:
+    # A repeat definition at the same position on an unchanged file must not hit the server again.
+    def responder(msg: dict[str, Any]) -> list[dict[str, Any]]:
+        if msg.get("method") == "textDocument/definition":
+            return [
+                {"jsonrpc": "2.0", "id": msg["id"], "result": {"uri": "file:///a.py", "range": {}}}
+            ]
+        return []
+
+    transport = _FakeTransport(responder)
+    client = LspClient(transport)
+    client.sync("file:///a.py", "python", "x = 1\n")
+    first = client.definition("file:///a.py", 0, 0)
+    second = client.definition("file:///a.py", 0, 0)
+    assert first == second == [{"uri": "file:///a.py", "range": {}}]
+    defs = [m for m in transport.sent if m.get("method") == "textDocument/definition"]
+    assert len(defs) == 1  # second call served from cache — one request total
+
+
+def test_cache_misses_after_the_file_changes() -> None:
+    def responder(msg: dict[str, Any]) -> list[dict[str, Any]]:
+        if msg.get("method") == "textDocument/definition":
+            return [{"jsonrpc": "2.0", "id": msg["id"], "result": None}]
+        return []
+
+    transport = _FakeTransport(responder)
+    client = LspClient(transport)
+    client.sync("file:///a.py", "python", "x = 1\n")
+    client.definition("file:///a.py", 0, 0)
+    client.sync("file:///a.py", "python", "x = 2\n")  # content changed -> version bumps
+    client.definition("file:///a.py", 0, 0)
+    defs = [m for m in transport.sent if m.get("method") == "textDocument/definition"]
+    assert len(defs) == 2  # a new version key -> the cache missed, so a fresh request went out
+
+
 def test_sync_dedups_open_and_change() -> None:
     transport = _FakeTransport(lambda m: [])  # sync only sends notifications, no responses
     client = LspClient(transport)

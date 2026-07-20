@@ -35,6 +35,7 @@ _log = get_logger("coder")
 
 _HEADER_SEP = b"\r\n\r\n"
 _DEFAULT_REQUEST_TIMEOUT = 8.0  # seconds to wait for a response before falling back
+_CACHE_MAX = 512  # bound the per-client position-request cache (evicted oldest-first)
 
 
 def frame_message(message: dict[str, Any]) -> bytes:
@@ -137,6 +138,25 @@ class LspClient:
         self.diagnostics: list[dict[str, Any]] = []
         # uri -> (version, content-hash): lets ``sync`` skip re-sending an unchanged file.
         self._opened: dict[str, tuple[int, str]] = {}
+        # (method, uri, version, line, char, …) -> result: caches read-only position requests
+        # so repeat navigation on an unchanged file is free. The version in the key means an
+        # edit (a ``sync`` didChange) naturally misses stale entries — no explicit invalidation.
+        self._cache: dict[tuple[Any, ...], Any] = {}
+
+    def _cached_request(self, method: str, params: dict[str, Any], key: tuple[Any, ...]) -> Any:
+        """Return a cached position-request result, or request it once and cache it (bounded)."""
+        if key in self._cache:
+            return self._cache[key]
+        result = self.request(method, params)
+        self._cache[key] = result
+        if len(self._cache) > _CACHE_MAX:  # evict oldest (dict preserves insertion order)
+            for stale in list(self._cache)[: len(self._cache) - _CACHE_MAX]:
+                self._cache.pop(stale, None)
+        return result
+
+    def _version_of(self, uri: str) -> int:
+        """Current document version for ``uri`` (0 if never synced) — part of the cache key."""
+        return self._opened.get(uri, (0, ""))[0]
 
     def notify(self, method: str, params: dict[str, Any] | None = None) -> None:
         """Send a notification (no response expected)."""
@@ -215,9 +235,10 @@ class LspClient:
 
     def definition(self, uri: str, line: int, character: int) -> list[dict[str, Any]]:
         """Return the definition location(s) for the symbol at 0-based (``line``, ``character``)."""
-        result = self.request(
+        result = self._cached_request(
             "textDocument/definition",
             {"textDocument": {"uri": uri}, "position": {"line": line, "character": character}},
+            ("definition", uri, self._version_of(uri), line, character),
         )
         return _as_locations(result)
 
@@ -225,21 +246,23 @@ class LspClient:
         self, uri: str, line: int, character: int, *, include_declaration: bool = True
     ) -> list[dict[str, Any]]:
         """Return the reference location(s) for the symbol at 0-based (``line``, ``character``)."""
-        result = self.request(
+        result = self._cached_request(
             "textDocument/references",
             {
                 "textDocument": {"uri": uri},
                 "position": {"line": line, "character": character},
                 "context": {"includeDeclaration": include_declaration},
             },
+            ("references", uri, self._version_of(uri), line, character, include_declaration),
         )
         return _as_locations(result)
 
     def hover(self, uri: str, line: int, character: int) -> Any:
         """Return the raw hover result (type/signature/doc) at 0-based (``line``, ``character``)."""
-        return self.request(
+        return self._cached_request(
             "textDocument/hover",
             {"textDocument": {"uri": uri}, "position": {"line": line, "character": character}},
+            ("hover", uri, self._version_of(uri), line, character),
         )
 
     def rename(self, uri: str, line: int, character: int, new_name: str) -> dict[str, Any]:
