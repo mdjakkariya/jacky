@@ -40,7 +40,19 @@ def test_column_of_finds_word() -> None:
 
 def test_language_for() -> None:
     assert _language_for("a.py") == "python"
-    assert _language_for("a.rb") is None  # unsupported → will fall back
+    assert _language_for("main.go") == "go"
+    assert _language_for("lib.rs") == "rust"
+    assert _language_for("app.ts") == "typescript"
+    assert _language_for("App.tsx") == "typescriptreact"
+    assert _language_for("index.js") == "javascript"
+    assert _language_for("a.rb") is None  # unsupported → falls back to grep
+
+
+def test_server_argv_covers_new_languages() -> None:
+    # Each supported language has candidate server argv(s); resolution depends on PATH.
+    for lang in ("python", "go", "rust", "typescript", "javascript"):
+        result = _server_argv(lang)
+        assert result is None or (isinstance(result, list) and result)
 
 
 def test_server_argv_shape() -> None:

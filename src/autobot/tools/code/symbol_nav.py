@@ -37,16 +37,35 @@ _log = get_logger("coder")
 _ACTIONS = ("definition", "references")
 _MAX_LOCS = 50  # cap locations returned so a widely-used symbol can't flood the turn
 
-# LSP language id -> candidate server argv; the first whose argv[0] is on PATH is used.
-# Phase 1: Python. Phase 2 extends this (gopls, rust-analyzer, typescript-language-server).
+# LSP language id -> candidate server argv; the first whose argv[0] is on PATH is used. Any
+# language/extension not covered here transparently uses the textual fallback (grep).
+_TS_SERVER = [["typescript-language-server", "--stdio"]]
 _SERVERS: dict[str, list[list[str]]] = {
     "python": [
         ["basedpyright-langserver", "--stdio"],
         ["pyright-langserver", "--stdio"],
         ["pylsp"],
     ],
+    "go": [["gopls"]],
+    "rust": [["rust-analyzer"]],
+    "typescript": _TS_SERVER,
+    "typescriptreact": _TS_SERVER,
+    "javascript": _TS_SERVER,
+    "javascriptreact": _TS_SERVER,
 }
-_EXT_LANG: dict[str, str] = {".py": "python"}  # file extension -> LSP language id
+_EXT_LANG: dict[str, str] = {  # file extension -> LSP language id
+    ".py": "python",
+    ".go": "go",
+    ".rs": "rust",
+    ".ts": "typescript",
+    ".mts": "typescript",
+    ".cts": "typescript",
+    ".tsx": "typescriptreact",
+    ".js": "javascript",
+    ".mjs": "javascript",
+    ".cjs": "javascript",
+    ".jsx": "javascriptreact",
+}
 
 _FALLBACK_NOTE = "(textual fallback — install a language server for precise, semantic results)\n"
 
