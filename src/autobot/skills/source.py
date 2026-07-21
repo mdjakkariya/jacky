@@ -307,3 +307,64 @@ class SkillSource:
         results = [hit for _, hit in scored[:limit]]
         _log.info("skill search query=%r hits=%d", query, len(results))
         return results
+
+    def install(self, hit: SkillHit, dest_root: Path) -> Path:
+        """Install a discovered skill from its cached source repo into dest_root.
+
+        Copies the skill's folder out of the cached clone (see
+        :func:`_ensure_repo`) into ``dest_root / hit.name`` and writes a
+        :class:`SourcePin` there, so the install can later be traced back to the
+        exact repo, commit, and subpath it came from. If ``dest_root / hit.name``
+        already exists, it is replaced.
+
+        Args:
+            hit: The skill to install, as previously returned by :meth:`search`.
+            dest_root: The directory under which the skill folder is created
+                (e.g. the user's skills directory).
+
+        Returns:
+            The path to the installed skill directory (``dest_root / hit.name``).
+
+        Raises:
+            SkillSourceError: If ``hit.repo`` isn't a configured registry, the
+                resolved skill path would escape the cached repo, the resolved
+                path isn't a directory containing ``SKILL.md``, or a filesystem
+                operation fails.
+        """
+        if hit.repo not in self._registries:
+            raise SkillSourceError(f"repo not in skill_registries whitelist: {hit.repo!r}")
+
+        repo_dir, _sha = _ensure_repo(hit.repo, self._cache_dir, whitelist=self._registries)
+
+        repo_dir_res = repo_dir.resolve()
+        src_res = (repo_dir / hit.subpath).resolve()
+        if src_res != repo_dir_res and repo_dir_res not in src_res.parents:
+            raise SkillSourceError("skill path escapes the source repo")
+        if not src_res.is_dir() or not (src_res / "SKILL.md").is_file():
+            raise SkillSourceError(f"not a valid skill directory: {hit.subpath!r}")
+
+        dest = dest_root / hit.name
+        try:
+            if dest.exists():
+                shutil.rmtree(dest)
+            dest_root.mkdir(parents=True, exist_ok=True)
+            shutil.copytree(src_res, dest)
+        except OSError as exc:
+            raise SkillSourceError(f"skill install failed: {exc}") from exc
+
+        SourcePin(hit.repo, hit.sha, hit.subpath).write(dest)
+
+        _log.info("skill installed name=%r repo=%r sha=%s", hit.name, hit.repo, hit.sha[:7])
+        return dest
+
+    def installed_pin(self, dest_root: Path, name: str) -> SourcePin | None:
+        """Read back the source pin for a previously installed skill.
+
+        Args:
+            dest_root: The directory under which skills are installed.
+            name: The skill's name (its subdirectory under ``dest_root``).
+
+        Returns:
+            The :class:`SourcePin` if present and valid, else ``None``.
+        """
+        return SourcePin.read(dest_root / name)

@@ -283,3 +283,79 @@ def test_skill_source_search_skips_broken_registry(tmp_path: Path) -> None:
     source = SkillSource([str(bogus)], tmp_path / "cache")
 
     assert source.search("weather") == []
+
+
+def test_skill_source_install_creates_dest_and_pin(tmp_path: Path) -> None:
+    """Install copies the hit's skill dir into dest_root/<name> and writes a readable pin."""
+    repo = _make_multi_skill_repo(tmp_path)
+    source = SkillSource([str(repo)], tmp_path / "cache")
+    hit = source.search("weather")[0]
+
+    dest = source.install(hit, tmp_path / "installed")
+
+    assert dest == tmp_path / "installed" / "weather"
+    assert (dest / "SKILL.md").exists()
+
+    pin = source.installed_pin(tmp_path / "installed", "weather")
+    assert pin is not None
+    assert pin.sha == hit.sha
+    assert pin.repo == hit.repo
+    assert pin.subpath == hit.subpath
+
+
+def test_skill_source_install_twice_replaces_dest_and_pin(tmp_path: Path) -> None:
+    """Re-installing over an existing dest replaces it; the pin still reads back."""
+    repo = _make_multi_skill_repo(tmp_path)
+    source = SkillSource([str(repo)], tmp_path / "cache")
+    hit = source.search("weather")[0]
+    dest_root = tmp_path / "installed"
+
+    source.install(hit, dest_root)
+    stray = dest_root / "weather" / "stray.txt"
+    stray.write_text("leftover from a previous install", encoding="utf-8")
+
+    dest = source.install(hit, dest_root)
+
+    assert dest == dest_root / "weather"
+    assert (dest / "SKILL.md").exists()
+    assert not stray.exists()
+
+    pin = source.installed_pin(dest_root, "weather")
+    assert pin is not None
+    assert pin.sha == hit.sha
+
+
+def test_skill_source_install_rejects_non_whitelisted_repo(tmp_path: Path) -> None:
+    """Install refuses to install a hit whose repo isn't a configured registry."""
+    repo = _make_multi_skill_repo(tmp_path)
+    source = SkillSource([str(repo)], tmp_path / "cache")
+    hit = SkillHit(
+        name="weather",
+        description="Get the weather forecast for a city",
+        repo="https://not-whitelisted.example/x",
+        subpath="skills/weather",
+        sha="a" * 40,
+    )
+
+    with pytest.raises(SkillSourceError):
+        source.install(hit, tmp_path / "installed")
+
+
+def test_skill_source_install_rejects_path_traversal(tmp_path: Path) -> None:
+    """Install rejects a subpath that would escape the cached repo (path-jail)."""
+    repo = _make_multi_skill_repo(tmp_path)
+    source = SkillSource([str(repo)], tmp_path / "cache")
+    real_hit = source.search("weather")[0]
+    evil_hit = SkillHit(
+        name="evil",
+        description="evil",
+        repo=real_hit.repo,
+        subpath="../../etc",
+        sha=real_hit.sha,
+    )
+    dest_root = tmp_path / "installed"
+
+    with pytest.raises(SkillSourceError, match="escapes"):
+        source.install(evil_hit, dest_root)
+
+    assert not dest_root.exists()
