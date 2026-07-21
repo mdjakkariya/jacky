@@ -104,6 +104,16 @@ class SkillRegistry:
         lines += [f"- {s.name}: {s.description}" for s in specs]
         return "\n".join(lines)
 
+    def skill_dir(self, name: str) -> Path | None:
+        """The directory a discovered skill lives in, or ``None`` if unknown.
+
+        Used to path-jail tier-3 reference-file reads (``read_skill_file``) to the
+        skill's own directory, wherever it was discovered from.
+        """
+        self._ensure_fresh()
+        spec = self._by_name.get(name)
+        return None if spec is None else spec.path.parent
+
     def body(self, name: str) -> str | None:
         """The full Markdown body of a skill, or ``None`` if unknown/unreadable."""
         self._ensure_fresh()

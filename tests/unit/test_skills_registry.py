@@ -91,6 +91,18 @@ def test_new_skill_picked_up_without_restart(tmp_path: Path) -> None:
     assert [s.name for s in reg.specs()] == ["fresh"]  # freshness re-scan
 
 
+def test_skill_dir_returns_directory(tmp_path: Path) -> None:
+    user = tmp_path / "user"
+    md = _write_skill(user, "pdf-tools", "Extract PDF text.")
+    reg = SkillRegistry([SkillDir(user, "user", 20)])
+    assert reg.skill_dir("pdf-tools") == md.parent
+
+
+def test_skill_dir_unknown_returns_none(tmp_path: Path) -> None:
+    reg = SkillRegistry([SkillDir(tmp_path / "user", "user", 20)])
+    assert reg.skill_dir("nope") is None
+
+
 def test_default_skill_dirs_ranking(tmp_path: Path) -> None:
     dirs = default_skill_dirs(tmp_path / "home", tmp_path / "proj")
     by_source = {d.source: d for d in dirs}
