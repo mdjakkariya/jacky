@@ -9,7 +9,7 @@ from pathlib import Path
 import pytest
 
 from autobot.config import Settings
-from autobot.skills.source import SkillHit, SkillSourceError, SourcePin, _ensure_repo
+from autobot.skills.source import SkillHit, SkillSource, SkillSourceError, SourcePin, _ensure_repo
 
 
 def test_skill_registries_defaults_to_empty_list() -> None:
@@ -193,3 +193,93 @@ def test_ensure_repo_mkdir_oserror_raises_skill_source_error(tmp_path: Path) -> 
     # Should raise SkillSourceError, not a bare OSError
     with pytest.raises(SkillSourceError, match="skill cache setup failed"):
         _ensure_repo(str(repo), cache_dir, whitelist=[str(repo)])
+
+
+def _make_multi_skill_repo(tmp_path: Path) -> Path:
+    """Build a local, offline git repo with two skills: weather and notes.
+
+    Also includes a third skill whose description contains an angle-bracket
+    placeholder and an embedded ``colon: space`` — proving lenient (strict=False)
+    parsing is used during discovery.
+
+    Returns the repo's path.
+    """
+    repo = tmp_path / "multi-skill-repo"
+    repo.mkdir()
+    subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
+    subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=repo, check=True)
+    subprocess.run(["git", "config", "user.name", "Test"], cwd=repo, check=True)
+
+    weather_dir = repo / "skills" / "weather"
+    weather_dir.mkdir(parents=True)
+    (weather_dir / "SKILL.md").write_text(
+        "---\nname: weather\ndescription: Get the weather forecast for a city\n---\n\n# Weather\n",
+        encoding="utf-8",
+    )
+
+    notes_dir = repo / "skills" / "notes"
+    notes_dir.mkdir(parents=True)
+    (notes_dir / "SKILL.md").write_text(
+        "---\nname: notes\ndescription: Take and organize notes\n---\n\n# Notes\n",
+        encoding="utf-8",
+    )
+
+    lenient_dir = repo / "skills" / "deploy"
+    lenient_dir.mkdir(parents=True)
+    (lenient_dir / "SKILL.md").write_text(
+        "---\nname: deploy\n"
+        "description: Deploy to `<branch>`. For new tasks: creates a release\n"
+        "---\n\n# Deploy\n",
+        encoding="utf-8",
+    )
+
+    subprocess.run(["git", "add", "-A"], cwd=repo, check=True)
+    subprocess.run(["git", "commit", "-q", "-m", "init"], cwd=repo, check=True)
+    return repo
+
+
+def test_skill_source_search_finds_matching_skill(tmp_path: Path) -> None:
+    """SkillSource.search returns the matching skill as the top hit."""
+    repo = _make_multi_skill_repo(tmp_path)
+    source = SkillSource([str(repo)], tmp_path / "cache")
+
+    hits = source.search("weather")
+
+    assert hits
+    assert hits[0].name == "weather"
+    assert len(hits[0].sha) == 40
+    assert all(c in "0123456789abcdef" for c in hits[0].sha)
+    assert hits[0].repo == str(repo)
+    assert hits[0].subpath.endswith("weather")
+
+
+def test_skill_source_search_returns_empty_for_no_match(tmp_path: Path) -> None:
+    """SkillSource.search returns [] when no skill matches the query."""
+    repo = _make_multi_skill_repo(tmp_path)
+    source = SkillSource([str(repo)], tmp_path / "cache")
+
+    assert source.search("nonexistentxyz") == []
+
+
+def test_skill_source_search_indexes_lenient_skill(tmp_path: Path) -> None:
+    """A skill with an angle-bracket placeholder and embedded colon is still found.
+
+    Proves search parses SKILL.md files with strict=False (discovery mode).
+    """
+    repo = _make_multi_skill_repo(tmp_path)
+    source = SkillSource([str(repo)], tmp_path / "cache")
+
+    hits = source.search("deploy")
+
+    assert any(hit.name == "deploy" for hit in hits)
+
+
+def test_skill_source_search_skips_broken_registry(tmp_path: Path) -> None:
+    """Search skips a registry that fails to clone, logging a warning, not raising."""
+    bogus = tmp_path / "not-a-repo"
+    bogus.mkdir()
+    (bogus / "some-file.txt").write_text("not a git repo", encoding="utf-8")
+
+    source = SkillSource([str(bogus)], tmp_path / "cache")
+
+    assert source.search("weather") == []

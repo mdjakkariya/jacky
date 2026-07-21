@@ -8,6 +8,7 @@ which sources.
 from __future__ import annotations
 
 import hashlib
+import itertools
 import json
 import re
 import shutil
@@ -16,10 +17,12 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from autobot.logging_setup import get_logger
+from autobot.skills.spec import SkillError, spec_from_text
 
 _log = get_logger("skills")
 
 _GIT_TIMEOUT_S = 120
+_MAX_SKILLS_SCANNED = 500
 
 
 class SkillSourceError(Exception):
@@ -207,3 +210,100 @@ def _ensure_repo(repo: str, cache_dir: Path, *, whitelist: list[str]) -> tuple[P
         return dest, sha
     except OSError as exc:
         raise SkillSourceError(f"skill cache setup failed: {exc}") from exc
+
+
+def _relevance_score(tokens: list[str], name: str, description: str) -> int:
+    """Count how many query tokens appear (case-insensitively) in name + description.
+
+    Args:
+        tokens: Lower-cased, whitespace-split query tokens.
+        name: The skill's name.
+        description: The skill's description.
+
+    Returns:
+        The number of tokens found as a substring of ``name + description``
+        (lower-cased). Zero means no relevance.
+    """
+    haystack = f"{name} {description}".lower()
+    return sum(1 for token in tokens if token in haystack)
+
+
+class SkillSource:
+    """Searches whitelisted git registries for skills matching a query.
+
+    Each configured registry doubles as its own whitelist entry, so
+    :func:`_ensure_repo` never contacts anything the caller didn't already
+    configure via ``skill_registries``. A registry that fails to clone or update
+    (unreachable, not a git repo, etc.) is skipped with a warning rather than
+    failing the whole search — one bad registry must not block skills discovered
+    from other, healthy registries.
+    """
+
+    def __init__(self, registries: list[str], cache_dir: Path) -> None:
+        """Initialize with the configured registries and a shared cache directory.
+
+        Args:
+            registries: Whitelisted git repository URIs to search. Also passed as
+                the whitelist to :func:`_ensure_repo`, so only these repos are
+                ever contacted.
+            cache_dir: Directory under which per-repo shallow clones are cached.
+        """
+        self._registries = registries
+        self._cache_dir = cache_dir
+
+    def search(self, query: str, *, limit: int = 5) -> list[SkillHit]:
+        """Search all configured registries for skills relevant to ``query``.
+
+        Args:
+            query: Free-text search query, split on whitespace into tokens and
+                matched case-insensitively against each skill's name +
+                description.
+            limit: The maximum number of hits to return.
+
+        Returns:
+            The top ``limit`` matching :class:`SkillHit` instances, ranked by
+            relevance score (descending) then name (ascending). Returns an empty
+            list if nothing matches or every registry is unreachable; never
+            raises.
+        """
+        tokens = [token.lower() for token in query.split() if token]
+        scored: list[tuple[int, SkillHit]] = []
+
+        for repo in self._registries:
+            try:
+                repo_dir, sha = _ensure_repo(repo, self._cache_dir, whitelist=self._registries)
+            except SkillSourceError as exc:
+                _log.warning(
+                    "skill search: skipping unreachable registry repo=%r error=%s", repo, exc
+                )
+                continue
+
+            candidates = itertools.islice(repo_dir.rglob("SKILL.md"), _MAX_SKILLS_SCANNED)
+            for md in candidates:
+                if ".git" in md.parts:
+                    continue
+
+                try:
+                    text = md.read_text(encoding="utf-8")
+                    spec = spec_from_text(text, path=md, source="remote", strict=False)
+                except (SkillError, OSError, UnicodeDecodeError):
+                    continue
+
+                score = _relevance_score(tokens, spec.name, spec.description)
+                if score <= 0:
+                    continue
+
+                subpath = md.parent.relative_to(repo_dir).as_posix()
+                hit = SkillHit(
+                    name=spec.name,
+                    description=spec.description,
+                    repo=repo,
+                    subpath=subpath,
+                    sha=sha,
+                )
+                scored.append((score, hit))
+
+        scored.sort(key=lambda pair: (-pair[0], pair[1].name))
+        results = [hit for _, hit in scored[:limit]]
+        _log.info("skill search query=%r hits=%d", query, len(results))
+        return results
