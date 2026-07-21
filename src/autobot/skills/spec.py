@@ -15,6 +15,7 @@ from typing import Any
 import yaml
 
 _NAME_RE = re.compile(r"^[a-z0-9-]+$")
+_FENCE_RE = re.compile(r"^---[ \t]*$")
 _XML_RE = re.compile(r"<[^>]+>")
 _RESERVED = ("anthropic", "claude")
 _NAME_MAX = 64
@@ -42,25 +43,42 @@ def parse_frontmatter(text: str) -> tuple[dict[str, Any], str]:
         text: The full file contents.
 
     Returns:
-        A ``(metadata, body)`` tuple; ``body`` has its leading blank lines trimmed.
+        A ``(metadata, body)`` tuple; ``body`` has its leading newlines trimmed.
 
     Raises:
         SkillError: If there is no leading ``---`` fence, no closing ``---``, the
             YAML is invalid, or the frontmatter is not a mapping.
     """
     stripped = text.lstrip("﻿ \t\r\n")
-    if not stripped.startswith("---"):
+    lines = stripped.split("\n")
+
+    # Check for opening fence
+    if not lines or not _FENCE_RE.match(lines[0]):
         raise SkillError("missing YAML frontmatter (no leading '---')")
-    parts = stripped.split("---", 2)
-    if len(parts) < 3:
+
+    # Find closing fence
+    closing_idx = None
+    for i in range(1, len(lines)):
+        if _FENCE_RE.match(lines[i]):
+            closing_idx = i
+            break
+
+    if closing_idx is None:
         raise SkillError("unterminated frontmatter (missing closing '---')")
+
+    # Extract and parse YAML
+    yaml_text = "\n".join(lines[1:closing_idx])
     try:
-        meta = yaml.safe_load(parts[1]) or {}
+        meta = yaml.safe_load(yaml_text) or {}
     except yaml.YAMLError as exc:
         raise SkillError(f"invalid YAML frontmatter: {exc}") from exc
+
     if not isinstance(meta, dict):
         raise SkillError("frontmatter is not a mapping")
-    return meta, parts[2].lstrip("\n")
+
+    # Extract body (everything after closing fence)
+    body = "\n".join(lines[closing_idx + 1 :]).lstrip("\n")
+    return meta, body
 
 
 def validate_name(name: object) -> str:
@@ -69,7 +87,7 @@ def validate_name(name: object) -> str:
         raise SkillError("name is required")
     if len(name) > _NAME_MAX:
         raise SkillError(f"name exceeds {_NAME_MAX} characters")
-    if not _NAME_RE.match(name):
+    if not _NAME_RE.fullmatch(name):
         raise SkillError("name must be lowercase letters, digits, and hyphens only")
     if any(word in name for word in _RESERVED):
         raise SkillError("name must not contain a reserved word (anthropic/claude)")

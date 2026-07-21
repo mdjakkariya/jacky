@@ -88,3 +88,48 @@ def test_spec_from_text_builds_spec() -> None:
 def test_spec_from_text_invalid_raises() -> None:
     with pytest.raises(SkillError):
         spec_from_text("---\nname: BAD\ndescription: x\n---\nbody", path=Path("x"), source="user")
+
+
+def test_validate_name_rejects_trailing_newline() -> None:
+    """Fix 1: trailing newlines should be rejected."""
+    with pytest.raises(SkillError):
+        validate_name("pdf-tools\n")
+
+
+def test_parse_frontmatter_malformed_yaml_raises() -> None:
+    """Fix 3: malformed YAML in frontmatter raises SkillError."""
+    # Bad indentation that makes yaml.safe_load raise
+    with pytest.raises(SkillError, match="invalid YAML frontmatter"):
+        parse_frontmatter("---\nname: test\n  bad: indentation\n---\nbody")
+
+
+def test_parse_frontmatter_non_mapping_raises() -> None:
+    """Fix 3: frontmatter that parses to non-mapping raises SkillError."""
+    with pytest.raises(SkillError, match="frontmatter is not a mapping"):
+        parse_frontmatter("---\n- item1\n- item2\n---\nbody")
+
+
+def test_parse_frontmatter_block_scalar_with_indented_fence() -> None:
+    """Fix 2: block-scalar description containing indented '---' is preserved."""
+    text = """---
+name: pdf-tools
+description: |
+  Extract text from PDFs.
+  The following is NOT a fence:
+    --- this is indented
+  But this is real body content.
+---
+
+# Real Body
+
+Content here.
+"""
+    meta, body = parse_frontmatter(text)
+    assert meta["name"] == "pdf-tools"
+    # The description should contain the full block-scalar content
+    assert "NOT a fence" in meta["description"]
+    assert "indented" in meta["description"]
+    assert "real body content" in meta["description"]
+    # Body should only contain the real body
+    assert body.startswith("# Real Body")
+    assert "Extract text" not in body
