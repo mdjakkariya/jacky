@@ -300,6 +300,9 @@ class Settings:
     allow_notes: bool = True
     allow_file_io: bool = True
     allow_system_toggles: bool = True
+    # Skills: discover SKILL.md skills on disk and advertise a catalog to the model.
+    # Off disables discovery, the catalog block, and the skill() tool entirely.
+    skills_enabled: bool = True
     access_store: str = "~/.autobot/access.json"
     memory_db: str = "~/.autobot/memory.db"
     # --- meetings (opt-in; records both sides of a call, transcribes + summarizes) ---

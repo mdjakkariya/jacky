@@ -547,6 +547,19 @@ def build(
     # can't override it; the assistant uses the sandbox and keeps restoring its cwd.
     workspace_root = resolve_workspace_root(coder, workspace, settings.sandbox_dir)
 
+    # Skills (phase 1, local-only): discover SKILL.md skills under the workspace and
+    # the user home, advertise their catalog to the model, and register the skill()
+    # activation tool. Wired before the profile branches so both profiles get it.
+    if settings.skills_enabled:
+        from autobot.skills.registry import SkillRegistry, default_skill_dirs
+        from autobot.skills.state import set_active_skills
+        from autobot.skills.tool import register_skill_tools
+
+        _skills = SkillRegistry(default_skill_dirs(_Path.home(), workspace_root))
+        set_active_skills(_skills)
+        register_skill_tools(registry, _skills)
+        log.info("skills ENABLED (%d discovered)", len(_skills.specs()))
+
     def _cwd_changed(p: _Path) -> None:
         if on_workspace is not None:
             on_workspace(str(p), p.name)
