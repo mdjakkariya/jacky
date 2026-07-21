@@ -224,6 +224,43 @@ is refused, and nothing else leaves the machine.
 `~/.autobot/skills/`; it's discovered on the next turn. Turn the whole feature off with
 `skills_enabled: false`.
 
+## Workflows
+
+Where a skill is *model-driven* guidance, a **workflow** is a *deterministic recipe*: an
+ordered list of tool-steps that run the same way every time. A `WORKFLOW.md` has frontmatter
+(`name`, `description`, `inputs`) and a fenced YAML `steps:` block:
+
+````markdown
+---
+name: release-notes
+description: Draft release notes from commits since a tag. Use when preparing a changelog.
+inputs:
+  - name: since_tag
+    required: true
+---
+
+```yaml
+steps:
+  - tool: run_command
+    args: { command: "git log {since_tag}..HEAD --oneline" }
+    save_as: commits
+  - tool: write_file
+    args: { path: "NOTES.md", content: "{commits}" }
+    when: "{commits}"
+```
+````
+
+The model runs one with `run_workflow("release-notes", {"since_tag": "v1.2.0"})`. The runner
+substitutes `{var}` from the inputs, threads a step's output forward via `save_as`, and skips
+a step whose `when:` value is empty/`false`/`0`. **Every step executes through the same
+permission gate** as a model-issued call — a workflow can do nothing you couldn't do by hand,
+just deterministically. A failing step halts the workflow.
+
+- Workflows live in `<workspace>/.jack/workflows/` (project) and `~/.autobot/workflows/` (user).
+- `jack workflows list | show <name> | run <name>` from the terminal (`run` is executed from a
+  Jack coding turn in v1).
+- Turn the feature off with `workflows_enabled: false`.
+
 ## Configuration reference (coder-relevant)
 
 Set these with `jack config set <key> <value>` (defaults come from `config.py`):
