@@ -12,6 +12,10 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from contextvars import ContextVar
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from autobot.core.types import ToolExecutor
 
 #: Set by the harness around each tool call to a ``line -> None`` sink; ``None`` otherwise.
 output_sink: ContextVar[Callable[[str], None] | None] = ContextVar("output_sink", default=None)
@@ -25,3 +29,8 @@ plan_sink: ContextVar[Callable[[list[dict[str, str]]], None] | None] = ContextVa
 #: duration. A backgrounded ``run_command`` reads it to tag its task and to route the
 #: completion note back to the right session's inbox. Empty string when no turn is running.
 active_session_id: ContextVar[str] = ContextVar("active_session_id", default="")
+
+#: The turn's gate-wired executor, set by the harness for the turn's duration, so a
+#: meta-tool like ``run_workflow`` can run its steps through the same permission gate
+#: instead of executing them unguarded. ``None`` when no turn is running.
+current_executor: ContextVar[ToolExecutor | None] = ContextVar("current_executor", default=None)
