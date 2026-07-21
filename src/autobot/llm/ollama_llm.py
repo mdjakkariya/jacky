@@ -503,6 +503,9 @@ class OllamaLanguageModel:
         meeting = meeting_state_line()
         if meeting:
             messages.append({"role": "system", "content": meeting})
+        skills_block = skills_catalog_block()
+        if skills_block:
+            messages.append({"role": "system", "content": skills_block})
         if session.summary:
             messages.append(
                 {"role": "system", "content": f"Summary of earlier conversation: {session.summary}"}

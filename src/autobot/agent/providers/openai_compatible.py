@@ -28,6 +28,7 @@ from autobot.llm.ollama_llm import (
     meeting_state_line,
     needs_compaction,
     render_messages,
+    skills_catalog_block,
     system_prompt,
     trim_history,
 )
@@ -134,6 +135,9 @@ class OpenAICompatibleModel:
         meeting = meeting_state_line()
         if meeting:
             messages.append({"role": "system", "content": meeting})
+        skills_block = skills_catalog_block()
+        if skills_block:
+            messages.append({"role": "system", "content": skills_block})
         if session.summary:
             messages.append(
                 {"role": "system", "content": f"Summary of earlier conversation: {session.summary}"}

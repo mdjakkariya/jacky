@@ -593,7 +593,11 @@ class AnthropicLanguageModel:
             ctx = self._memory.context()
             if ctx:
                 parts.append(ctx)
-        from autobot.llm.ollama_llm import active_folder_line, meeting_state_line
+        from autobot.llm.ollama_llm import (
+            active_folder_line,
+            meeting_state_line,
+            skills_catalog_block,
+        )
 
         folder = active_folder_line()
         if folder:
@@ -601,6 +605,9 @@ class AnthropicLanguageModel:
         meeting = meeting_state_line()
         if meeting:
             parts.append(meeting)
+        skills_block = skills_catalog_block()
+        if skills_block:
+            parts.append(skills_block)
         if session.summary:
             parts.append(f"Summary of earlier conversation: {session.summary}")
         return "\n\n".join(parts)

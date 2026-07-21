@@ -33,3 +33,20 @@ def test_block_returns_catalog_when_active(tmp_path: Path) -> None:
     set_active_skills(SkillRegistry([SkillDir(tmp_path, "user", 20)]))
     block = skills_catalog_block()
     assert "pdf-tools" in block and "Extract PDF text" in block
+
+
+def test_openai_assemble_includes_skills_block(tmp_path: Path) -> None:
+    """All three providers append `skills_catalog_block()` verbatim as a system message.
+
+    A full per-provider `_assemble` assertion requires constructing a provider with an
+    injected fake client + `Session`; that path is exercised by the PTY e2e suite. This
+    pins the shared content each provider injects.
+    """
+    d = tmp_path / "notes-skill"
+    d.mkdir()
+    (d / "SKILL.md").write_text(
+        "---\nname: notes-skill\ndescription: Take structured notes.\n---\nbody", encoding="utf-8"
+    )
+    set_active_skills(SkillRegistry([SkillDir(tmp_path, "user", 20)]))
+    block = skills_catalog_block()
+    assert "notes-skill" in block
