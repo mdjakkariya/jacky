@@ -45,6 +45,7 @@ dependencies = [
     "uvicorn[standard]>=0.29",
     "anthropic>=0.40",       # cloud LLM (opt-in at runtime; llm_provider="anthropic")
     "openai>=1.40",          # any OpenAI-compatible endpoint (llm_provider="openai")
+    "pyyaml>=6",             # SKILL.md frontmatter parsing
 ]
 
 [project.optional-dependencies]
@@ -255,6 +256,7 @@ module = [
     "ApplicationServices.*",
     "CoreServices.*",
     "Foundation.*",
+    "yaml.*",
 ]
 ignore_missing_imports = true
 
