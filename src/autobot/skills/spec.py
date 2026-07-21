@@ -50,10 +50,12 @@ def parse_frontmatter(text: str) -> tuple[dict[str, Any], str]:
             YAML is invalid, or the frontmatter is not a mapping.
     """
     stripped = text.lstrip("﻿ \t\r\n")
+    # Normalize CRLF and CR line endings to LF
+    stripped = stripped.replace("\r\n", "\n").replace("\r", "\n")
     lines = stripped.split("\n")
 
     # Check for opening fence
-    if not lines or not _FENCE_RE.match(lines[0]):
+    if not _FENCE_RE.match(lines[0]):
         raise SkillError("missing YAML frontmatter (no leading '---')")
 
     # Find closing fence

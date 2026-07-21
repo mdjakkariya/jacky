@@ -133,3 +133,16 @@ Content here.
     # Body should only contain the real body
     assert body.startswith("# Real Body")
     assert "Extract text" not in body
+
+
+def test_parse_frontmatter_handles_crlf() -> None:
+    """CRLF-terminated SKILL.md parses correctly."""
+    text = (
+        "---\r\nname: pdf-tools\r\ndescription: Extract PDF text.\r\n---\r\n\r\n"
+        "# Body\r\n\r\nStep one.\r\n"
+    )
+    meta, body = parse_frontmatter(text)
+    assert meta["name"] == "pdf-tools"
+    assert meta["description"] == "Extract PDF text."
+    assert "\r" not in body
+    assert body.startswith("# Body")
