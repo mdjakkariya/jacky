@@ -7,9 +7,18 @@ which sources.
 
 from __future__ import annotations
 
+import hashlib
 import json
+import shutil
+import subprocess
 from dataclasses import dataclass
 from pathlib import Path
+
+from autobot.logging_setup import get_logger
+
+_log = get_logger("skills")
+
+_GIT_TIMEOUT_S = 120
 
 
 class SkillSourceError(Exception):
@@ -108,3 +117,85 @@ class SourcePin:
         directory.mkdir(parents=True, exist_ok=True)
         pin_file = directory / ".jack-source.json"
         pin_file.write_text(self.to_json(), encoding="utf-8")
+
+
+def _run_git(args: list[str]) -> str:
+    """Run a git command and return its stdout.
+
+    Any failure (non-zero exit, timeout, or a missing ``git`` executable) is
+    re-raised as :class:`SkillSourceError` with a concise message — the caller
+    never sees a raw ``subprocess`` traceback.
+
+    Args:
+        args: Arguments to pass to ``git`` (excluding the ``git`` executable itself).
+
+    Returns:
+        The command's stdout.
+
+    Raises:
+        SkillSourceError: If the command fails, times out, or git is missing.
+    """
+    try:
+        proc = subprocess.run(
+            ["git", *args],
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=_GIT_TIMEOUT_S,
+        )
+    except subprocess.CalledProcessError as exc:
+        tail = "\n".join((exc.stderr or "").strip().splitlines()[-5:])
+        raise SkillSourceError(f"git {' '.join(args)} failed: {tail}") from None
+    except subprocess.TimeoutExpired:
+        raise SkillSourceError(f"git {' '.join(args)} timed out after {_GIT_TIMEOUT_S}s") from None
+    except FileNotFoundError:
+        raise SkillSourceError("git executable not found; is git installed?") from None
+    return proc.stdout
+
+
+def _ensure_repo(repo: str, cache_dir: Path, *, whitelist: list[str]) -> tuple[Path, str]:
+    """Shallow-clone (or update) a whitelisted git repo into a stable cache subdir.
+
+    This is the sole network egress seam for skill sourcing: a repo is only ever
+    contacted if it appears verbatim in ``whitelist`` (the configured
+    ``skill_registries``). Everything else is rejected before any subprocess runs.
+
+    On first use the repo is cloned with ``--depth 1``. On subsequent calls the
+    existing clone is updated in place (``fetch`` + ``reset --hard FETCH_HEAD``,
+    so a moved branch is picked up); if that update fails, the cache subdir is
+    removed and re-cloned once.
+
+    Args:
+        repo: The git repository URI (or local path/``file://`` URL for tests).
+        cache_dir: The directory under which per-repo clones are cached.
+        whitelist: The allowed repo URIs (``settings.skill_registries``). ``repo``
+            must appear here verbatim, or nothing is contacted.
+
+    Returns:
+        A tuple of ``(local_path, resolved_commit_sha)`` for the cached clone.
+
+    Raises:
+        SkillSourceError: If ``repo`` is not in ``whitelist``, or if any git
+            operation fails.
+    """
+    if repo not in whitelist:
+        raise SkillSourceError(f"repo not in skill_registries whitelist: {repo!r}")
+
+    slug = hashlib.sha256(repo.encode()).hexdigest()[:16]
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    dest = cache_dir / slug
+
+    if not dest.exists():
+        _run_git(["clone", "--depth", "1", repo, str(dest)])
+    else:
+        try:
+            _run_git(["-C", str(dest), "fetch", "--depth", "1", "origin", "HEAD"])
+            _run_git(["-C", str(dest), "reset", "--hard", "FETCH_HEAD"])
+        except SkillSourceError:
+            shutil.rmtree(dest, ignore_errors=True)
+            _run_git(["clone", "--depth", "1", repo, str(dest)])
+
+    sha = _run_git(["-C", str(dest), "rev-parse", "HEAD"]).strip()
+
+    _log.info("skill source fetched repo=%r sha=%s", repo, sha[:7])
+    return dest, sha

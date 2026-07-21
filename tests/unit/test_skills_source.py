@@ -1,12 +1,15 @@
-"""Tests for skill sourcing: config fields, SkillHit, and SourcePin types."""
+"""Tests for skill sourcing: config fields, SkillHit, SourcePin, and _ensure_repo."""
 
 from __future__ import annotations
 
 import json
+import subprocess
 from pathlib import Path
 
+import pytest
+
 from autobot.config import Settings
-from autobot.skills.source import SkillHit, SourcePin
+from autobot.skills.source import SkillHit, SkillSourceError, SourcePin, _ensure_repo
 
 
 def test_skill_registries_defaults_to_empty_list() -> None:
@@ -82,3 +85,65 @@ def test_source_pin_to_json() -> None:
     assert data["repo"] == "github.com/user/repo"
     assert data["sha"] == "abc123"
     assert data["subpath"] == "skills/foo"
+
+
+def _make_local_repo(tmp_path: Path) -> Path:
+    """Build a local, offline git repo under tmp_path with a valid skill in it.
+
+    Returns the repo's path. Used as a stand-in for a real remote so
+    ``_ensure_repo`` can be exercised with real ``git`` commands, offline.
+    """
+    repo = tmp_path / "origin-repo"
+    repo.mkdir()
+    subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
+    subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=repo, check=True)
+    subprocess.run(["git", "config", "user.name", "Test"], cwd=repo, check=True)
+
+    skill_dir = repo / "skills" / "foo"
+    skill_dir.mkdir(parents=True)
+    (skill_dir / "SKILL.md").write_text(
+        "---\nname: foo\ndescription: A test skill\n---\n\n# Foo\n",
+        encoding="utf-8",
+    )
+
+    subprocess.run(["git", "add", "-A"], cwd=repo, check=True)
+    subprocess.run(["git", "commit", "-q", "-m", "init"], cwd=repo, check=True)
+    return repo
+
+
+def test_ensure_repo_clones_whitelisted_repo(tmp_path: Path) -> None:
+    """_ensure_repo clones a whitelisted repo and returns (dest, sha)."""
+    repo = _make_local_repo(tmp_path)
+    cache_dir = tmp_path / "cache"
+
+    dest, sha = _ensure_repo(str(repo), cache_dir, whitelist=[str(repo)])
+
+    assert (dest / "skills" / "foo" / "SKILL.md").exists()
+    assert len(sha) == 40
+    assert all(c in "0123456789abcdef" for c in sha)
+
+
+def test_ensure_repo_second_call_updates_in_place(tmp_path: Path) -> None:
+    """A second _ensure_repo call updates the existing clone rather than crashing."""
+    repo = _make_local_repo(tmp_path)
+    cache_dir = tmp_path / "cache"
+
+    dest1, sha1 = _ensure_repo(str(repo), cache_dir, whitelist=[str(repo)])
+    dest2, sha2 = _ensure_repo(str(repo), cache_dir, whitelist=[str(repo)])
+
+    assert dest1 == dest2
+    assert len(sha2) == 40
+    assert sha1 == sha2
+    assert (dest2 / "skills" / "foo" / "SKILL.md").exists()
+
+
+def test_ensure_repo_rejects_repo_not_in_whitelist(tmp_path: Path) -> None:
+    """_ensure_repo raises SkillSourceError for a repo not in the whitelist, and clones nothing."""
+    repo = _make_local_repo(tmp_path)
+    cache_dir = tmp_path / "cache"
+
+    with pytest.raises(SkillSourceError, match="not in skill_registries whitelist"):
+        _ensure_repo("https://evil.example/x", cache_dir, whitelist=[str(repo)])
+
+    # Nothing should have been cloned for the rejected repo.
+    assert not cache_dir.exists() or list(cache_dir.iterdir()) == []
