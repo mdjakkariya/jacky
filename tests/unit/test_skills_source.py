@@ -147,3 +147,49 @@ def test_ensure_repo_rejects_repo_not_in_whitelist(tmp_path: Path) -> None:
 
     # Nothing should have been cloned for the rejected repo.
     assert not cache_dir.exists() or list(cache_dir.iterdir()) == []
+
+
+def test_ensure_repo_second_call_detects_updates(tmp_path: Path) -> None:
+    """A second _ensure_repo call detects new commits in the origin repo."""
+    repo = _make_local_repo(tmp_path)
+    cache_dir = tmp_path / "cache"
+
+    # First call
+    dest1, sha1 = _ensure_repo(str(repo), cache_dir, whitelist=[str(repo)])
+    assert (dest1 / "skills" / "foo" / "SKILL.md").exists()
+
+    # Add a new commit to the origin repo
+    bar_dir = repo / "skills" / "bar"
+    bar_dir.mkdir(parents=True)
+    (bar_dir / "SKILL.md").write_text(
+        "---\nname: bar\ndescription: Another test skill\n---\n\n# Bar\n",
+        encoding="utf-8",
+    )
+    subprocess.run(["git", "add", "-A"], cwd=repo, check=True)
+    subprocess.run(["git", "commit", "-q", "-m", "add bar skill"], cwd=repo, check=True)
+
+    # Second call should fetch the update
+    dest2, sha2 = _ensure_repo(str(repo), cache_dir, whitelist=[str(repo)])
+
+    # Verify the dest is the same but SHA changed
+    assert dest1 == dest2
+    assert sha1 != sha2
+    assert len(sha2) == 40
+    # Verify the new file exists in the updated clone
+    assert (dest2 / "skills" / "bar" / "SKILL.md").exists()
+
+
+def test_ensure_repo_mkdir_oserror_raises_skill_source_error(tmp_path: Path) -> None:
+    """_ensure_repo raises SkillSourceError if cache_dir parent is a regular file."""
+    repo = _make_local_repo(tmp_path)
+
+    # Create a file at the location where we'd need to create a directory
+    blocker = tmp_path / "blocker"
+    blocker.write_text("this is a file, not a directory")
+
+    # Try to use a cache_dir under the blocker file
+    cache_dir = blocker / "cache"
+
+    # Should raise SkillSourceError, not a bare OSError
+    with pytest.raises(SkillSourceError, match="skill cache setup failed"):
+        _ensure_repo(str(repo), cache_dir, whitelist=[str(repo)])

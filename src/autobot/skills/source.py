@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import shutil
 import subprocess
 from dataclasses import dataclass
@@ -181,21 +182,28 @@ def _ensure_repo(repo: str, cache_dir: Path, *, whitelist: list[str]) -> tuple[P
     if repo not in whitelist:
         raise SkillSourceError(f"repo not in skill_registries whitelist: {repo!r}")
 
-    slug = hashlib.sha256(repo.encode()).hexdigest()[:16]
-    cache_dir.mkdir(parents=True, exist_ok=True)
-    dest = cache_dir / slug
+    try:
+        slug = hashlib.sha256(repo.encode()).hexdigest()[:16]
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        dest = cache_dir / slug
 
-    if not dest.exists():
-        _run_git(["clone", "--depth", "1", repo, str(dest)])
-    else:
-        try:
-            _run_git(["-C", str(dest), "fetch", "--depth", "1", "origin", "HEAD"])
-            _run_git(["-C", str(dest), "reset", "--hard", "FETCH_HEAD"])
-        except SkillSourceError:
-            shutil.rmtree(dest, ignore_errors=True)
-            _run_git(["clone", "--depth", "1", repo, str(dest)])
+        if not dest.exists():
+            _run_git(["clone", "--depth", "1", "--", repo, str(dest)])
+        else:
+            try:
+                _run_git(["-C", str(dest), "fetch", "--depth", "1", "origin", "HEAD"])
+                _run_git(["-C", str(dest), "reset", "--hard", "FETCH_HEAD"])
+            except SkillSourceError:
+                shutil.rmtree(dest, ignore_errors=True)
+                _run_git(["clone", "--depth", "1", "--", repo, str(dest)])
 
-    sha = _run_git(["-C", str(dest), "rev-parse", "HEAD"]).strip()
+        sha = _run_git(["-C", str(dest), "rev-parse", "HEAD"]).strip()
 
-    _log.info("skill source fetched repo=%r sha=%s", repo, sha[:7])
-    return dest, sha
+        # Validate the resolved SHA is a valid 40-character hex string
+        if not re.fullmatch(r"[0-9a-f]{40}", sha):
+            raise SkillSourceError(f"unexpected git sha: {sha!r}")
+
+        _log.info("skill source fetched repo=%r sha=%s", repo, sha[:7])
+        return dest, sha
+    except OSError as exc:
+        raise SkillSourceError(f"skill cache setup failed: {exc}") from exc
