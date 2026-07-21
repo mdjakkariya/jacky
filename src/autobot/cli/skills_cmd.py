@@ -19,6 +19,7 @@ from autobot.config import Settings
 from autobot.logging_setup import get_logger
 from autobot.skills.registry import SkillRegistry, default_skill_dirs
 from autobot.skills.source import SkillSource, SkillSourceError
+from autobot.skills.spec import SkillError, validate_name
 
 _log = get_logger("cli")
 
@@ -90,6 +91,11 @@ def _cmd_add(name: str, out: TextIO, err: TextIO) -> int:
 
 
 def _cmd_remove(name: str, out: TextIO, err: TextIO) -> int:
+    try:
+        validate_name(name)
+    except SkillError:
+        print(f"Invalid skill name: {name!r}.", file=err)
+        return 1
     dest = _user_skills_dir() / name
     if not dest.exists():
         print(f"No installed skill named {name}.", file=err)

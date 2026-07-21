@@ -348,7 +348,14 @@ class SkillSource:
             if dest.exists():
                 shutil.rmtree(dest)
             dest_root.mkdir(parents=True, exist_ok=True)
-            shutil.copytree(src_res, dest)
+            # symlinks=True preserves symlinks as symlinks instead of following them
+            # and copying their target's contents. A malicious/compromised skill repo
+            # could otherwise ship a symlink (e.g. "data -> ~/.ssh/id_rsa") that would
+            # get dereferenced here, materializing a real secret file inside the
+            # installed skill dir where read_skill_file could read it into the model
+            # context. A preserved symlink pointing outside the skill dir is instead
+            # rejected later, at read time, by read_skill_file's resolve+contains check.
+            shutil.copytree(src_res, dest, symlinks=True)
         except OSError as exc:
             raise SkillSourceError(f"skill install failed: {exc}") from exc
 

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import shutil
 import subprocess
 from pathlib import Path
 
@@ -359,3 +360,69 @@ def test_skill_source_install_rejects_path_traversal(tmp_path: Path) -> None:
         source.install(evil_hit, dest_root)
 
     assert not dest_root.exists()
+
+
+def test_skill_source_install_preserves_symlinks_as_symlinks(tmp_path: Path) -> None:
+    """Install preserves a skill's symlinks as symlinks instead of following them.
+
+    A malicious/compromised skill repo could ship a symlink pointing at a secret
+    file outside the repo (e.g. ``data -> ~/.ssh/id_rsa``). If install followed
+    symlinks (``shutil.copytree``'s default), the secret's real bytes would be
+    copied into the installed skill dir as an ordinary file, where
+    ``read_skill_file`` would then read them into the model context. Preserving
+    the symlink instead means the resolved target still points outside the skill
+    dir, so ``read_skill_file``'s resolve+contains check rejects it at read time.
+    """
+    secret = tmp_path / "secret.txt"
+    secret.write_text("TOPSECRET", encoding="utf-8")
+
+    repo = tmp_path / "symlink-repo"
+    repo.mkdir()
+    subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
+    subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=repo, check=True)
+    subprocess.run(["git", "config", "user.name", "Test"], cwd=repo, check=True)
+
+    skill_dir = repo / "skills" / "leaky"
+    skill_dir.mkdir(parents=True)
+    (skill_dir / "SKILL.md").write_text(
+        "---\nname: leaky\ndescription: A leaky test skill\n---\n\n# Leaky\n",
+        encoding="utf-8",
+    )
+    (skill_dir / "leak.txt").symlink_to(secret)
+
+    subprocess.run(["git", "add", "-A"], cwd=repo, check=True)
+    subprocess.run(["git", "commit", "-q", "-m", "init"], cwd=repo, check=True)
+
+    source = SkillSource([str(repo)], tmp_path / "cache")
+    hit = source.search("leaky")[0]
+
+    dest = source.install(hit, tmp_path / "installed")
+
+    leak = dest / "leak.txt"
+    assert leak.is_symlink()
+    # Still points at the external secret file rather than an independent copy of
+    # its bytes, so the secret content was never materialized inside the skill dir.
+    assert leak.resolve() == secret.resolve()
+
+
+def test_copytree_with_symlinks_true_does_not_dereference(tmp_path: Path) -> None:
+    """Direct unit test of the copy primitive used by install: symlinks stay symlinks.
+
+    Exercises exactly the ``shutil.copytree(..., symlinks=True)`` call
+    :meth:`SkillSource.install` makes, without going through git, as a
+    belt-and-suspenders check independent of git's own symlink handling.
+    """
+    secret = tmp_path / "secret.txt"
+    secret.write_text("TOPSECRET", encoding="utf-8")
+
+    src = tmp_path / "src-skill"
+    src.mkdir()
+    (src / "SKILL.md").write_text("skill body", encoding="utf-8")
+    (src / "leak.txt").symlink_to(secret)
+
+    dest = tmp_path / "dest-skill"
+    shutil.copytree(src, dest, symlinks=True)
+
+    leaked = dest / "leak.txt"
+    assert leaked.is_symlink()
+    assert leaked.resolve() == secret.resolve()

@@ -144,6 +144,37 @@ def test_remove_twice_second_call_fails(capsys: pytest.CaptureFixture[str]) -> N
     assert run(["remove", "weather"]) == 1
 
 
+def test_remove_rejects_path_traversal(
+    capsys: pytest.CaptureFixture[str], _isolated_home: Path
+) -> None:
+    """``remove ..`` is rejected before any deletion, so ``~/.autobot`` survives."""
+    home = _isolated_home
+    _write_skill(home / ".autobot" / "skills", "weather", "Get the weather")
+
+    assert run(["remove", ".."]) == 1
+    assert capsys.readouterr().err
+
+    # Nothing outside the skills dir was touched.
+    assert (home / ".autobot").exists()
+    assert (home / ".autobot" / "skills" / "weather").exists()
+
+
+def test_remove_rejects_path_separator(capsys: pytest.CaptureFixture[str]) -> None:
+    """A name containing a path separator is rejected rather than deleted."""
+    assert run(["remove", "../../etc"]) == 1
+    assert capsys.readouterr().err
+
+
+def test_remove_rejects_dot(capsys: pytest.CaptureFixture[str], _isolated_home: Path) -> None:
+    """``remove .`` is rejected, so the skills directory itself survives."""
+    home = _isolated_home
+    _write_skill(home / ".autobot" / "skills", "weather", "Get the weather")
+
+    assert run(["remove", "."]) == 1
+    assert capsys.readouterr().err
+    assert (home / ".autobot" / "skills").exists()
+
+
 def test_show_prints_body(capsys: pytest.CaptureFixture[str]) -> None:
     _write_skill(Path.home() / ".autobot" / "skills", "foo", "A test skill")
     assert run(["show", "foo"]) == 0
