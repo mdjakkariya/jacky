@@ -174,6 +174,18 @@ def meeting_state_line() -> str:
     return "Meeting recorder: idle — no meeting is being recorded right now."
 
 
+def skills_catalog_block() -> str:
+    """A one-block skill catalog (tier 1) for the system context, or '' if none.
+
+    Injected every turn like the active-folder and meeting lines, so a skill
+    authored or removed mid-session is reflected immediately.
+    """
+    from autobot.skills.state import active_skills
+
+    reg = active_skills()
+    return reg.catalog() if reg is not None else ""
+
+
 def _get(obj: Any, key: str) -> Any:
     """Read ``key`` from a dict, or the attribute ``key`` from an object.
 
