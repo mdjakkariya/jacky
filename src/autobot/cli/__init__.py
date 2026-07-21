@@ -196,6 +196,10 @@ def main(argv: list[str] | None = None) -> int:
         from autobot.cli.skills_cmd import run as skills_run
 
         return skills_run(argv[1:])
+    if argv and argv[0] == "workflows":
+        from autobot.cli.workflows_cmd import run as workflows_run
+
+        return workflows_run(argv[1:])
     if argv and argv[0] == "mcp":
         from autobot.cli.mcp_cmd import run as mcp_run
 

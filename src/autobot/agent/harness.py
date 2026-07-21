@@ -23,7 +23,7 @@ from dataclasses import replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from autobot.core.streaming import active_session_id, output_sink
+from autobot.core.streaming import active_session_id, current_executor, output_sink
 from autobot.core.types import ErrorCategory, ToolCall, ToolResult
 from autobot.logging_setup import get_logger
 from autobot.mcp.adapter import split_namespaced
@@ -192,6 +192,9 @@ class AgentHarness:
         # task and route its completion note back here. Re-set at the top of every turn, so a
         # leak on an error path is self-correcting; reset on the normal path below.
         sid_token = active_session_id.set(self._session.id)
+        # Expose the gate-wired executor so a meta-tool (e.g. run_workflow) can run its
+        # steps through the same gate. Same self-correcting set/reset pattern as above.
+        exec_token = current_executor.set(execute)
         user_text = self._fold_notifications(user_text)
         self._model.begin_turn(self._session, user_text)
         failed: dict[str, str] = {}  # anti-thrash: call key -> failure text
@@ -330,6 +333,7 @@ class AgentHarness:
         new_events = self._model.finalize_turn(self._session)
         self._store.append(self._session, new_events)
         active_session_id.reset(sid_token)
+        current_executor.reset(exec_token)
         return reply
 
     def _fold_notifications(self, user_text: str) -> str:
