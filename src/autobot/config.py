@@ -303,6 +303,10 @@ class Settings:
     # Skills: discover SKILL.md skills on disk and advertise a catalog to the model.
     # Off disables discovery, the catalog block, and the skill() tool entirely.
     skills_enabled: bool = True
+    # Whitelist of trusted git repo specs skills may be fetched from.
+    skill_registries: list[str] = field(default_factory=list)
+    # Where whitelisted repos are shallow-cloned.
+    skill_cache_dir: str = "~/.autobot/skill-cache"
     access_store: str = "~/.autobot/access.json"
     memory_db: str = "~/.autobot/memory.db"
     # --- meetings (opt-in; records both sides of a call, transcribes + summarizes) ---
