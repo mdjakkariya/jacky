@@ -19,6 +19,34 @@ from autobot.e2e.scenario import (
 _TURN = 240.0  # wait for a plan/permission card or a turn to reach idle
 _CMD = 30.0  # wait for a daemon-backed command to return to idle
 
+# A project-level workflow (phase 3): a deterministic recipe with a required input, a
+# read-only run_command whose output is threaded forward via save_as, and a conditional
+# (when) templated write_file. Seeded into the workspace's .jack/workflows/ so the agent
+# discovers it and invokes it via run_workflow — end-to-end proof that the workflow runner,
+# input resolution, {var} templating, save_as threading, and the when-guard all work through
+# a real LLM turn (per-step gating of *destructive* steps is covered by the unit + offline
+# e2e; this live scenario stays robust by using a read-only command + an in-cwd write).
+_INVENTORY_WORKFLOW = """---
+name: inventory
+description: Inventory the project's Python files. Use to catalog or take stock of the project.
+inputs:
+  - name: title
+    required: true
+---
+
+```yaml
+steps:
+  - tool: run_command
+    args: { command: "ls *.py" }
+    save_as: files
+  - tool: write_file
+    args:
+      path: "INVENTORY.md"
+      content: "TITLE={title} FILES=[{files}] MARKER=inventory-workflow-ok"
+    when: "{files}"
+```
+"""
+
 ALL: tuple[Scenario, ...] = (
     Scenario(
         name="create-file",
@@ -193,6 +221,36 @@ ALL: tuple[Scenario, ...] = (
             Expect("idle_prompt", _TURN),
         ),
         checks=(FileContains("foo.py", "x = 1"),),
+    ),
+    Scenario(
+        # Phase 3 workflows, end-to-end: a real LLM turn must discover the project-level
+        # 'inventory' workflow (seeded in .jack/workflows/) and invoke it via run_workflow with
+        # the required `title` input — NOT reimplement the steps by hand. A pass proves the whole
+        # workflow path: input resolution + {var} templating + a run_command step whose stdout is
+        # threaded forward via save_as + a when-guarded write_file — all through the gate. The
+        # deterministic checks pin the threaded output (title input + the ls-derived file list +
+        # the recipe's marker); the judge confirms run_workflow was actually used.
+        name="workflow-inventory",
+        autonomy="auto",
+        strategy="unattended",
+        task="Run the 'inventory' workflow to catalog this project's Python files; "
+        "use the title 'E2E Project Report'.",
+        success_criteria="Invoked the run_workflow tool to run the 'inventory' workflow (a saved "
+        "deterministic recipe) rather than improvising the steps by hand, and produced "
+        "INVENTORY.md with the given title, both Python filenames (alpha.py, beta.py), and the "
+        "recipe's marker.",
+        seed_files={
+            ".jack/workflows/inventory/WORKFLOW.md": _INVENTORY_WORKFLOW,
+            "alpha.py": "A = 1\n",
+            "beta.py": "B = 2\n",
+        },
+        checks=(
+            FileExists("INVENTORY.md"),
+            FileContains("INVENTORY.md", "E2E Project Report"),  # required `title` input threaded
+            FileContains("INVENTORY.md", "alpha.py"),  # save_as from `ls *.py` threaded into write
+            FileContains("INVENTORY.md", "beta.py"),
+            FileContains("INVENTORY.md", "inventory-workflow-ok"),  # the when-guarded write ran
+        ),
     ),
 )
 
