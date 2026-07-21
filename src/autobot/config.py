@@ -303,6 +303,9 @@ class Settings:
     # Skills: discover SKILL.md skills on disk and advertise a catalog to the model.
     # Off disables discovery, the catalog block, and the skill() tool entirely.
     skills_enabled: bool = True
+    # Workflows: discover WORKFLOW.md workflows on disk and advertise a catalog to the model.
+    # Off disables discovery, the catalog block, and the run_workflow() tool entirely.
+    workflows_enabled: bool = True
     # Whitelist of trusted git repo specs skills may be fetched from.
     skill_registries: list[str] = field(default_factory=list)
     # Where whitelisted repos are shallow-cloned.

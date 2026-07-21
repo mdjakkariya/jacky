@@ -597,6 +597,7 @@ class AnthropicLanguageModel:
             active_folder_line,
             meeting_state_line,
             skills_catalog_block,
+            workflows_catalog_block,
         )
 
         folder = active_folder_line()
@@ -608,6 +609,9 @@ class AnthropicLanguageModel:
         skills_block = skills_catalog_block()
         if skills_block:
             parts.append(skills_block)
+        workflows_block = workflows_catalog_block()
+        if workflows_block:
+            parts.append(workflows_block)
         if session.summary:
             parts.append(f"Summary of earlier conversation: {session.summary}")
         return "\n\n".join(parts)

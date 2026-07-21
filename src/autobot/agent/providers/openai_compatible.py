@@ -31,6 +31,7 @@ from autobot.llm.ollama_llm import (
     skills_catalog_block,
     system_prompt,
     trim_history,
+    workflows_catalog_block,
 )
 from autobot.logging_setup import get_logger
 from autobot.session_log import NullTranscript, Transcript
@@ -138,6 +139,9 @@ class OpenAICompatibleModel:
         skills_block = skills_catalog_block()
         if skills_block:
             messages.append({"role": "system", "content": skills_block})
+        workflows_block = workflows_catalog_block()
+        if workflows_block:
+            messages.append({"role": "system", "content": workflows_block})
         if session.summary:
             messages.append(
                 {"role": "system", "content": f"Summary of earlier conversation: {session.summary}"}

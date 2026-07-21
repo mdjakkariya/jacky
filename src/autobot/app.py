@@ -570,6 +570,19 @@ def build(
         register_source_tools(registry, _skill_source, _Path.home() / ".autobot" / "skills")
         log.info("skill sourcing ENABLED (%d registries)", len(settings.skill_registries))
 
+    # Workflows: discover WORKFLOW.md workflows under the workspace and the user home,
+    # advertise their catalog to the model, and register the run_workflow() tool.
+    # A peer of the skills block above, wired the same way.
+    if settings.workflows_enabled:
+        from autobot.workflows.registry import WorkflowRegistry, default_workflow_dirs
+        from autobot.workflows.state import set_active_workflows
+        from autobot.workflows.tool import register_workflow_tools
+
+        _workflows = WorkflowRegistry(default_workflow_dirs(_Path.home(), workspace_root))
+        set_active_workflows(_workflows)
+        register_workflow_tools(registry, _workflows)
+        log.info("workflows ENABLED (%d discovered)", len(_workflows.specs()))
+
     def _cwd_changed(p: _Path) -> None:
         if on_workspace is not None:
             on_workspace(str(p), p.name)

@@ -186,6 +186,18 @@ def skills_catalog_block() -> str:
     return reg.catalog() if reg is not None else ""
 
 
+def workflows_catalog_block() -> str:
+    """A one-block workflow catalog for the system context, or '' if none.
+
+    Injected every turn like the active-folder and meeting lines, so a workflow
+    authored or removed mid-session is reflected immediately.
+    """
+    from autobot.workflows.state import active_workflows
+
+    reg = active_workflows()
+    return reg.catalog() if reg is not None else ""
+
+
 def _get(obj: Any, key: str) -> Any:
     """Read ``key`` from a dict, or the attribute ``key`` from an object.
 
@@ -506,6 +518,9 @@ class OllamaLanguageModel:
         skills_block = skills_catalog_block()
         if skills_block:
             messages.append({"role": "system", "content": skills_block})
+        workflows_block = workflows_catalog_block()
+        if workflows_block:
+            messages.append({"role": "system", "content": workflows_block})
         if session.summary:
             messages.append(
                 {"role": "system", "content": f"Summary of earlier conversation: {session.summary}"}
