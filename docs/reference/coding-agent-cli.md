@@ -187,6 +187,43 @@ you're in (git-ignored by the seeded `.jack/.gitignore`). Use `/sessions` to lis
 `/sessions resume <id>` to continue, and `/new` to start fresh. Checkpoints live in the
 workspace's own git repo, so they're isolated per project too.
 
+## Skills
+
+Jack uses **Agent Skills** — reusable `SKILL.md` playbooks that load on demand. Drop a
+skill in a folder and Jack discovers it; when a task matches a skill's description, the
+model loads its instructions (and any bundled reference files, via `read_skill_file`) and
+follows them. It's the standard `SKILL.md` format, so skills authored for other agents work
+in Jack and vice versa.
+
+**Where skills live** (project overrides user; canonical over `.claude` compat):
+
+- `<workspace>/.jack/skills/` — project-level (check into the repo to share)
+- `~/.autobot/skills/` — user-level (also where fetched skills install)
+- `<workspace>/.claude/skills/`, `~/.claude/skills/` — read-only compatibility, so skills
+  you already have for other tools just work
+
+**Manage skills from the terminal** (`jack skills …`, in-process — no daemon):
+
+```bash
+jack skills list                  # installed skills
+jack skills show <name>           # print a skill's instructions
+jack skills search <query>        # search the configured registries
+jack skills add <name>            # install from a registry into ~/.autobot/skills
+jack skills remove <name>         # delete an installed skill
+```
+
+**Fetching from registries (opt-in, disclosed egress).** `skill_registries` in
+`settings.json` is a whitelist of trusted **git repos** Jack may fetch skills from (empty by
+default). A fetch happens *only* on an explicit `jack skills search|add`, or when the model
+calls the gated `find_skill` / `install_skill` tools — both marked off-device (the "↗ sends
+data off-device" badge + audit egress note). Jack shallow-clones a whitelisted repo,
+installs the matched skill's folder, and pins the source commit; a repo not on the whitelist
+is refused, and nothing else leaves the machine.
+
+**Author your own.** Ask Jack to "make a skill for X" and it writes a `SKILL.md` into
+`~/.autobot/skills/`; it's discovered on the next turn. Turn the whole feature off with
+`skills_enabled: false`.
+
 ## Configuration reference (coder-relevant)
 
 Set these with `jack config set <key> <value>` (defaults come from `config.py`):
