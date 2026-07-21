@@ -91,6 +91,11 @@ def register_workflow_tools(registry: ToolRegistry, workflows: WorkflowRegistry)
             return ToolFailure("run_workflow can only run inside an active turn")
 
         call_args = args or {}
+        if not isinstance(call_args, dict):
+            return ToolFailure(
+                f"'args' must be an object, got {type(call_args).__name__}",
+                ErrorCategory.INVALID,
+            )
         missing_inputs = [k for k in wf.required_inputs if k not in call_args]
         if missing_inputs:
             return ToolFailure(
@@ -135,7 +140,7 @@ def register_workflow_tools(registry: ToolRegistry, workflows: WorkflowRegistry)
                 _log.info("workflow run name=%r stopped step=%d tool=%r", name, i, step.tool)
                 return ToolFailure(
                     f"workflow {name!r} stopped at step {i} ({step.tool}): {result.content}",
-                    result.category or ErrorCategory.NONE,
+                    result.category,
                 )
 
             if step.save_as:

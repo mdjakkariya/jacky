@@ -178,3 +178,36 @@ def test_unknown_var_in_step_args_is_invalid_and_stops(registry: ToolRegistry) -
     assert result.category == ErrorCategory.INVALID
     assert "ghost" in result.content
     assert fake.calls == []
+
+
+def test_non_dict_args_is_invalid(registry: ToolRegistry) -> None:
+    """Passing a non-dict for 'args' should return INVALID, not raise."""
+    fake = FakeExecutor()
+    result = _run_with_executor(registry, fake, "demo", ["oops"])  # type: ignore[arg-type]
+    assert result.ok is False
+    assert result.category == ErrorCategory.INVALID
+    assert "must be an object" in result.content
+    assert "list" in result.content
+    assert fake.calls == []
+
+
+def test_when_references_undefined_var_is_invalid(wf_root: Path, registry: ToolRegistry) -> None:
+    """A step's 'when' condition referencing an undefined variable should stop workflow."""
+    _write_workflow(
+        wf_root,
+        "demo-when-ghost",
+        """
+steps:
+  - tool: noop
+    args: { x: "1" }
+    when: "{undefined_var}"
+""",
+        required_seed=False,
+    )
+    fake = FakeExecutor()
+    result = _run_with_executor(registry, fake, "demo-when-ghost", {})
+    assert result.ok is False
+    assert result.category == ErrorCategory.INVALID
+    assert "undefined_var" in result.content
+    assert "when" in result.content
+    assert fake.calls == []
