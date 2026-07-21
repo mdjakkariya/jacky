@@ -77,7 +77,9 @@ class SkillRegistry:
                 continue
             for md in sorted(d.path.glob("*/SKILL.md")):
                 try:
-                    spec = spec_from_text(md.read_text(encoding="utf-8"), path=md, source=d.source)
+                    spec = spec_from_text(
+                        md.read_text(encoding="utf-8"), path=md, source=d.source, strict=False
+                    )
                 except (OSError, SkillError) as exc:
                     _log.warning("skipping invalid skill at %s: %s", md, exc)
                     continue

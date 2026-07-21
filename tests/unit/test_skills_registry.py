@@ -62,6 +62,16 @@ def test_body_unknown_returns_none(tmp_path: Path) -> None:
     assert reg.body("nope") is None
 
 
+def test_discovery_accepts_placeholder_and_colon_descriptions(tmp_path: Path) -> None:
+    """Fix 1 + Fix 2: real ecosystem skills are no longer silently dropped."""
+    user = tmp_path / "user"
+    _write_skill(user, "spindown", "Use `<branch>` --only extension|router")
+    _write_skill(user, "spinup", "For new tasks: creates things")
+    reg = SkillRegistry([SkillDir(user, "user", 20)])
+    names = {s.name for s in reg.specs()}
+    assert names == {"spindown", "spinup"}
+
+
 def test_invalid_skill_is_skipped(tmp_path: Path) -> None:
     user = tmp_path / "user"
     _write_skill(user, "good", "a valid one")

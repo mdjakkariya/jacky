@@ -77,6 +77,12 @@ def test_validate_description_rejects_xml() -> None:
         validate_description("do <thing>this</thing>")
 
 
+def test_validate_description_strict_false_allows_angle_brackets() -> None:
+    """Fix 1: discovery (strict=False) accepts a placeholder like `<branch>`."""
+    desc = "Use `<branch>` --only extension|router"
+    assert validate_description(desc, strict=False) == desc
+
+
 def test_spec_from_text_builds_spec() -> None:
     spec = spec_from_text(VALID, path=Path("/skills/pdf-tools/SKILL.md"), source="user")
     assert isinstance(spec, SkillSpec)
@@ -90,23 +96,54 @@ def test_spec_from_text_invalid_raises() -> None:
         spec_from_text("---\nname: BAD\ndescription: x\n---\nbody", path=Path("x"), source="user")
 
 
+def test_spec_from_text_strict_false_allows_placeholder_and_colon() -> None:
+    """Fix 1 + Fix 2 together: the two real-world shapes discovery must accept."""
+    bracket_text = (
+        "---\nname: spindown\ndescription: Use `<branch>` --only extension|router\n---\nbody"
+    )
+    spec = spec_from_text(bracket_text, path=Path("x"), source="user", strict=False)
+    assert spec.description == "Use `<branch>` --only extension|router"
+
+    colon_text = "---\nname: spinup\ndescription: For new tasks: creates things\n---\nbody"
+    spec = spec_from_text(colon_text, path=Path("x"), source="user", strict=False)
+    assert spec.description == "For new tasks: creates things"
+
+
+def test_spec_from_text_strict_true_still_rejects_xml() -> None:
+    """Default strict=True (author-time) unchanged: angle brackets still reject."""
+    text = "---\nname: x\ndescription: do <thing>this</thing>\n---\nbody"
+    with pytest.raises(SkillError):
+        spec_from_text(text, path=Path("x"), source="user")
+
+
 def test_validate_name_rejects_trailing_newline() -> None:
     """Fix 1: trailing newlines should be rejected."""
     with pytest.raises(SkillError):
         validate_name("pdf-tools\n")
 
 
-def test_parse_frontmatter_malformed_yaml_raises() -> None:
-    """Fix 3: malformed YAML in frontmatter raises SkillError."""
-    # Bad indentation that makes yaml.safe_load raise
-    with pytest.raises(SkillError, match="invalid YAML frontmatter"):
-        parse_frontmatter("---\nname: test\n  bad: indentation\n---\nbody")
+def test_parse_frontmatter_embedded_colon_recovers() -> None:
+    """Fix 2: a description with an embedded 'colon: space' no longer raises.
+
+    Real skills (e.g. spinup, error-analysis-revision) have single-line
+    descriptions like "For tasks: do it" that make ``yaml.safe_load`` see a nested
+    mapping and raise. The line-based fallback recovers name/description instead.
+    """
+    meta, body = parse_frontmatter("---\nname: x\ndescription: For tasks: do it\n---\nbody")
+    assert meta["name"] == "x"
+    assert meta["description"] == "For tasks: do it"
+    assert body == "body"
 
 
-def test_parse_frontmatter_non_mapping_raises() -> None:
-    """Fix 3: frontmatter that parses to non-mapping raises SkillError."""
-    with pytest.raises(SkillError, match="frontmatter is not a mapping"):
-        parse_frontmatter("---\n- item1\n- item2\n---\nbody")
+def test_spec_from_text_non_mapping_frontmatter_raises() -> None:
+    """Fix 2: parse_frontmatter no longer raises on a list, but spec_from_text does.
+
+    A YAML list falls back to an empty ``meta`` (no ``key: value`` lines match), so
+    ``spec_from_text`` still rejects it downstream — for the missing ``name``, not
+    for the frontmatter shape itself.
+    """
+    with pytest.raises(SkillError):
+        spec_from_text("---\n- a\n- b\n---\nbody", path=Path("x"), source="user")
 
 
 def test_parse_frontmatter_block_scalar_with_indented_fence() -> None:
