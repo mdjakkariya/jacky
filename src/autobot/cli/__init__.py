@@ -192,6 +192,10 @@ def main(argv: list[str] | None = None) -> int:
     if argv and argv[0] == "config":
         action = argv[1] if len(argv) > 1 else "show"
         return _run_config(action, argv[2:], f"http://127.0.0.1:{_CODER_PORT}")
+    if argv and argv[0] == "skills":
+        from autobot.cli.skills_cmd import run as skills_run
+
+        return skills_run(argv[1:])
     if argv and argv[0] == "mcp":
         from autobot.cli.mcp_cmd import run as mcp_run
 
