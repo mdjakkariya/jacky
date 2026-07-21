@@ -112,6 +112,12 @@ def test_run_workflow_registered_read_only(registry: ToolRegistry) -> None:
     assert spec.risk == Risk.READ_ONLY
 
 
+def test_run_workflow_is_core(registry: ToolRegistry) -> None:
+    spec = registry.get("run_workflow")
+    assert spec is not None
+    assert spec.core is True
+
+
 def test_threads_save_as_into_next_step_and_substitutes_inputs(registry: ToolRegistry) -> None:
     fake = FakeExecutor()
     result = _run_with_executor(registry, fake, "demo", {"seed": "S"})

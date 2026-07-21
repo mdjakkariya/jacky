@@ -178,7 +178,10 @@ def register_workflow_tools(registry: ToolRegistry, workflows: WorkflowRegistry)
             },
             handler=_run_workflow,
             risk=Risk.READ_ONLY,
-            core=False,
+            # core=True: the workflows catalog is injected every turn, so its activation
+            # tool must always be advertised (mirrors the skill() tool). run_workflow has
+            # no direct side effects — steps are gated individually via the executor.
+            core=True,
         )
     )
     _log.info("workflow tools registered")
