@@ -34,6 +34,7 @@ class BackgroundEvents:
         self._completed: list[dict[str, Any]] = []
         self._waker: Callable[[], None] | None = None
         self._on_mcp: Callable[[dict[str, Any]], None] | None = None
+        self._on_context: Callable[[dict[str, Any]], None] | None = None
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
 
@@ -63,6 +64,11 @@ class BackgroundEvents:
                             on_mcp = self._on_mcp
                         if on_mcp is not None:
                             on_mcp(evt)
+                    elif evt.get("type") == "context":
+                        with self._lock:
+                            on_context = self._on_context
+                        if on_context is not None:
+                            on_context(evt)
             except Exception:  # a listener error must never crash the CLI — just retry
                 _log.debug("events stream errored; will retry", exc_info=True)
             # Stream ended (daemon restart, drop). Pause briefly, then reconnect.
@@ -78,6 +84,11 @@ class BackgroundEvents:
         """Install (or clear) the callback fired for live MCP status/OAuth events."""
         with self._lock:
             self._on_mcp = callback
+
+    def set_on_context(self, callback: Callable[[dict[str, Any]], None] | None) -> None:
+        """Install (or clear) the callback fired for live context-window usage events."""
+        with self._lock:
+            self._on_context = callback
 
     def pending(self) -> bool:
         """Whether any finished-task events are waiting to be picked up."""

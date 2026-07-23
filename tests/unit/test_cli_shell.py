@@ -21,7 +21,16 @@ def _console() -> Console:
 
 def test_gather_context_never_raises_and_has_keys(tmp_path: Path) -> None:
     ctx = shell.gather_context(str(tmp_path))
-    assert set(ctx) == {"cwd", "branch", "model", "autonomy"}
+    assert set(ctx) == {
+        "cwd",
+        "branch",
+        "model",
+        "autonomy",
+        "provider",
+        "dirty",
+        "ahead",
+        "behind",
+    }
 
 
 def test_expand_mentions_no_mention_is_identity(tmp_path: Path) -> None:
