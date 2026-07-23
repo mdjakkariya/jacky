@@ -108,11 +108,19 @@ def _seed_hud_counts(japp: Any, base_url: str) -> None:
 
 
 def _refresh_hud_after_turn(japp: Any, base_url: str, cwd: str) -> None:
-    """Post-turn: refresh cost + git so the HUD reflects this turn (best-effort, never raises)."""
+    """Post-turn: refresh context %, cost, and git so the HUD reflects this turn.
+
+    Pulls from ``GET /coder/usage`` — the ``ctx`` block carries the live context-window
+    ``used``/``window``/``model`` (the same payload the orb's meter uses), and
+    ``rollups.session.usd`` the session cost. Best-effort: never raises out of a turn.
+    """
     from autobot.cli import client
 
     try:
         usage = client.get_usage(base_url)
+        ctx = usage.get("ctx") or {}
+        if ctx:
+            japp.on_context_event(ctx)  # used/window/model → context% + tokens segments
         session = (usage.get("rollups") or {}).get("session") or {}
         usd = session.get("usd")
         fresh = gather_context(cwd)
@@ -269,7 +277,6 @@ def run(base_url: str, cwd: str) -> None:  # pragma: no cover - launches the int
 
     events.set_waker(_waker)
     events.set_on_mcp(japp.on_mcp_event)
-    events.set_on_context(japp.on_context_event)
     # Seed the git ahead/behind + dirty flags (gather_context already put branch/model/etc into
     # the app's HudState) and the best-effort MCP count, so the bar is populated before turn one.
     japp.update_hud(

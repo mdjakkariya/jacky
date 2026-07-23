@@ -66,22 +66,3 @@ def test_mcp_events_reach_the_on_mcp_callback() -> None:
     bg.set_on_mcp(seen.append)
     bg._run()  # synchronous: no thread needed — the stream closes the listener itself
     assert [e["type"] for e in seen] == ["mcp_oauth", "mcp_status"]
-
-
-def test_context_events_reach_the_on_context_callback() -> None:
-    events: list[dict[str, Any]] = [
-        {"type": "context", "used": 50000, "window": 200000, "model": "opus"},
-        {"type": "task", "status": "done", "id": "t1"},  # non-context → ignored here
-    ]
-    seen: list[dict[str, Any]] = []
-    holder: dict[str, BackgroundEvents] = {}
-
-    def fake_stream(base_url: str) -> Iterator[dict[str, Any]]:
-        yield from events
-        holder["bg"].close()  # end the listener after one pass
-
-    bg = BackgroundEvents("http://b", stream_events=fake_stream)
-    holder["bg"] = bg
-    bg.set_on_context(seen.append)
-    bg._run()
-    assert seen and seen[0]["used"] == 50000

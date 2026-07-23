@@ -876,7 +876,11 @@ class JackApp:
             _log.debug("dropped HUD update (loop closing)")
 
     def on_context_event(self, evt: dict[str, Any]) -> None:
-        """Feed a live ``context`` bus event into the HUD (fired on the events thread)."""
+        """Feed a context-usage payload (``used``/``window``/``model``) into the HUD.
+
+        ``evt`` is the ``ctx`` block from ``GET /coder/usage`` (the same shape the orb's meter
+        consumes), pulled by the turn-end HUD refresh; drives the context% + tokens segments.
+        """
         self.update_hud(
             used=int(evt.get("used", 0) or 0),
             window=int(evt.get("window", 0) or 0),
