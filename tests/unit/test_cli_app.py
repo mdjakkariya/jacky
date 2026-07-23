@@ -479,3 +479,33 @@ def test_secret_kind_masks_and_skips_history() -> None:
         assert "sk-verysecret" not in japp._input.history.get_strings()
 
     asyncio.run(scenario())
+
+
+def _hud_app() -> Any:
+    async def noop(_t: str, _n: int) -> None:
+        return None
+
+    return JackApp(cwd="/x", run_turn=noop, commands={}, input=DummyInput(), output=DummyOutput())
+
+
+def test_status_text_renders_hud_segments() -> None:
+    japp = _hud_app()
+    japp.hud_state.autonomy = "auto"
+    japp.hud_state.model = "opus"
+    japp.hud_state.used = 38000
+    japp.hud_state.window = 200000
+    japp.hud_state.branch = "main"
+    japp.hud_state.cwd = "~/x"
+    text = "".join(t for _s, t in japp._status_text())
+    assert "auto" in text
+    assert "opus" in text
+    assert "ctx 19%" in text
+    assert "main" in text
+
+
+def test_on_context_event_updates_state() -> None:
+    japp = _hud_app()
+    japp.on_context_event({"type": "context", "used": 50000, "window": 200000, "model": "opus"})
+    assert japp.hud_state.used == 50000
+    assert japp.hud_state.window == 200000
+    assert japp.hud_state.model == "opus"
