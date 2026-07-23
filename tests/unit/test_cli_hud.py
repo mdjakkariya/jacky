@@ -2,10 +2,17 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 from autobot.cli import hud
+from autobot.cli.hud.compose import compose
 from autobot.cli.hud.segments import SEGMENTS, human_tokens
 from autobot.cli.hud.state import HudState
 from autobot.config import Settings
+
+
+def _line(frags: list[tuple[str, str]]) -> str:
+    return "".join(t for _, t in frags)
 
 
 def _text(frags: list[tuple[str, str]] | None) -> str:
@@ -142,3 +149,63 @@ def test_human_tokens() -> None:
     assert human_tokens(200000) == "200k"
     assert human_tokens(38000) == "38k"
     assert human_tokens(500) == "500"
+
+
+def test_compose_essential_single_line() -> None:
+    state = HudState(
+        autonomy="auto",
+        model="opus",
+        used=38000,
+        window=200000,
+        branch="main",
+        dirty=True,
+        cwd="~/x",
+    )
+    rows = hud.resolve_config(_settings())
+    lines = compose(rows, state, width=200, separator=" · ")
+    assert len(lines) == 1
+    assert _line(lines[0]) == "auto · opus · ctx 19% ▓░░░░░ · main* · ~/x"
+
+
+def test_compose_full_two_lines() -> None:
+    state = HudState(
+        autonomy="auto",
+        model="opus",
+        provider="anthropic",
+        used=38000,
+        window=200000,
+        branch="main",
+        cwd="~/x",
+        cost_usd=0.12,
+        mcp_count=6,
+        elapsed_s=90,
+    )
+    rows = hud.resolve_config(_settings(hud_preset="full"))
+    lines = compose(rows, state, width=200, separator=" · ")
+    assert len(lines) == 2
+    assert _line(lines[0]) == "auto mode · opus (anthropic) · main · ~/x"
+    # skills is omitted (skills_count is None); tokens present.
+    assert _line(lines[1]) == "ctx 19% ▓░░░░░ · 38k/200k · $0.12 · 6 MCP · 1m30s"
+
+
+def test_compose_drops_lowest_priority_on_overflow() -> None:
+    state = HudState(
+        autonomy="auto",
+        model="opus",
+        used=38000,
+        window=200000,
+        branch="main",
+        cwd="~/very/long/path",
+    )
+    rows = hud.resolve_config(_settings())
+    line = _line(compose(rows, state, width=24, separator=" · ")[0])
+    # cwd (priority 10) drops first; context (100) and model (90) survive.
+    assert "ctx 19%" in line
+    assert "~/very/long/path" not in line
+    assert len(line) <= 24
+
+
+def test_compose_empty_row_omitted() -> None:
+    # A row whose every segment has no data renders to nothing and is dropped.
+    rows: list[list[tuple[str, dict[str, Any]]]] = [[("cost", {}), ("mcp", {})]]
+    assert compose(rows, HudState(), width=80, separator=" · ") == []
