@@ -41,20 +41,38 @@ def _model(state: HudState, opts: dict[str, Any], width: int) -> Fragments | Non
 def _context(state: HudState, opts: dict[str, Any], width: int) -> Fragments | None:
     if state.window <= 0 or state.used <= 0:
         return None
-    frac = state.used / state.window
+    frac = min(state.used / state.window, 1.0)  # used can momentarily exceed the window
     pct = round(frac * 100)
-    crit = float(opts.get("crit", 0.9))
     warn = float(opts.get("warn", 0.75))
-    color = "red" if frac >= crit else "amber" if frac >= warn else "green"
+    crit = float(opts.get("crit", 0.9))
+
+    def depth_color(depth: float) -> str:
+        # Color by how deep into the window a point sits: green while there's headroom,
+        # amber past the warn line, red past crit -- so the fill ramps in color as it grows.
+        return "red" if depth >= crit else "amber" if depth >= warn else "green"
+
     style = opts.get("style", "bar+pct")
-    parts = []
+    frags: Fragments = []
     if style in ("pct", "bar+pct"):
-        parts.append(f"ctx {pct}%")
+        frags.append((f"class:{depth_color(frac)}", f"ctx {pct}%"))
     if style in ("bar", "bar+pct"):
-        cells = 6
-        filled = min(cells, round(frac * cells))
-        parts.append("▓" * filled + "░" * (cells - filled))
-    return [(f"class:{color}", " ".join(parts))]
+        if frags:
+            frags.append(("class:status", " "))
+        cells = max(1, int(opts.get("cells", 10)))
+        filled = min(cells, max(1, round(frac * cells)))  # any nonzero usage shows >= 1 cell
+        # Filled cells, colored by their own depth and grouped into same-color runs; the
+        # unfilled remainder is one dim track, so a nearly-empty bar never reads as full.
+        i = 0
+        while i < filled:
+            run_color = depth_color((i + 1) / cells)
+            j = i
+            while j < filled and depth_color((j + 1) / cells) == run_color:
+                j += 1
+            frags.append((f"class:{run_color}", "█" * (j - i)))
+            i = j
+        if filled < cells:
+            frags.append(("class:dim", "░" * (cells - filled)))
+    return frags
 
 
 def _tokens(state: HudState, opts: dict[str, Any], width: int) -> Fragments | None:

@@ -102,13 +102,36 @@ def test_context_pct_and_bar() -> None:
     assert out.startswith("ctx 19% ") and "░" in out
 
 
-def test_context_color_thresholds() -> None:
-    hot = _render("context", HudState(used=190000, window=200000), {"warn": 0.75, "crit": 0.9})
+def test_context_bar_grows_proportionally_with_a_dim_track() -> None:
+    # Low usage (~5%): exactly one filled cell + a dim unfilled track — never reads as full.
+    low = _render("context", HudState(used=5000, window=100000), {"style": "bar", "cells": 10})
+    assert low is not None
+    filled = "".join(t for s, t in low if "dim" not in s)
+    dim = "".join(t for s, t in low if "dim" in s)
+    assert filled.count("█") == 1
+    assert dim.count("░") == 9
+    assert any("green" in s for s, _ in low)  # the filled head is green (headroom)
+
+
+def test_context_fill_ramps_green_amber_red_by_depth() -> None:
+    # Near-full: the fill itself ramps green -> amber -> red as depth crosses warn/crit.
+    hot = _render(
+        "context",
+        HudState(used=98000, window=100000),
+        {"style": "bar", "cells": 10, "warn": 0.75, "crit": 0.9},
+    )
     assert hot is not None
-    assert any("red" in style for style, _ in hot)
-    warm = _render("context", HudState(used=160000, window=200000), {"warn": 0.75, "crit": 0.9})
-    assert warm is not None
-    assert any("amber" in style for style, _ in warm)
+    styles = [s for s, _ in hot]
+    assert any("green" in s for s in styles)
+    assert any("amber" in s for s in styles)
+    assert any("red" in s for s in styles)
+
+
+def test_context_pct_color_tracks_severity() -> None:
+    warm = _render("context", HudState(used=80000, window=100000), {"style": "pct"})
+    assert warm is not None and any("amber" in s for s, _ in warm)
+    crit = _render("context", HudState(used=95000, window=100000), {"style": "pct"})
+    assert crit is not None and any("red" in s for s, _ in crit)
 
 
 def test_tokens() -> None:
@@ -164,7 +187,7 @@ def test_compose_essential_single_line() -> None:
     rows = hud.resolve_config(_settings())
     lines = compose(rows, state, width=200, separator=" · ")
     assert len(lines) == 1
-    assert _line(lines[0]) == "auto · opus · ctx 19% ▓░░░░░ · main* · ~/x"
+    assert _line(lines[0]) == "auto · opus · ctx 19% ██░░░░░░░░ · main* · ~/x"
 
 
 def test_compose_full_two_lines() -> None:
@@ -185,7 +208,7 @@ def test_compose_full_two_lines() -> None:
     assert len(lines) == 2
     assert _line(lines[0]) == "auto mode · opus (anthropic) · main · ~/x"
     # skills is omitted (skills_count is None); tokens present.
-    assert _line(lines[1]) == "ctx 19% ▓░░░░░ · 38k/200k · $0.12 · 6 MCP · 1m30s"
+    assert _line(lines[1]) == "ctx 19% ██░░░░░░░░ · 38k/200k · $0.12 · 6 MCP · 1m30s"
 
 
 def test_compose_drops_lowest_priority_on_overflow() -> None:
