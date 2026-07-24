@@ -77,6 +77,8 @@ _STYLE = Style.from_dict(
         "dim": "#5b665f",
         "prompt": "#4fd6b8 bold",
         "amber": "#e6b25f",
+        "green": "#83c878",  # HUD context bar: healthy (bg inherited from the status window)
+        "red": "#e2726f",  # HUD context bar: near-full
         "status": "#c7d0cb bg:#1a231f",
         "status.key": "#4fd6b8 bg:#1a231f",
         "inputframe": "#4fd6b8",  # teal border around the input box
@@ -249,6 +251,21 @@ class JackApp:
         self._run_turn = run_turn
         self._commands = commands
         self._context = context or {}
+        # HUD: resolve the segment rows once + seed the live state from the startup context.
+        from autobot.cli import hud
+        from autobot.config import Settings
+
+        hud_settings = Settings.load()
+        self._hud = hud
+        self._hud_rows = hud.resolve_config(hud_settings)
+        self._hud_sep = hud_settings.hud_separator
+        self.hud_state = hud.HudState(
+            autonomy=self._context.get("autonomy", ""),
+            model=self._context.get("model", ""),
+            provider=self._context.get("provider", ""),
+            cwd=self._context.get("cwd", ""),
+            branch=self._context.get("branch", ""),
+        )
         self._intro = intro
         self._on_interrupt = on_interrupt
         self._seeded = False
@@ -378,20 +395,31 @@ class JackApp:
         self._block_starts = starts
 
     def _status_text(self) -> list[tuple[str, str]]:
-        """The docked status bar: just the session context (autonomy · model · branch).
+        """The docked status bar: the composed HUD rows, or the minimal static line if off.
 
         Deliberately hint-free — no esc/​/help/​^C clutter. The 'esc to interrupt' hint lives
         in the loading line, shown only while a turn runs (where it's actionable).
         """
-        autonomy = self._context.get("autonomy", "auto")
-        model = self._context.get("model", "")
-        branch = self._context.get("branch", "")
-        rest = "  ·  ".join(p for p in (model, branch) if p)
-        frags: list[tuple[str, str]] = [("class:status.key", f" {autonomy} mode")]
-        if rest:
-            frags.append(("class:status", f"  ·  {rest}"))
-        frags.append(("class:status", " "))
-        return frags
+        if not self._hud_rows:  # HUD disabled → the pre-HUD minimal static line
+            autonomy = self._context.get("autonomy", "auto")
+            rest = "  ·  ".join(
+                p for p in (self._context.get("model", ""), self._context.get("branch", "")) if p
+            )
+            frags: list[tuple[str, str]] = [("class:status.key", f" {autonomy} mode")]
+            if rest:
+                frags.append(("class:status", f"  ·  {rest}"))
+            frags.append(("class:status", " "))
+            return frags
+        lines = self._hud.compose(
+            self._hud_rows, self.hud_state, width=self._cols(), separator=self._hud_sep
+        )
+        out: list[tuple[str, str]] = []
+        for i, line in enumerate(lines):
+            if i:
+                out.append(("class:status", "\n"))
+            out.append(("class:status", " "))  # 1-col left margin, like the transcript
+            out.extend(line)
+        return out or [("class:status", " ")]
 
     def _live_content(self) -> list[tuple[str, str]]:
         """Compose the live-region fragments from current state (called each paint)."""
@@ -429,7 +457,10 @@ class JackApp:
         # A bordered input box (a distinct widget) so the input reads as separate from the
         # transcript above and the status bar below — not one clumped block.
         input_box = Frame(VSplit([Window(width=1), glyph, entry]), style="class:inputframe")
-        status = Window(FormattedTextControl(self._status_text), height=1, style="class:status")
+        status_height = max(1, len(self._hud_rows))  # 1 line (minimal/essential/off), 2 (full)
+        status = Window(
+            FormattedTextControl(self._status_text), height=status_height, style="class:status"
+        )
         body = FloatContainer(
             HSplit([self._transcript_window, live, input_box, status]),
             floats=[Float(xcursor=True, ycursor=True, content=CompletionsMenu(max_height=8))],
@@ -819,6 +850,42 @@ class JackApp:
             loop.call_soon_threadsafe(self.append_transcript, line)
         except RuntimeError:  # loop closing at shutdown
             _log.debug("dropped mcp event line (loop closing)")
+
+    def update_hud(self, **fields: object) -> None:
+        """Update HUD state fields and repaint (safe to call from any thread).
+
+        Mirrors :meth:`on_task_finished`: when the app loop is running the update hops onto it
+        via ``call_soon_threadsafe``; before the loop exists (startup seeding, unit tests) it is
+        applied synchronously and the repaint is skipped (the first paint happens on run).
+        """
+
+        def _apply() -> None:
+            for name, value in fields.items():
+                if hasattr(self.hud_state, name):
+                    setattr(self.hud_state, name, value)
+            if self.app.is_running:
+                self.app.invalidate()
+
+        loop = self.app.loop
+        if loop is None:
+            _apply()
+            return
+        try:
+            loop.call_soon_threadsafe(_apply)
+        except RuntimeError:  # loop closing at shutdown
+            _log.debug("dropped HUD update (loop closing)")
+
+    def on_context_event(self, evt: dict[str, Any]) -> None:
+        """Feed a context-usage payload (``used``/``window``/``model``) into the HUD.
+
+        ``evt`` is the ``ctx`` block from ``GET /coder/usage`` (the same shape the orb's meter
+        consumes), pulled by the turn-end HUD refresh; drives the context% + tokens segments.
+        """
+        self.update_hud(
+            used=int(evt.get("used", 0) or 0),
+            window=int(evt.get("window", 0) or 0),
+            model=str(evt.get("model", "") or self.hud_state.model),
+        )
 
     def _maybe_pickup(self) -> None:
         """If idle and pickups are queued, notice them and run a continuation turn."""

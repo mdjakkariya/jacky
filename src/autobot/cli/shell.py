@@ -20,18 +20,28 @@ _log = get_logger("cli")
 
 
 def gather_context(cwd: str) -> dict[str, str]:
-    """Best-effort status context for the banner (never raises)."""
-    branch = _branch(cwd)
-    model, autonomy = "?", "?"
+    """Best-effort status context for the HUD (never raises)."""
+    branch, dirty, ahead, behind = _git_status(cwd)
+    model, autonomy, provider = "?", "?", ""
     try:
         from autobot.config import Settings
 
         s = Settings.load()
+        provider = s.llm_provider
         model = s.anthropic_model if s.llm_provider == "anthropic" else s.llm_model
         autonomy = s.coding_autonomy
     except Exception:  # config is best-effort for a status line
         _log.debug("could not load settings for context", exc_info=True)
-    return {"cwd": _short(cwd), "branch": branch, "model": model, "autonomy": autonomy}
+    return {
+        "cwd": _short(cwd),
+        "branch": branch,
+        "model": model,
+        "autonomy": autonomy,
+        "provider": provider,
+        "dirty": "1" if dirty else "",
+        "ahead": str(ahead),
+        "behind": str(behind),
+    }
 
 
 def _branch(cwd: str) -> str:
@@ -48,11 +58,81 @@ def _branch(cwd: str) -> str:
     return p.stdout.strip() if p.returncode == 0 else ""
 
 
+def _git_status(cwd: str) -> tuple[str, bool, int, int]:
+    """Return ``(branch, dirty, ahead, behind)`` best-effort (empty/zero on any failure)."""
+    import re
+
+    branch = _branch(cwd)
+    if not branch:
+        return "", False, 0, 0
+    dirty, ahead, behind = False, 0, 0
+    try:
+        st = subprocess.run(
+            ["git", "status", "--porcelain", "--branch"],
+            cwd=cwd,
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return branch, False, 0, 0
+    if st.returncode == 0:
+        lines = st.stdout.splitlines()
+        dirty = any(not ln.startswith("##") for ln in lines)
+        header = lines[0] if lines else ""
+        m_ahead = re.search(r"ahead (\d+)", header)
+        m_behind = re.search(r"behind (\d+)", header)
+        ahead = int(m_ahead.group(1)) if m_ahead else 0
+        behind = int(m_behind.group(1)) if m_behind else 0
+    return branch, dirty, ahead, behind
+
+
 def _short(cwd: str) -> str:
     from pathlib import Path
 
     home = str(Path.home())
     return cwd.replace(home, "~", 1) if cwd.startswith(home) else cwd
+
+
+def _seed_hud_counts(japp: Any, base_url: str) -> None:
+    """Seed best-effort HUD counts (MCP servers) at startup; never raises."""
+    from autobot.cli import mcp_client
+
+    try:
+        payload = mcp_client.list_servers(base_url)
+        servers = payload.get("servers")
+        if isinstance(servers, list):  # absent/error payloads leave the count unset (omitted)
+            japp.update_hud(mcp_count=len(servers))
+    except Exception:  # counts are best-effort
+        _log.debug("could not seed mcp count", exc_info=True)
+
+
+def _refresh_hud_after_turn(japp: Any, base_url: str, cwd: str) -> None:
+    """Post-turn: refresh context %, cost, and git so the HUD reflects this turn.
+
+    Pulls from ``GET /coder/usage`` — the ``ctx`` block carries the live context-window
+    ``used``/``window``/``model`` (the same payload the orb's meter uses), and
+    ``rollups.session.usd`` the session cost. Best-effort: never raises out of a turn.
+    """
+    from autobot.cli import client
+
+    try:
+        usage = client.get_usage(base_url)
+        ctx = usage.get("ctx") or {}
+        if ctx:
+            japp.on_context_event(ctx)  # used/window/model → context% + tokens segments
+        session = (usage.get("rollups") or {}).get("session") or {}
+        usd = session.get("usd")
+        fresh = gather_context(cwd)
+        japp.update_hud(
+            cost_usd=float(usd) if usd is not None else japp.hud_state.cost_usd,
+            branch=fresh["branch"],
+            dirty=bool(fresh.get("dirty")),
+            ahead=int(fresh.get("ahead", "0") or 0),
+            behind=int(fresh.get("behind", "0") or 0),
+        )
+    except Exception:  # the HUD refresh must never break a turn
+        _log.debug("post-turn HUD refresh failed", exc_info=True)
 
 
 def expand_mentions(text: str, cwd: str) -> tuple[str, list[str]]:
@@ -176,6 +256,7 @@ def run(base_url: str, cwd: str) -> None:  # pragma: no cover - launches the int
             answer_stream,
             turn_no=turn_no,
         )
+        _refresh_hud_after_turn(japp, base_url, cwd)  # cost + git reflect the turn just finished
 
     japp = JackApp(
         cwd=cwd,
@@ -196,6 +277,14 @@ def run(base_url: str, cwd: str) -> None:  # pragma: no cover - launches the int
 
     events.set_waker(_waker)
     events.set_on_mcp(japp.on_mcp_event)
+    # Seed the git ahead/behind + dirty flags (gather_context already put branch/model/etc into
+    # the app's HudState) and the best-effort MCP count, so the bar is populated before turn one.
+    japp.update_hud(
+        dirty=bool(context.get("dirty")),
+        ahead=int(context.get("ahead", "0") or 0),
+        behind=int(context.get("behind", "0") or 0),
+    )
+    _seed_hud_counts(japp, base_url)
     events.start()
     try:
         asyncio.run(japp.run_async())

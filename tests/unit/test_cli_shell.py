@@ -21,7 +21,47 @@ def _console() -> Console:
 
 def test_gather_context_never_raises_and_has_keys(tmp_path: Path) -> None:
     ctx = shell.gather_context(str(tmp_path))
-    assert set(ctx) == {"cwd", "branch", "model", "autonomy"}
+    assert set(ctx) == {
+        "cwd",
+        "branch",
+        "model",
+        "autonomy",
+        "provider",
+        "dirty",
+        "ahead",
+        "behind",
+    }
+
+
+def test_refresh_hud_after_turn_pulls_ctx_and_cost(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from prompt_toolkit.input import DummyInput
+    from prompt_toolkit.output import DummyOutput
+
+    from autobot.cli import client
+    from autobot.cli.app import JackApp
+
+    async def noop(_t: str, _n: int) -> None:
+        return None
+
+    japp = JackApp(
+        cwd=str(tmp_path), run_turn=noop, commands={}, input=DummyInput(), output=DummyOutput()
+    )
+
+    def fake_usage(_base_url: str, **_kw: object) -> dict[str, object]:
+        return {
+            "ctx": {"used": 50000, "window": 200000, "model": "opus"},
+            "rollups": {"session": {"usd": 0.34}},
+        }
+
+    monkeypatch.setattr(client, "get_usage", fake_usage)
+    shell._refresh_hud_after_turn(japp, "http://x", str(tmp_path))
+
+    assert japp.hud_state.used == 50000
+    assert japp.hud_state.window == 200000
+    assert japp.hud_state.model == "opus"
+    assert japp.hud_state.cost_usd == 0.34
 
 
 def test_expand_mentions_no_mention_is_identity(tmp_path: Path) -> None:

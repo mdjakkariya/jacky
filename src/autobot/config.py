@@ -157,6 +157,22 @@ class Settings:
     # Snapshot the workspace (via a git shadow ref) at the start of each coding turn so a
     # change can be rewound (`jack undo`). Off disables checkpointing entirely.
     checkpoints: bool = True
+    # --- HUD (the CLI's live docked status bar) ---
+    # Master on/off. When False the bar falls back to the minimal static line.
+    hud_enabled: bool = True
+    # Named baseline: "minimal" | "essential" | "full". Overridden by hud_segments if set.
+    hud_preset: str = "essential"
+    # Explicit ordered segment keys; empty = derive from hud_preset. A key present = shown
+    # (in this order), absent = hidden. Collapses to a single row.
+    hud_segments: list[str] = field(default_factory=list)
+    # Per-segment display tuning read by the segments that support it, e.g.
+    # {"model": {"provider": false}, "git": {"ahead_behind": true}}.
+    hud_options: dict[str, Any] = field(default_factory=dict)
+    # Separator drawn between segments.
+    hud_separator: str = "  ·  "
+    # Context-bar color thresholds (fraction of the window): amber at warn, red at crit.
+    hud_context_warn: float = 0.75
+    hud_context_crit: float = 0.9
     # Command safety for run_command, layered on the permission gate. These hold the USER's
     # additions; the built-in dangerous-pattern baseline lives in the command-policy module.
     # Blocklisted commands are refused outright; allowlisted patterns (e.g. "git *",

@@ -211,6 +211,31 @@ orb bus *and* a `CoderEventHub` (`daemon/coder_events.py`) tapped by each
 `/coder/events` SSE subscription, so the REPL shows connect/OAuth progress lines
 as they happen (`cli/autoresume.py` → `JackApp.on_mcp_event`).
 
+## CLI HUD (docked status bar)
+
+The CLI's bottom status bar is a live, segment-based HUD (`cli/hud/`). `HudState`
+(`state.py`) is a mutable snapshot; pure segment renderers (`segments.py`) turn it
+into `(style, text)` fragments, each with a drop-priority; `compose.py` resolves
+settings into ordered rows and width-gates each row (dropping the lowest-priority
+segments until it fits). `JackApp._status_text` delegates to `compose`; the status
+window is one line (minimal/essential) or two (full).
+
+**Feeds.** Startup `gather_context` seeds autonomy/model/provider/git/cwd + a
+best-effort MCP count. The context-window %, tokens, and session cost are pulled at
+**turn-end** from `GET /coder/usage` (`_refresh_hud_after_turn` in `cli/shell.py`):
+its `ctx` block carries the live `used`/`window`/`model` (the same payload the orb
+meter uses) and `rollups.session.usd` the cost. Polling — not the bus `ContextEvent`
+— is deliberate: that event only reaches the orb's WebSocket `/events` channel, and
+context usage only changes at turn boundaries, so a turn-end pull is both correct
+and simpler than a live event the CLI never receives.
+
+**Customization (all `settings.json`).** `hud_enabled` (off → the minimal static
+line), `hud_preset` (`minimal`/`essential`/`full`), `hud_segments` (which segments +
+order + on/off; overrides the preset), `hud_options` (per-segment label/flags),
+`hud_separator`, and `hud_context_warn`/`hud_context_crit` (bar color thresholds).
+`hud.resolve_config` validates a hand-edited file (unknown segment/preset ignored),
+mirroring config's never-crash-on-bad-input rule.
+
 ## Reference projects to study
 
 - **Home Assistant voice pipeline + Wyoming protocol** — an existing open standard
