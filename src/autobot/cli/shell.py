@@ -146,6 +146,25 @@ def expand_mentions(text: str, cwd: str) -> tuple[str, list[str]]:
     return mentions.resolve_mentions(text, cwd), attached
 
 
+def skill_catalog(cwd: str) -> list[tuple[str, str]]:
+    """Snapshot installed skills as ``(name, description)`` for the ``/`` completer.
+
+    Built once at startup from the same on-disk registry ``jack skills`` uses (no daemon
+    round-trip). Never raises — a broken skill dir just yields an empty catalog. A skill
+    authored mid-session appears after a restart; the model still sees it live via its catalog.
+    """
+    try:
+        from pathlib import Path
+
+        from autobot.skills.registry import SkillRegistry, default_skill_dirs
+
+        registry = SkillRegistry(default_skill_dirs(Path.home(), Path(cwd)))
+        return [(spec.name, spec.description) for spec in registry.specs()]
+    except Exception:  # completion is best-effort; a bad skill dir must not block the shell
+        _log.debug("could not load skill catalog for completion", exc_info=True)
+        return []
+
+
 def route_command(
     name: str, args: str, *, base_url: str, cwd: str, width: int
 ) -> tuple[Any | None, str]:
@@ -204,6 +223,8 @@ def run(base_url: str, cwd: str) -> None:  # pragma: no cover - launches the int
 
     console = Console(theme=jack_theme())  # only for the post-exit session footer
     context = gather_context(cwd)
+    skills = skill_catalog(cwd)  # (name, description) snapshot for the / completer + ghost text
+    skill_names = frozenset(name for name, _ in skills)
     hist_dir = Path(cwd) / ".jack"
     hist_dir.mkdir(parents=True, exist_ok=True)  # persist ↑/↓ input history per workspace
     history = FileHistory(str(hist_dir / "cli_history"))
@@ -216,19 +237,20 @@ def run(base_url: str, cwd: str) -> None:  # pragma: no cover - launches the int
         # Echo the user's turn as its own block; the transcript composer supplies the blank
         # lines that separate it from the previous turn and from the response below.
         surface.commit(Text(f"{theme.GLYPH_PROMPT} {text}", style="prompt"))
-        parsed = commands.parse(text)
-        if parsed is not None:
-            if parsed[0] == "/mcp":
+        kind, name, cargs = commands.classify_line(text, skill_names)
+        turn_text = text
+        if kind in ("command", "unknown"):
+            if name == "/mcp":
                 from autobot.cli import mcp_repl
 
-                await mcp_repl.handle(parsed[1], surface, base_url=base_url)
+                await mcp_repl.handle(cargs, surface, base_url=base_url)
                 return
-            if parsed[0] == "/output":  # client-side: expand a stashed command's output
-                arg = parsed[1].strip()
+            if name == "/output":  # client-side: expand a stashed command's output
+                arg = cargs.strip()
                 if not japp.expand_output(int(arg) if arg.isdigit() else None):
                     surface.commit(Text("No command output to show yet.", style="dim"))
                 return
-            out, action = route_command(*parsed, base_url=base_url, cwd=cwd, width=japp._cols())
+            out, action = route_command(name, cargs, base_url=base_url, cwd=cwd, width=japp._cols())
             if action == "exit":
                 japp._exiting = True
                 japp.app.exit()
@@ -239,7 +261,10 @@ def run(base_url: str, cwd: str) -> None:  # pragma: no cover - launches the int
             if out is not None:
                 surface.commit(out)
             return
-        resolved, attached = expand_mentions(japp.expand_pastes(text), cwd)
+        if kind == "skill":  # /skill-name → activate it via the model's skill tool (a nudge turn)
+            _log.info("slash skill activated name=%r", name)
+            turn_text = commands.skill_nudge(name, cargs)
+        resolved, attached = expand_mentions(japp.expand_pastes(turn_text), cwd)
         if attached:
             surface.commit(
                 Text(f"{theme.NEST_INDENT}attached: {', '.join(attached)}", style="tool")
@@ -262,6 +287,7 @@ def run(base_url: str, cwd: str) -> None:  # pragma: no cover - launches the int
         cwd=cwd,
         run_turn=run_turn,
         commands=commands.COMMANDS,
+        skills=skills,
         context=context,
         intro=render.render_welcome(context),
         on_interrupt=lambda: client.coder_interrupt(base_url),
