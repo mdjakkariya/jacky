@@ -44,6 +44,44 @@ def parse(line: str) -> tuple[str, str] | None:
     return head, rest.strip()
 
 
+def classify_line(line: str, skill_names: frozenset[str]) -> tuple[str, str, str]:
+    """Classify a submitted line as a command, skill invocation, unknown slash, or prose.
+
+    Only a line whose *whole* text begins with ``/`` is a directive — mid-line slashes are
+    prose (and so can never trigger a control command like ``/exit`` by accident). A built-in
+    command wins over a same-named skill (commands are the control surface).
+
+    Args:
+        line: The raw submitted text.
+        skill_names: The bare names (no ``/``) of skills available for activation.
+
+    Returns:
+        ``(kind, name, args)`` where ``kind`` is one of ``"command"`` (``name`` keeps its
+        ``/``), ``"skill"`` (``name`` is the bare skill name), ``"unknown"`` (a ``/foo`` that
+        is neither), or ``"prose"`` (``name``/``args`` empty).
+    """
+    parsed = parse(line)
+    if parsed is None:
+        return ("prose", "", "")
+    head, args = parsed
+    if head in COMMANDS:
+        return ("command", head, args)
+    if head[1:] in skill_names:
+        return ("skill", head[1:], args)
+    return ("unknown", head, args)
+
+
+def skill_nudge(name: str, args: str) -> str:
+    """The turn text that activates a skill: an instruction to load and follow it.
+
+    Keeps the model in charge of activation (it calls the ``skill`` tool), so the permission
+    gate and the rest of the turn flow are untouched. Any ``args`` the user typed after the
+    ``/name`` are appended as the task.
+    """
+    base = f'Use the "{name}" skill for this — load it with skill("{name}"), then follow it.'
+    return f"{base} {args}".strip() if args.strip() else base
+
+
 def _help_text() -> str:
     return "Commands:\n" + "\n".join(f"  {name}  {desc}" for name, desc in COMMANDS.items())
 
