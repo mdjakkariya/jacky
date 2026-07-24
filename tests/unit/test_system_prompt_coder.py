@@ -51,3 +51,10 @@ def test_coder_prompt_requires_verify_and_honest_reporting() -> None:
     low = system_prompt("chat", coder=True).lower()
     assert "verify" in low
     assert "honest" in low or "never say tests pass" in low
+
+
+def test_coder_prompt_establishes_the_jack_identity() -> None:
+    # The assistant is "Jack" (the product name), not the underlying model. With no name in the
+    # coder prompt, the cloud model introduced ITSELF ("Hey! I'm Claude, your coding agent") —
+    # so the coder prompt must name the assistant, mirroring the voice/chat SYSTEM_PROMPT.
+    assert "Jack" in system_prompt("chat", coder=True)
